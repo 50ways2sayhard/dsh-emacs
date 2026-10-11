@@ -20,8 +20,9 @@ minimal loading configuration. Adjust `:load-path` to your checkout:
 
 Provider credentials and model configuration belong to dsh; open its web UI
 with `M-x dsh-emacs-open-web`. Select the current session's model with
-`C-c C-m`. `dsh-emacs-default-model` supplies a display fallback and does not
-choose the model used by a session.
+`C-c C-m`, or change only its reasoning effort with `C-c C-e`.
+`dsh-emacs-default-model` supplies a display fallback and does not choose the
+model used by a session.
 
 ## Common options
 

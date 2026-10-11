@@ -17,6 +17,13 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Switch reasoning effort directly**: `C-c C-e`
+  (`dsh-emacs-select-effort`) changes the running model's reasoning effort
+  without re-picking the model — it reads the session's live selection,
+  pre-selects the current effort and sends `session/selectModel`. A model
+  without reasoning-effort options reports that and sends nothing.
+  (rationale: postmortem/091)
+
 - **Locate the current project's workspace**: `M-x dsh-emacs` from a local
   project file or directory expands its existing workspace and centers the
   header in the selected window when space permits, including when workspace

@@ -114,6 +114,7 @@ See [subagent integration](docs/subagents.md) for protocol and test details.
 | `C-c C-p` | Answer a timed question whose window expired (dsh 0.2.0) |
 | `C-c C-g` | Open the goal-action prefix |
 | `C-c C-m` | Switch model / reasoning effort |
+| `C-c C-e` | Switch the running model's reasoning effort |
 | `C-c C-a` | Attach an image file and send it now |
 | `C-c C-v` | Paste the clipboard image into the next message |
 | `C-c C-d` | Discard staged images |
@@ -333,7 +334,8 @@ it for ordinary editing and `C-x C-s` saving. It remembers the choice per
 server URL for this Emacs session; use `C-u M-x dsh-emacs-edit-config` to
 choose again. Remote files use an explicit TRAMP path. See
 [Editing dsh configuration](docs/customization.md#editing-dsh-configuration).
-`C-c C-m` also selects the session's reasoning effort where supported.
+`C-c C-e` selects the running model's reasoning effort directly; `C-c C-m`
+also offers it as the second step of a model switch.
 
 `dsh-emacs-default-preset` selects the preset for new sessions; nil uses the
 host default. `dsh-emacs-default-model` is a display fallback for the mode

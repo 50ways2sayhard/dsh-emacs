@@ -6536,6 +6536,159 @@ Lets a test drive a malformed content value through the result path."
   (when (null eff)
     (dsh-test-pass "select-model-no-reasoning-omits-effort")))
 
+;; --- Test 47n: select-effort reuses the running model/provider (no model
+;; re-pick) ---
+;; The dedicated effort command reads the session's live `modelSelection'
+;; (provider/model/effort), finds that model's `reasoning' options in the live
+;; catalog, pre-selects the current effort and sends selectModel with the same
+;; provider/model plus the chosen reasoningEffort.
+(let ((buf (generate-new-buffer " *dsh-effort-cmd*"))
+      (calls nil)
+      (effort-def :unset)
+      (cached-effort "low")
+      (selected-effort "low"))
+  (unwind-protect
+      (with-current-buffer buf
+        (setq dsh-emacs--current-session "sess-e")
+        (cl-letf (((symbol-function 'dsh-emacs--session-model-selection)
+                   (lambda (_id)
+                     (dsh-protocol-model-selection--from-alist
+                      `((provider . "p1") (model . "m1")
+                        (reasoningEffort . ,cached-effort)))))
+                  ((symbol-function 'dsh-emacs-list-sessions--fetch)
+                   (lambda () (setq cached-effort selected-effort)))
+                  ((symbol-function 'dsh-emacs--rpc-async)
+                   (lambda (method params cb)
+                     (push (list method params) calls)
+                     (if (string= method "session/modelCatalog")
+                         (funcall
+                          cb t
+                          '((groups . [((id . "p1") (name . "DeepSeek")
+                                        (models . [((id . "m1") (name . "One")
+                                                    (reasoning . ((efforts . [((id . "low") (name . "Low"))
+                                                                              ((id . "max") (name . "Max"))])
+                                                                  (defaultEffort . "low"))))]))])))
+                       (setq selected-effort
+                             (cdr (assq 'reasoningEffort
+                                        (cdr (assq 'request params)))))
+                       (funcall cb t `((selected . ((provider . "p1")
+                                                     (model . "m1")
+                                                     (reasoningEffort
+                                                      . ,selected-effort))))))))
+                  ((symbol-function 'completing-read)
+                   (lambda (_prompt _coll &optional _pred _req _initial _hist def
+                                    &rest _)
+                     (setq effort-def def)
+                     "Max")))
+          (dsh-emacs-select-effort)
+          (let* ((call (car calls))
+                 (req (cdr (assq 'request (cadr call)))))
+            (dsh-test-assert "select-effort-sends-running-model-and-chosen-effort"
+              (string= "session/selectModel" (car call))
+              (equal "sess-e" (cdr (assq 'sessionId req)))
+              (equal "p1" (cdr (assq 'provider req)))
+              (equal "m1" (cdr (assq 'model req)))
+              (equal "max" (cdr (assq 'reasoningEffort req)))
+              ;; The running effort is the effort prompt's default.
+              (equal "Low" effort-def))
+            (dsh-test-assert "select-effort-updates-mode-line"
+              (equal "max" dsh-emacs--modeline-effort))
+            (dsh-test-assert "select-effort-keybinding"
+              (eq (lookup-key dsh-emacs-mode-map (kbd "C-c C-e"))
+                  #'dsh-emacs-select-effort)))
+          ;; A second invocation must default to the successful selection,
+          ;; not the effort cached before the first invocation.
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt _coll &optional _pred _req _initial
+                                      _hist def &rest _)
+                       (setq effort-def def)
+                       def)))
+            (dsh-emacs-select-effort))
+          (dsh-test-assert "select-effort-repeat-keeps-new-effort"
+            (equal "Max" effort-def)
+            (equal "max" selected-effort))))
+    (kill-buffer buf)))
+
+;; --- Test 47o: a model without reasoning options reports and sends nothing ---
+(let ((buf (generate-new-buffer " *dsh-effort-noopt*"))
+      (calls nil)
+      (msgs nil))
+  (unwind-protect
+      (with-current-buffer buf
+        (cl-letf (((symbol-function 'dsh-emacs--session-model-selection)
+                   (lambda (_id)
+                     (dsh-protocol-model-selection--from-alist
+                      '((provider . "p1") (model . "m1")))))
+                  ((symbol-function 'dsh-emacs--rpc-async)
+                   (lambda (method params _cb)
+                     (push (list method params) calls)))
+                  ((symbol-function 'message)
+                   (lambda (fmt &rest args)
+                     (push (apply #'format fmt args) msgs))))
+          (dsh-emacs--select-effort-prompt
+           "sess-e"
+           '((groups . [((id . "p1") (name . "DeepSeek")
+                         (models . [((id . "m1") (name . "One"))]))])))
+          (dsh-test-assert "select-effort-no-reasoning-reports"
+            (cl-some (lambda (m)
+                       (string-match-p "no reasoning-effort options" m))
+                     msgs)
+            (null calls))))
+    (kill-buffer buf)))
+
+;; --- Test 47p: C-g in select-effort cancels cleanly (the quit must not reach
+;; the command boundary) ---
+(let ((buf (generate-new-buffer " *dsh-effort-quit*"))
+      (leaked nil))
+  (unwind-protect
+      (with-current-buffer buf
+        (cl-letf (((symbol-function 'dsh-emacs--session-model-selection)
+                   (lambda (_id)
+                     (dsh-protocol-model-selection--from-alist
+                      '((provider . "p1") (model . "m1")))))
+                  ((symbol-function 'dsh-emacs--rpc-async) #'ignore)
+                  ((symbol-function 'completing-read)
+                   (lambda (&rest _) (signal 'quit nil))))
+          (condition-case nil
+              (dsh-emacs--select-effort-prompt
+               "sess-e"
+               '((groups . [((id . "p1") (name . "DeepSeek")
+                             (models . [((id . "m1") (name . "One")
+                                         (reasoning . ((efforts . [((id . "low") (name . "Low"))]))))]))])))
+            (quit (setq leaked t)))))
+    (kill-buffer buf))
+  (when (not leaked)
+    (dsh-test-pass "select-effort-c-g-aborts-cleanly")))
+
+;; --- Test 47q: no cached modelSelection → the catalog host default is the
+;; reference (same fallback the model picker uses) ---
+(let ((buf (generate-new-buffer " *dsh-effort-default*"))
+      (sent nil))
+  (unwind-protect
+      (with-current-buffer buf
+        (cl-letf (((symbol-function 'dsh-emacs--session-model-selection)
+                   (lambda (_id) nil))
+                  ((symbol-function 'dsh-emacs--rpc-async)
+                   (lambda (method params _cb)
+                     (when (string= method "session/selectModel")
+                       (setq sent (cdr (assq 'request params))))))
+                  ((symbol-function 'completing-read)
+                   (lambda (&rest _) "Max")))
+          (dsh-emacs--select-effort-prompt
+           "sess-e"
+           '((current . ((provider . "p1") (model . "m1")
+                         (reasoningEffort . "low")))
+             (groups . [((id . "p1") (name . "DeepSeek")
+                         (models . [((id . "m1") (name . "One")
+                                     (reasoning . ((efforts . [((id . "low") (name . "Low"))
+                                                               ((id . "max") (name . "Max"))])
+                                                   (defaultEffort . "low"))))]))])))
+          (dsh-test-assert "select-effort-falls-back-to-catalog-default"
+            (equal "m1" (cdr (assq 'model sent)))
+            (equal "p1" (cdr (assq 'provider sent)))
+            (equal "max" (cdr (assq 'reasoningEffort sent))))))
+    (kill-buffer buf)))
+
 
 ;; --- Test 48: attachments (image base64 inlined into session/prompt) ---
 (let ((png-file (make-temp-file "dsh-test-1px" nil ".png"))
@@ -7222,7 +7375,6 @@ Lets a test drive a malformed content value through the result path."
         (dsh-test-assert "copy-dwim-keybinding"
           (eq (lookup-key dsh-emacs-mode-map (kbd "C-c C-w"))
               #'dsh-emacs-copy-dwim)
-          (null (lookup-key dsh-emacs-mode-map (kbd "C-c C-e")))
           (null (lookup-key dsh-emacs-mode-map (kbd "C-c C-k")))))
     (kill-buffer buf)))
 

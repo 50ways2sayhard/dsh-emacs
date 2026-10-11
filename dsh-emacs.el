@@ -2141,6 +2141,7 @@ repaints)."
     ;; stock Emacs maps the key to `yank' globally.
     (define-key map (kbd "s-v") #'dsh-emacs-paste)
     (define-key map (kbd "C-c C-m") #'dsh-emacs-select-model)
+    (define-key map (kbd "C-c C-e") #'dsh-emacs-select-effort)
     (define-key map (kbd "C-c C-g") dsh-emacs-goal-map)
     (define-key map (kbd "C-c C-!") #'dsh-emacs-shell-process-kill)
     (define-key map (kbd "M-p") #'dsh-emacs-input-history-back)
@@ -4033,6 +4034,86 @@ the filter as \"error in process filter: Quit\"."
                                  "")))
                   (message "Failed to switch model: %S" value2))))))))
     (quit (message "Model selection cancelled"))))
+
+;;;###autoload
+(defun dsh-emacs-select-effort ()
+  "Choose a reasoning effort for the current session's running model.
+Reads the live model catalog (`session/modelCatalog') to find the running
+model's `reasoning' options, pre-selects the effort the session already
+runs at (or the model's default), and switches via `session/selectModel'
+with the same provider and model.  A model without reasoning-effort
+options reports that and sends no RPC; the mode-line effort segment
+updates immediately."
+  (interactive)
+  (dsh-emacs-subagent-require 'mutate)
+  (dsh-emacs-server-ensure)
+  (let ((session-id (dsh-emacs--active-session-id)))
+    (unless session-id (user-error "Open or select a session first"))
+    (dsh-emacs--rpc-async "session/modelCatalog" nil
+                          (lambda (ok value)
+                            (if (not ok)
+                                (message "Failed to list models: %S" value)
+                              (dsh-emacs--select-effort-prompt
+                               session-id value))))))
+
+(defun dsh-emacs--select-effort-prompt (session-id value)
+  "Read and apply a reasoning effort for SESSION-ID's running model.
+VALUE is the raw `session/modelCatalog' response.  The reference
+(provider, model, effort) triple is the session's cached `modelSelection'
+projection, falling back to the catalog host default exactly as
+`dsh-emacs--select-model-prompt' does.  Does nothing when the reference
+model declares no `reasoning' options; C-g cancels the whole read."
+  (condition-case nil
+      (let* ((dir (dsh-protocol-model-directory--from-alist value))
+             (current (or (dsh-emacs--session-model-selection session-id)
+                          (dsh-protocol-model-directory-current dir)))
+             (model (and current
+                         (dsh-protocol-model-selection-model current)))
+             (provider (and current
+                            (dsh-protocol-model-selection-provider current)))
+             (effort (and current
+                          (dsh-protocol-model-selection-reasoning-effort
+                           current))))
+        (cond
+         ((null model)
+          (message "No running model is known for this session"))
+         (t
+          (let* ((entries (dsh-emacs--model-candidates value))
+                 (entry (cl-find-if
+                         (lambda (e)
+                           (and (equal (nth 0 e) model)
+                                (or (null provider)
+                                    (equal (nth 1 e) provider))))
+                         entries))
+                 (reasoning (and entry (nth 4 entry)))
+                 (choices (dsh-emacs--model-effort-choices reasoning)))
+            (cond
+             ((null entry)
+              (message "Model %s is not in the live catalog" model))
+             ((null choices)
+              (message "Model %s offers no reasoning-effort options" model))
+             (t
+              (let ((effort-id
+                     (dsh-emacs--model-pick-effort
+                      model choices
+                      (dsh-emacs--model-effort-default-id reasoning effort))))
+                (dsh-emacs--rpc-async
+                 "session/selectModel"
+                 `((request . ((sessionId . ,session-id)
+                               (provider . ,(or provider (nth 1 entry)))
+                               (model . ,model)
+                               (reasoningEffort . ,effort-id))))
+                 (lambda (ok2 value2)
+                   (if ok2
+                       (progn
+                         (dsh-emacs-modeline-set-effort effort-id)
+                         ;; The next effort prompt reads the session cache.
+                         ;; Refresh it just as the model picker does.
+                         (dsh-emacs-list-sessions--fetch)
+                         (message "Reasoning effort set to %s" effort-id))
+                     (message "Failed to set reasoning effort: %S"
+                              value2)))))))))))
+    (quit (message "Reasoning-effort selection cancelled"))))
 
 ;;;###autoload
 (defun dsh-emacs-set-permission ()

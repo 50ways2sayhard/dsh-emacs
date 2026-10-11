@@ -38,6 +38,12 @@ same id across providers keep their provider visible in the suffix.
   models pre-select their `defaultEffort`. The chosen id is sent as
   `session/selectModel`'s `reasoningEffort`; models without `reasoning` send no
   effort field at all.
+- **Standalone effort switch** (`C-c C-e`, `dsh-emacs-select-effort`): reads
+  the same catalog, but takes provider and model from the session's live
+  `modelSelection` (falling back to the catalog host default), pre-selects the
+  running effort and sends only `session/selectModel` with a new
+  `reasoningEffort` — no model row to re-pick. A model without `reasoning`
+  options reports that and sends nothing.
 - **Behaviour**: empty RET keeps the current model (no RPC), unknown input is
   rejected, `C-g` cancels cleanly inside the RPC filter; when vertico is active
   the picker locally disables extra sorting and pre-selects the first row.
