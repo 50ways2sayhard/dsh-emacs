@@ -1,5 +1,9 @@
 # 092 — Arbitrary file attachments (raw upload route)
 
+Submit input consumption and its undo lifetime are superseded by
+[093](093-consumed-input-undo.md); the upload route, receipt lifetime and file
+rendering remain in effect.
+
 ## Background
 
 Attachment support was image-only, and deliberately so: an image rides

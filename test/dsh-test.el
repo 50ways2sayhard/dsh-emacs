@@ -25867,6 +25867,178 @@ messages (e.g. `command/done')."
             (equal 1 (cdr (assq 'bytes entry)))
             (null (assq 'uploaded-file entry))))))))
 
+;; Every submit kind retains the consumed input through later reply writes.
+(dolist (kind '(plain image file))
+  (dolist (scenario '(("draft to send" nil)
+                      ("draft to send" "next draft")
+                      ("" nil)))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "upload-undo")
+      (let ((caption (car scenario))
+            (new-draft (cadr scenario))
+            upload-callback)
+        (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+                  ((symbol-function 'dsh-emacs--busy-p) (lambda () nil))
+                  ((symbol-function 'dsh-emacs--upload-file)
+                   (lambda (_session _attachment callback)
+                     (setq upload-callback callback)))
+                  ((symbol-function 'dsh-emacs--rpc-async) #'ignore))
+          (dsh-emacs--replace-input caption)
+          (dsh-emacs--stage-attachments
+           (pcase kind
+             ('file '(((file . "/tmp/undo.txt") (name . "undo.txt") (bytes . 1))))
+             ('image '(((mediaType . "image/png") (data . "eA==") (name . "a.png"))))))
+          (setq dsh-emacs--input-history-pos 0
+                dsh-emacs--input-history-pending "old draft")
+          (undo-boundary)
+          (run-hooks 'pre-command-hook)
+          (dsh-emacs-send-or-stop)
+          ;; Empty plain input is a no-op, not a submission.
+          (unless (and (eq kind 'plain) (string-empty-p caption))
+            (dsh-test-assert (format "%s-submit-resets-history-navigation" kind)
+              (null dsh-emacs--input-history-pos)
+              (null dsh-emacs--input-history-pending)))
+          (when new-draft (dsh-emacs--replace-input new-draft))
+          (when upload-callback
+            (funcall upload-callback t
+                     (dsh-protocol-file-receipt--from-alist
+                      '((receiptId . "undo-receipt"))) nil))
+          ;; Another transcript write before undo shifts the marker again.
+          (dsh-emacs-render--insert-chat-message
+           "agent reply" 'dsh-emacs-assistant-body-face
+           (dsh-emacs-render--input-insert-point) nil 'assistant)
+          (undo-boundary)
+          (let ((last-command 'dsh-emacs-send-or-stop) (this-command 'undo)
+                (pending-undo-list nil)
+                (undo-equiv-table (make-hash-table :test 'eq))
+                (transcript (buffer-substring-no-properties
+                             (point-min) dsh-emacs--input-marker)))
+            (run-hooks 'pre-command-hook)
+            (dsh-test-assert (format "%s-submit-undo-has-record-only-for-caption" kind)
+              (eq (not (string-empty-p caption))
+                  (condition-case nil (progn (undo) t) (user-error nil))))
+            (run-hooks 'post-command-hook)
+            (dsh-test-assert (format "%s-submit-undo-preserves-transcript" kind)
+              (equal transcript (buffer-substring-no-properties
+                                 (point-min) dsh-emacs--input-marker))
+              (equal (if new-draft "" caption)
+                     (dsh-emacs--get-input))
+              (null (dsh-emacs-pending-attachments)))
+            (when (and (not new-draft) (not (string-empty-p caption)))
+              (dsh-test-assert (format "%s-undo-takes-ownership" kind)
+                (null dsh-emacs--undo-consumed))
+              (if (fboundp 'undo-redo)
+                  (undo-redo)
+                (undo-boundary)
+                (let ((last-command nil)) (undo)))
+              (dsh-test-assert (format "%s-redo-clears-restored-caption" kind)
+                (equal "" (dsh-emacs--get-input))
+                (null (dsh-emacs-pending-attachments))
+                (equal transcript (buffer-substring-no-properties
+                                   (point-min) dsh-emacs--input-marker)))
+              (setq dsh-emacs--undo-stale t)
+              (dsh-emacs--reset-undo-history)
+              (dsh-test-assert (format "%s-redo-does-not-rearm-consumption" kind)
+                (null buffer-undo-list)))
+            ;; A later transcript write must not resurrect the consumed caption
+            ;; after editing/undo has taken ownership of the input.
+            (when new-draft
+              (setq dsh-emacs--undo-stale t)
+              (dsh-emacs--reset-undo-history)
+              (dsh-test-assert (format "%s-submit-does-not-revive-old-caption" kind)
+                (null buffer-undo-list)))))))))
+
+;; Editing back to empty relinquishes consumption; replacement submissions
+;; and callbacks must not recover older text.  Exercise real dispatch/rollback.
+(dolist (kind '(plain image file))
+  (dolist (transition '(edit-empty failure reversed-completion))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "undo-transition")
+      (setq-local dsh-emacs--event-ready t)
+      (let ((attachment
+             (pcase kind
+               ('image '((mediaType . "image/png") (data . "eA==") (name . "a.png")))
+               ('file '((file . "/tmp/undo.txt") (name . "undo.txt") (bytes . 1)))))
+            uploads requests)
+        (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+                  ((symbol-function 'dsh-emacs--busy-p) (lambda () nil))
+                  ((symbol-function 'dsh-emacs-events--watchdog-start) #'ignore)
+                  ((symbol-function 'dsh-emacs--upload-file)
+                   (lambda (_session _attachment callback) (push callback uploads)))
+                  ((symbol-function 'dsh-emacs--rpc-async)
+                   (lambda (_method _params callback) (push callback requests))))
+          (dsh-emacs--replace-input "first")
+          (when attachment (dsh-emacs--stage-attachments (list attachment)))
+          (dsh-emacs-send-or-stop)
+          (pcase transition
+            ('edit-empty
+             (dsh-emacs--replace-input "new draft")
+             ;; An ordinary deletion, not another submission.
+             (delete-region dsh-emacs--input-marker (dsh-emacs--input-end)))
+            ('reversed-completion
+             (dsh-emacs--replace-input "second")
+             (when attachment (dsh-emacs--stage-attachments (list attachment)))
+             (dsh-emacs-send-or-stop)))
+          ;; Newest upload settles first.  No completion may capture input.
+          (dolist (callback uploads)
+            (funcall callback t
+                     (dsh-protocol-file-receipt--from-alist
+                      '((receiptId . "transition-receipt"))) nil))
+          ;; A newer history navigation belongs to the user, not the callback.
+          (setq dsh-emacs--input-history-pos 2
+                dsh-emacs--input-history-pending "navigation draft")
+          (dolist (callback requests)
+            (funcall callback (not (eq transition 'failure)) nil))
+          (dsh-emacs-render--insert-chat-message
+           "reply after completion" 'dsh-emacs-assistant-body-face
+           (dsh-emacs-render--input-insert-point) nil 'assistant)
+          (run-hooks 'pre-command-hook)
+          (let ((start (marker-position dsh-emacs--input-marker)))
+            (dsh-test-assert (format "%s-undo-transition-%s" kind transition)
+              (pcase transition
+                ('edit-empty (null buffer-undo-list))
+                ('failure
+                 (and (equal "first" (dsh-emacs--get-input))
+                      (null dsh-emacs--undo-consumed)
+                      (equal buffer-undo-list
+                             (list nil (cons start (dsh-emacs--input-end))))
+                      (equal (and attachment (list attachment))
+                             (dsh-emacs-pending-attachments))))
+                ('reversed-completion
+                 (and (equal "" (dsh-emacs--get-input))
+                      (equal buffer-undo-list (list nil (cons "second" (- start))))))))
+            (unless (eq transition 'failure)
+              (dsh-test-assert (format "%s-completion-keeps-new-navigation-%s"
+                                       kind transition)
+                (equal 2 dsh-emacs--input-history-pos)
+                (equal "navigation draft" dsh-emacs--input-history-pending)))))))))
+
+;; Consumption preserves editor text/properties, not reference wire expansion.
+;; Rebuilding the input layout starts a new undo lifetime.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (goto-char dsh-emacs--input-marker)
+  (insert (propertize "@short" 'dsh-emacs-reference-canonical "@file:long/path"))
+  (dsh-emacs--clear-input)
+  (dsh-emacs-render--insert-chat-message
+   "reply" 'dsh-emacs-assistant-body-face
+   (dsh-emacs-render--input-insert-point) nil 'assistant)
+  (dsh-emacs--reset-undo-history)
+  (let ((text (car (cadr buffer-undo-list))))
+    (dsh-test-assert "consumed-reference-keeps-editor-properties"
+      (equal "@short" text)
+      (equal "@file:long/path" (get-text-property 0 'dsh-emacs-reference-canonical text))))
+  (dsh-emacs--setup-input-area)
+  (dsh-emacs-render--insert-chat-message
+   "reloaded" 'dsh-emacs-assistant-body-face
+   (dsh-emacs-render--input-insert-point) nil 'assistant)
+  (dsh-emacs--reset-undo-history)
+  (dsh-test-assert "new-input-layout-forgets-consumption"
+    (null dsh-emacs--undo-consumed)
+    (null buffer-undo-list)))
+
 ;; A read error for a later file happens after the send command has returned.
 (let* ((file (make-temp-file "dsh-later-upload" nil ".txt"))
        (entry (dsh-emacs--staged-file-attachment file)))

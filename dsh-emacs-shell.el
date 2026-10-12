@@ -56,8 +56,6 @@
 ;; this module is called declaratively (dsh-emacs.el guarantees load order).
 (declare-function dsh-emacs--push-input-history "dsh-emacs" (text))
 (declare-function dsh-emacs--clear-input "dsh-emacs" ())
-(defvar dsh-emacs--input-history-pos)
-(defvar dsh-emacs--input-history-pending)
 
 (defgroup dsh-emacs-shell nil
   "Local `!command' shell commands."
@@ -157,8 +155,6 @@ leaves the input untouched."
            (not (y-or-n-p (format "Run shell command: %s? " command))))
       (message "Shell command cancelled")
     (dsh-emacs--push-input-history line)
-    (setq dsh-emacs--input-history-pos nil
-          dsh-emacs--input-history-pending nil)
     (dsh-emacs--clear-input)
     (dsh-emacs-shell--kill-previous)
     (dsh-emacs-shell-run command (current-buffer))))

@@ -2254,6 +2254,14 @@ Set by `dsh-emacs--note-undo-change' from `after-change-functions';
 `dsh-emacs--reset-undo-history' rebuilds the history from it before the next
 command runs.")
 
+(defvar-local dsh-emacs--undo-consumed nil
+  "Last consumed input, with text properties, until the next input edit.
+Together with the current input, this is the position-independent state
+from which `dsh-emacs--input-undo-history' rebuilds one undo step.
+Only `dsh-emacs--clear-input' saves it, for every submission kind; any
+input edit, including undo restoring it or failure rollback, discards it.
+It holds text only, never attachments or a stack of earlier submissions.")
+
 (defvar-local dsh-emacs--undo-restored-end nil
   "End of the input text a running undo command re-inserted, or nil.
 Set by `dsh-emacs--note-undo-change' while `undo-in-progress' is non-nil and
@@ -2281,23 +2289,28 @@ remember where it ends when it reaches the input's end, so the cursor can
 follow it (see `dsh-emacs--park-point-after-undo')."
   (if (dsh-emacs--transcript-change-p beg)
       (setq dsh-emacs--undo-stale t)
+    (setq dsh-emacs--undo-consumed nil)
     (when (and undo-in-progress
                (> end beg)
                (= end (dsh-emacs--input-end)))
       (setq dsh-emacs--undo-restored-end end))))
 
 (defun dsh-emacs--input-undo-history ()
-  "Return an undo list that undoes the current input as one step, or nil.
-The list holds one boundary and one record saying the input text was inserted
-at its current position, so `undo' deletes the draft and `undo-redo' restores
-it.  Nil when the input is empty or has no live marker."
+  "Return one undo step for the position-independent input state, or nil.
+Nonempty input becomes an insertion record: undo clears the current draft.
+Otherwise `dsh-emacs--undo-consumed' becomes a deletion record: undo restores
+the last consumed input.  Input edits (including undo) invalidate that saved
+consumption, so it cannot resurface after a new draft is edited away.
+Both records use the live input marker; no live marker means no history."
   (when-let* ((start (and (markerp dsh-emacs--input-marker)
                           (eq (marker-buffer dsh-emacs--input-marker)
                               (current-buffer))
                           (marker-position dsh-emacs--input-marker)))
-              (end (dsh-emacs--input-end))
-              ((< start end)))
-    (list nil (cons start end))))
+              (end (dsh-emacs--input-end)))
+    (cond
+     ((< start end) (list nil (cons start end)))
+     (dsh-emacs--undo-consumed
+      (list nil (cons dsh-emacs--undo-consumed (- start)))))))
 
 (defun dsh-emacs--park-point-after-undo ()
   "`post-command-hook': leave point after input text an undo command restored.
@@ -2317,12 +2330,17 @@ Rebuild `buffer-undo-list' around the input area, the only undoable region,
 once a transcript write has shifted the input (see `dsh-emacs--undo-stale'):
 undo records hold absolute buffer positions, and Emacs does not adjust them
 when text lands elsewhere, so records made for the draft before the write
-point at transcript text now.  Dropping them costs nothing — the transcript
-is kept out of the history anyway — and re-recording the draft as one unit
-leaves it undoable (`C-/' clears it, `undo-redo' restores it) with typing
-after that undoable step by step again.  The restored-text position the
-previous command recorded goes with it, so it can only describe the command
-that just ran."
+point at transcript text now.  Rebuild from `dsh-emacs--input-undo-history':
+the current draft or its last unclaimed consumption survives as one step;
+earlier editing granularity and redo history do not.  The restored-text
+position belongs only to the previous command and is cleared here too.
+
+A native deletion record alone requires clearing AFTER the submit echo,
+and even then cannot survive another transcript write.  Every submission
+must consume through `dsh-emacs--clear-input', which saves the actual input
+independently of its position.  That state survives echo/reply writes in
+either order until an input edit takes ownership; callbacks must not
+reinstall a previous consumption."
   (setq dsh-emacs--undo-restored-end nil)
   (when dsh-emacs--undo-stale
     (setq dsh-emacs--undo-stale nil
@@ -2810,13 +2828,21 @@ through unchanged."
      dsh-emacs--input-marker (dsh-emacs--input-end))))
 
 (defun dsh-emacs--clear-input ()
-  "Clear the input area, keeping the mode-line newline."
+  "Consume the input, keeping its text undoable and the mode-line newline.
+Save actual input (including reference-chip properties), not the expanded
+wire text or a synthesized attachment caption.  Save AFTER deletion, since
+the input change hook invalidates the preceding consumption.  An empty
+consumption replaces it with nil.  History navigation resets here, never
+when an asynchronous completion arrives for an older draft."
   (when (and dsh-emacs--input-marker (marker-buffer dsh-emacs--input-marker))
-    ;; Submission may have just inserted its transcript echo.  Rebase before
-    ;; recording this deletion, so the next command keeps the undoable clear.
     (dsh-emacs--reset-undo-history)
-    (let ((inhibit-read-only t))
+    (let ((inhibit-read-only t)
+          (text (buffer-substring dsh-emacs--input-marker
+                                  (dsh-emacs--input-end))))
       (delete-region dsh-emacs--input-marker (dsh-emacs--input-end))
+      (setq dsh-emacs--undo-consumed (unless (string-empty-p text) text)
+            dsh-emacs--input-history-pos nil
+            dsh-emacs--input-history-pending nil)
       (goto-char dsh-emacs--input-marker))))
 
 
@@ -3023,8 +3049,6 @@ once every staged file has become a receipt."
         (unless parts
           (dsh-emacs--push-input-history message))
         (unless input-consumed
-          (setq dsh-emacs--input-history-pos nil
-                dsh-emacs--input-history-pending nil)
           (when (buffer-live-p input-buffer)
             (with-current-buffer input-buffer
               (dsh-emacs--clear-input))))
@@ -3113,8 +3137,6 @@ against); genuinely parked items keep their feedback."
     (unless parts
       (dsh-emacs--push-input-history message))
     (unless input-consumed
-      (setq dsh-emacs--input-history-pos nil
-            dsh-emacs--input-history-pending nil)
       (when (buffer-live-p input-buffer)
         (with-current-buffer input-buffer
           (dsh-emacs--clear-input))))
@@ -3244,8 +3266,6 @@ input and staged attachments are empty (a newer draft is left alone)."
                                 (progn
                                   (unless (or skip-history parts)
                                     (dsh-emacs--push-input-history message))
-                                  (setq dsh-emacs--input-history-pos nil
-                                        dsh-emacs--input-history-pending nil)
                                   ;; The echo is already on screen (rendered
                                   ;; optimistically at submit); the callback
                                   ;; only arms the live-follow state.

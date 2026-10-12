@@ -1,5 +1,8 @@
 # 054 — Undo is scoped to the input area
 
+Submit-undo lifetime superseded by [093](093-consumed-input-undo.md);
+transcript isolation and position-based rebuilding remain in effect.
+
 Implementation commit: `feat: scope chat undo to input`.
 
 ## Background

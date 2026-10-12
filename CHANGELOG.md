@@ -187,17 +187,22 @@ minor) and stay undated until the release is cut.
 
 - **Keep drafts written during file uploads**: completing an upload no longer
   clears text or attachments staged for the next message, including queued,
-  steering, and slash-command submissions.
+  steering, and slash-command submissions. (rationale: postmortem/092)
 
-- **Undo restores sent text**: sending an ordinary message keeps the undo
-  record needed to recover its draft without changing the transcript echo.
+- **Undo restores sent text after replies arrive**: plain, image and file
+  submissions retain their actual input until another input edit takes over,
+  without changing the transcript or reattaching files. History navigation
+  resets when consuming the draft; delayed success callbacks leave newer
+  navigation alone. (rationale: postmortem/093)
 
 - **Recover from local upload failures**: files that become unreadable or
   exceed the size limit while waiting to upload restore the draft, as do
   request-start failures, even after an earlier file has uploaded.
+  (rationale: postmortem/092)
 
 - **File echoes match the upload**: the transcript uses the host's sanitized
   filename and uploaded byte count while retaining local filenames for retries.
+  (rationale: postmortem/092)
 
 - **Expand only sessions with subagents**: session-list `TAB` now acts only
   on sessions with confirmed children. Empty and unknown catalogs no longer

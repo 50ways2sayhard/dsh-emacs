@@ -219,10 +219,14 @@ or a **file entry** — only `(file . PATH) (name . N) (bytes . B)`, capped by
 time, after rechecking readability and size.  `C-c C-c` consumes the staged
 set immediately.  File submissions clear the input before uploading and leave
 later edits alone when uploads complete; ordinary submissions clear after the
-optimistic echo so undo retains the sent draft.  Both clear before sending the
-prompt RPC, so even a synchronous failure can restore it.  The resolved parts
-append to `session/prompt`: `{type:'image'}` with inline bytes, or
-`{type:'file', receiptId}` after the raw-byte upload route
+optimistic echo.  Both consume through `dsh-emacs--clear-input`, which saves
+the actual input for undo and resets history navigation at consumption time.
+Completion callbacks leave newer editing/navigation state alone.  Undo uses
+the shared input state described below, without restoring attachments or
+inventing a caption for an originally empty input.  Both paths clear before
+sending the prompt RPC, so even a synchronous failure can restore it.
+The resolved parts append to `session/prompt`: `{type:'image'}` with inline
+bytes, or `{type:'file', receiptId}` after the raw-byte upload route
 (`/api/session/uploadFileBinary`, `dsh-emacs--upload-file`) minted a one-time
 receipt for that file.  The image name (or the attachment summary) is the
 caption when the input is empty.  A failed submit puts text and attachments
@@ -269,12 +273,28 @@ a stale record from deleting rendered text.  Two rules keep them apart:
   absolute positions that Emacs does not adjust when text lands elsewhere.
   `dsh-emacs--note-undo-change` (`after-change-functions`) flags that;
   `dsh-emacs--reset-undo-history` (`pre-command-hook`, so before the command
-  can reach a stale record) drops the history and re-records the input as one
-  unit.  `C-/` then clears the draft; `C-g C-/` restores it, as does
-  `undo-redo` on Emacs 28+. Typing from there is undoable step by step again.
-  Submission also rebuilds stale history before clearing the input, after
-  its optimistic echo has finished rendering, so that deletion remains
-  undoable at the next command.
+  can reach a stale record) rebuilds one step through
+  `dsh-emacs--input-undo-history`. Nonempty input becomes an insertion record:
+  `C-/` clears the draft; `C-g C-/` restores it, as does `undo-redo` on
+  Emacs 28+. Empty input with a saved consumption becomes a deletion record:
+  `C-/` restores the consumed text. Typing from there is undoable step by step.
+
+The position-independent input state consists of the editable text and
+`dsh-emacs--undo-consumed`, the last input consumed by `--clear-input`, including
+reference-chip properties. All submission kinds use this boundary; it saves
+text after deletion and clears the history navigation cursor. Any input edit,
+including undo or failure restoration, invalidates the saved consumption.
+Callbacks never reinstall it, so older completions cannot overwrite a later
+consumption. An empty consumption saves nothing; attachment summaries are not
+input, and undo never restores attachments or retracts a server submission.
+
+A native deletion record alone requires clearing after the submit echo, and
+still disappears at the next transcript write. Saving the consumption makes
+both echo orders safe and gives plain, image and file sends the same lifetime:
+reply writes do not prevent restoring the sent text before another input edit.
+This retains only the latest consumption, not a full submit history. Rebuilding
+still discards earlier editing granularity and redo records; undo/redo itself
+counts as an edit and does not rearm the consumed text.
 
 Point discipline: `undo` re-inserts a restored region at the position it was
 deleted from and parks point there, which would leave the cursor at the start
@@ -288,7 +308,8 @@ text leaves point where that text was, which is where the user was editing.
 requires that nothing edits `buffer-undo-list` while its handle is live, so
 the history is rebuilt at command boundaries or before an input clear,
 outside transcript change groups. See
-[postmortem/054](../postmortem/054-undo-scoped-to-input.md).
+[postmortem/054](../postmortem/054-undo-scoped-to-input.md) and the shared
+consumption extension in [postmortem/093](../postmortem/093-consumed-input-undo.md).
 
 ## Shell commands (`dsh-emacs-shell.el`)
 
