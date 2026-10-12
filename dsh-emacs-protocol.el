@@ -41,6 +41,8 @@
 ;;                        └─ dsh-protocol-command-input (hint attachments)
 ;;   commands.execute → dsh-protocol-command-execution (command-id
 ;;                        result kind text)
+;;   raw file upload  → dsh-protocol-file-receipt (receipt-id)
+;;                        └─ dsh-protocol-file-ref (attachment-id name bytes)
 ;;   skills.list      → dsh-protocol-skill-list (skills)
 ;;                        └─ dsh-protocol-skill (name description when-to-use
 ;;                             model-invocable path)
@@ -576,6 +578,44 @@ placeholder, ATTACHMENTS whether the command accepts composed attachments
   result
   kind
   text)
+
+;; ---------------------------------------------------------------------------
+;; Prompt attachments (durable file refs and the upload receipt)
+;; ---------------------------------------------------------------------------
+;; A composed file attachment is uploaded to the host before the prompt
+;; (raw-byte route, rpc.md §4.17), which answers with the one-time receipt
+;; that is submitted back inside one `session/prompt' content part.  Once the
+;; prompt is admitted the receipt is replaced by the durable file reference
+;; carried on the `user/message' content block (`{type:'file', attachment}').
+
+(cl-defstruct (dsh-protocol-file-ref
+               (:constructor dsh-protocol-file-ref--from-alist
+                             (alist
+                              &aux
+                              (attachment-id (cdr (assq 'attachmentId alist)))
+                              (name (cdr (assq 'name alist)))
+                              (bytes (cdr (assq 'bytes alist))))))
+  "A durable stored file: ATTACHMENT-ID is an opaque content-addressed
+identifier (never a path), NAME the sanitized leaf name, BYTES the exact
+byte length."
+  attachment-id
+  name
+  bytes)
+
+(cl-defstruct (dsh-protocol-file-receipt
+               (:constructor dsh-protocol-file-receipt--from-alist
+                             (alist
+                              &aux
+                              (receipt-id (cdr (assq 'receiptId alist)))
+                              (file (let ((file (cdr (assq 'file alist))))
+                                      (and file
+                                           (dsh-protocol-file-ref--from-alist
+                                            file)))))))
+  "The upload route's value: RECEIPT-ID is the one-time authority that
+travels back inside exactly one prompt's content (valid only in the
+session it was uploaded for), FILE the durable stored reference."
+  receipt-id
+  file)
 
 ;; ---------------------------------------------------------------------------
 ;; skills.list

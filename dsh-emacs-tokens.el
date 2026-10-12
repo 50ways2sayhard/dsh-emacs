@@ -68,6 +68,17 @@
    ((< 0 pct 0.05) "0.0%")
    (t (format "%.1f%%" pct))))
 
+(defun dsh-emacs-format-bytes (bytes)
+  "Format BYTES (a byte count) as a compact size string.
+  512 -> \"512 B\", 2048 -> \"2.0 KB\", 5242880 -> \"5.0 MB\"."
+  (cond
+   ((null bytes) "?")
+   ((not (numberp bytes)) "?")
+   ((< bytes 1024) (format "%d B" bytes))
+   ((< bytes (* 1024 1024)) (format "%.1f KB" (/ bytes 1024.0)))
+   ((< bytes (* 1024 1024 1024)) (format "%.1f MB" (/ bytes (* 1024.0 1024))))
+   (t (format "%.1f GB" (/ bytes (* 1024.0 1024 1024))))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; usage plist
 ;;; ---------------------------------------------------------------------------

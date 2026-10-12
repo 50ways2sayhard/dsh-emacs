@@ -115,9 +115,9 @@ See [subagent integration](docs/subagents.md) for protocol and test details.
 | `C-c C-g` | Open the goal-action prefix |
 | `C-c C-m` | Switch model / reasoning effort |
 | `C-c C-e` | Switch the running model's reasoning effort |
-| `C-c C-a` | Attach an image file and send it now |
+| `C-c C-a` | Attach a file and send it now |
 | `C-c C-v` | Paste the clipboard image into the next message |
-| `C-c C-d` | Discard staged images |
+| `C-c C-d` | Discard staged attachments |
 | `s-v` | Paste a clipboard image, else yank text |
 | `C-c C-s` / `C-c M-s` | Switch session in this workspace / across all |
 | `C-c C-r` | Refresh |
@@ -300,22 +300,32 @@ or with `C-u`, opens the picked skill's `SKILL.md`. The host expands a `/name`
 gesture found in your prompt, so a skill is invoked like ordinary text
 (`/review check the parser`). See [Skills](docs/skills.md).
 
-### Images
+### Attachments
+
+An **image** whose type is in `dsh-emacs-attach-media-types` rides the prompt
+inline and reaches the model as an image. Any **other file** is uploaded to
+the host when the prompt is submitted and reaches the model as a file
+attachment; the transcript shows it as a display-only `[file: name · size]`
+line. `C-c C-a` picks a file and sends it immediately with a caption (the file
+name when the caption is empty), and a drag-and-drop onto a chat buffer sends
+the dropped files as one prompt — `dsh-emacs-attach-max-file-size` caps an
+uploaded file (32 MiB by default, `nil` lifts the cap), and an image is not
+governed by it.
 
 `C-c C-v` pastes the system clipboard's image into the next message: it joins
 a staged-attachments row above the input, you type a caption (or leave the
-input empty to use the image name), and `C-c C-c` sends text and image
-together. `C-c C-d` discards the staged images; the trailing `✕` on the row
-does the same. `s-v` does the same as `C-c C-v` whenever the clipboard holds
-an image, and falls back to ordinary text yank otherwise; `C-y` always stays a
-plain text yank, so a clipboard carrying both an image and text can still paste
-the text. Where the pasteboard exposes TIFF rather than PNG (macOS), the image
-is converted with the system `sips` tool before upload, provided PNG is in
-`dsh-emacs-attach-media-types`. A rejected send restores its caption and images
-only while both the input and staged images are empty. Emacs 29+ users can
-also run `M-x yank-media`. `C-c C-a` remains the one-shot form: it picks an
-image file and sends it immediately. Only the media types in
-`dsh-emacs-attach-media-types` are accepted.
+input empty to use the attachment name), and `C-c C-c` sends text and
+attachments together — a staged file is uploaded as the send starts. `C-c C-d`
+discards the staged attachments; the trailing `✕` on the row does the same.
+`s-v` does the same as `C-c C-v` whenever the clipboard holds an image, and
+falls back to ordinary text yank otherwise; `C-y` always stays a plain text
+yank, so a clipboard carrying both an image and text can still paste the text.
+Where the pasteboard exposes TIFF rather than PNG (macOS), the image is
+converted with the system `sips` tool before upload, provided PNG is in
+`dsh-emacs-attach-media-types`. A rejected send restores its caption and
+attachments only while both the input and staged attachments are empty; a
+failed upload likewise restores them and sends nothing. Emacs 29+ users can
+also run `M-x yank-media`.
 
 ### Models & presets
 

@@ -8864,8 +8864,10 @@ Lets a test drive a malformed content value through the result path."
     (undo-boundary)
     (run-hooks 'pre-command-hook)
     (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
-               (lambda (&rest _) nil)))
-      (dsh-emacs--submit-plain "draft to send"))
+               (lambda (&rest _) nil))
+              ((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+              ((symbol-function 'dsh-emacs--busy-p) (lambda () nil)))
+      (dsh-emacs-send-or-stop))
     (undo-boundary)
     (let ((last-command 'dsh-emacs-send-or-stop) (this-command 'undo)
           (pending-undo-list nil)
@@ -8873,7 +8875,8 @@ Lets a test drive a malformed content value through the result path."
           (transcript (buffer-substring-no-properties
                        (point-min) dsh-emacs--input-marker)))
       (run-hooks 'pre-command-hook)
-      (undo)
+      (dsh-test-assert "undo-send-has-undo-information"
+        (condition-case nil (progn (undo) t) (user-error nil)))
       (run-hooks 'post-command-hook)
       (dsh-test-assert "undo-send-restores-draft-without-changing-echo"
         (equal (dsh-emacs--get-input) "draft to send")
@@ -14033,26 +14036,25 @@ received, RESULT is FN's return value."
   (when (equal missed '(t nil))
     (dsh-test-pass "command-execute-miss-reports-nil")))
 
-(let* ((att '((mediaType . "image/png") (data . "x")))
-       (h (dsh-emacs-command--submitted-attachments att))
+(let* ((image-part '((type . "image") (mediaType . "image/png") (data . "x")))
+       (file-part '((type . "file") (receiptId . "r1")))
        (calls nil))
-  ;; The helper takes ONE attachment alist (nil = none) and tags it.
-  (dsh-test-assert "command-submitted-attachments-shape"
-    (vectorp h)
-    (= (length h) 1)
-    (equal (aref h 0)
-           '((type . "image") (mediaType . "image/png") (data . "x")))
-    (equal (dsh-emacs-command--submitted-attachments nil) []))
+  ;; The resolved part list rides `submittedAttachments' unchanged: images and
+  ;; file receipts are one tagged union, and the field is required (empty
+  ;; array for a text-only command).
   (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
              (lambda (m p cb)
                (push (list m p) calls)
                (funcall cb t nil))))
-    (dsh-emacs-command-execute "s" "/goal" att nil))
-  (let ((params (cadr (car calls))))
+    (dsh-emacs-command-execute "s" "/goal" (list image-part file-part) nil)
+    (dsh-emacs-command-execute "s" "/goal" nil nil))
+  (let ((params (cadr (nth 1 calls)))
+        (empty-params (cadr (car calls))))
     (dsh-test-assert "command-execute-passes-attachments"
       (null (assq 'images params))
       (equal (append (cdr (assq 'submittedAttachments params)) nil)
-             '(((type . "image") (mediaType . "image/png") (data . "x")))))))
+             (list image-part file-part))
+      (equal (cdr (assq 'submittedAttachments empty-params)) []))))
 
 ;; --- Test 95b: permissionPresets/catalog parses and the switch runs the
 ;; `/permission' slash command (dsh 0.1.6; the namespace has no write Remote) ---
@@ -14165,10 +14167,13 @@ received, RESULT is FN's return value."
               (dsh-test-pass "submit-slash-routes-to-execute")))
           ;; Slash command with attachments: the attachments go into the tagged
           ;; `submittedAttachments', not into session/prompt's content (the caption text
-          ;; still stays in the command line).
+          ;; still stays in the command line).  The staged list holds one entry
+          ;; per attachment — a bare media-type alist would read as two
+          ;; dotted pairs, not as one attachment.
           (setq calls nil)
-          (dsh-emacs--submit-prompt "/compact"
-                                    '((mediaType . "image/png") (data . "eA==")))
+          (dsh-emacs--submit-prompt
+           "/compact"
+           '(((mediaType . "image/png") (data . "eA=="))))
           (let* ((call (car calls))
                  (params (cadr call)))
             (dsh-test-assert "submit-slash-carries-tagged-attachment"
@@ -25445,6 +25450,496 @@ messages (e.g. `command/done')."
                      (and (fboundp 'dsh-emacs-modeline--doom-major-mode)
                           (eq (dsh-emacs-modeline--doom-major-mode padded)
                               padded)))))
+
+;; --- Test 122a: staged file attachments -- the entry model ---
+;; An accepted image carries inline base64; every other file becomes a
+;; metadata-only staged entry uploaded at submit time (see 122b-122e).
+(let* ((png (make-temp-file "dsh-fa-img" nil ".png"))
+       (txt (make-temp-file "dsh-fa-note" nil ".txt"))
+       (big (make-temp-file "dsh-fa-big" nil ".bin")))
+  (unwind-protect
+      (progn
+        (with-temp-file png
+          (set-buffer-multibyte nil)
+          (insert (base64-decode-string
+                   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")))
+        (with-temp-file txt (insert "notes\n"))
+        (with-temp-file big (insert (make-string 32 ?x)))
+        (let ((image (dsh-emacs--attachable-file png))
+              (file (dsh-emacs--attachable-file txt)))
+          (dsh-test-assert "attachable-file-inlines-image"
+            (equal "image/png" (cdr (assq 'mediaType image)))
+            (stringp (cdr (assq 'data image)))
+            (equal (file-name-nondirectory png) (cdr (assq 'name image)))
+            ;; The image part is the same tagged shape the prompt takes.
+            (equal (dsh-emacs--attachment-part image)
+                   (cons '(type . "image") image)))
+          (dsh-test-assert "attachable-file-stages-other-file"
+            (equal (expand-file-name txt) (cdr (assq 'file file)))
+            (equal (file-name-nondirectory txt) (cdr (assq 'name file)))
+            (equal 6 (cdr (assq 'bytes file)))
+            (dsh-emacs--attachment-file-p file)
+            ;; A file has no wire part until its upload returns a receipt.
+            (null (dsh-emacs--attachment-part file))
+            (null (dsh-emacs--attachment-file-p image)))
+          ;; The cap refuses before anything is read; nil lifts it.
+          (let ((dsh-emacs-attach-max-file-size 8))
+            (dsh-test-assert "staged-file-attachment-honors-size-cap"
+              (null (dsh-emacs--attachable-file big))))
+          (let ((dsh-emacs-attach-max-file-size nil))
+            (dsh-test-assert "staged-file-attachment-cap-nil-is-no-limit"
+              (dsh-emacs--attachment-file-p (dsh-emacs--attachable-file big))))
+          (dsh-test-assert "attachable-file-refuses-missing-path"
+            (null (dsh-emacs--attachable-file
+                   (expand-file-name "dsh-fa-missing" temporary-file-directory))))))
+    (delete-file png)
+    (delete-file txt)
+    (delete-file big)))
+
+;; --- Test 122b: the raw upload route posts the exact bytes and reads the
+;; receipt (rpc.md §4.17) ---
+(let* ((file (make-temp-file "dsh-upload" nil ".pdf"))
+       (entry (list (cons 'file file) (cons 'name "report.pdf")
+                    (cons 'bytes 5)))
+       (requests nil)
+       (pending nil)
+       (response nil)
+       (result 'unset))
+  (unwind-protect
+      (progn
+        (with-temp-file file
+          (set-buffer-multibyte nil)
+          (insert (unibyte-string 0 1 2 255 65)))
+        (cl-labels
+            ((stub ()
+               (lambda (url callback &optional _args _silent _inhibit)
+                 (push (list url (copy-sequence url-request-extra-headers)
+                             url-request-method url-request-data)
+                       requests)
+                 (setq pending callback
+                       response (generate-new-buffer " *dsh-upload-http*"))))
+             (answer (body)
+               (with-current-buffer response
+                 (setq-local url-http-response-status 200)
+                 (insert "HTTP/1.1 200 OK\ncontent-type: application/json\n\n"
+                         body)
+                 (funcall pending nil))
+               (when (buffer-live-p response) (kill-buffer response))
+               (setq response nil)))
+          (cl-letf (((symbol-function 'url-retrieve) (stub)))
+            (dsh-emacs--upload-file
+             "sess-up" entry
+             (lambda (ok value error) (setq result (list ok value error))))
+            (answer "{\"ok\":true,\"value\":{\"receiptId\":\"r-9\",\"file\":{\"attachmentId\":\"sha256:9\",\"name\":\"report.pdf\",\"bytes\":5}}}"))
+          (let* ((req (car requests))
+                 (ref (dsh-protocol-file-receipt-file (nth 1 result))))
+            (dsh-test-assert "upload-file-posts-raw-bytes"
+              (equal "POST" (nth 2 req))
+              (equal "application/octet-stream"
+                     (cdr (assoc "Content-Type" (nth 1 req))))
+              (string-match-p
+               "/api/session/uploadFileBinary\\?sessionId=sess-up&name=report\\.pdf\\'"
+               (car req))
+              ;; The exact bytes: no base64, no coding conversion.
+              (equal (unibyte-string 0 1 2 255 65) (nth 3 req)))
+            (dsh-test-assert "upload-file-parses-receipt"
+              (eq t (car result))
+              (equal "r-9" (dsh-protocol-file-receipt-receipt-id (nth 1 result)))
+              (equal "report.pdf" (dsh-protocol-file-ref-name ref))
+              (equal 5 (dsh-protocol-file-ref-bytes ref))
+              (equal "sha256:9" (dsh-protocol-file-ref-attachment-id ref))
+              (null (nth 2 result))))
+          ;; The route reports its own failure inside a 200 body.
+          (setq result 'unset requests nil)
+          (cl-letf (((symbol-function 'url-retrieve) (stub)))
+            (dsh-emacs--upload-file
+             "sess-up" entry
+             (lambda (ok value error) (setq result (list ok value error))))
+            (answer "{\"ok\":false,\"error\":{\"code\":\"session/not-found\",\"message\":\"no session\"}}"))
+          (dsh-test-assert "upload-file-surfaces-route-error"
+            (null (car result))
+            (null (nth 1 result))
+            (equal "session/not-found" (cdr (assq 'code (nth 2 result))))
+            (equal "no session" (cdr (assq 'message (nth 2 result)))))
+          ;; A transport failure reaches the same callback with nil.
+          (setq result 'unset)
+          (cl-letf (((symbol-function 'url-retrieve) (stub)))
+            (dsh-emacs--upload-file
+             "sess-up" entry
+             (lambda (ok value error) (setq result (list ok value error))))
+            (with-current-buffer response
+              (funcall pending '(:error (error http 400))))
+            (when (buffer-live-p response) (kill-buffer response))
+            (setq response nil))
+          (dsh-test-assert "upload-file-transport-failure-reports-nil"
+            (equal '(nil nil nil) result))))
+    (delete-file file)))
+
+;; --- Test 122c: mixed staged attachments resolve in staged order, one file
+;; upload after another ---
+(let* ((image '((mediaType . "image/png") (data . "eA==") (name . "shot.png")))
+       (fa (list (cons 'file "/tmp/a.pdf") (cons 'name "a.pdf") (cons 'bytes 1)))
+       (fb (list (cons 'file "/tmp/b.log") (cons 'name "b.log") (cons 'bytes 2)))
+       (uploaded nil)
+       (parts 'unset))
+  (cl-letf (((symbol-function 'dsh-emacs--upload-file)
+             (lambda (_session attachment callback)
+               (push (cdr (assq 'name attachment)) uploaded)
+               (funcall callback
+                        t
+                        (dsh-protocol-file-receipt--from-alist
+                         (list (cons 'receiptId
+                                     (concat "r-" (cdr (assq 'name attachment))))))
+                        nil))))
+    (dsh-emacs--upload-attachments
+     "sess-up" (list image fa fb)
+     (lambda (ok value error) (setq parts (list ok value error)))))
+  (dsh-test-assert "upload-attachments-resolves-in-staged-order"
+    (eq t (car parts))
+    (equal (append (nth 1 parts) nil)
+           (list (dsh-emacs--attachment-part image)
+                 '((type . "file") (receiptId . "r-a.pdf"))
+                 '((type . "file") (receiptId . "r-b.log"))))
+    (null (nth 2 parts))
+    ;; Images need no round trip; files upload in staged order.
+    (equal '("a.pdf" "b.log") (nreverse uploaded))))
+;; A failing upload stops the chain and reports no parts.
+(let* ((fa (list (cons 'file "/tmp/a.pdf") (cons 'name "a.pdf") (cons 'bytes 1)))
+       (fb (list (cons 'file "/tmp/b.log") (cons 'name "b.log") (cons 'bytes 2)))
+       (calls 0)
+       (out 'unset))
+  (cl-letf (((symbol-function 'dsh-emacs--upload-file)
+             (lambda (_session attachment callback)
+               (setq calls (1+ calls))
+               (funcall callback nil nil
+                        (list (cons 'code "session/attachment-invalid")
+                              (cons 'message "File was not uploaded for this session."))))))
+    (dsh-emacs--upload-attachments
+     "sess-up" (list fa fb)
+     (lambda (ok value error) (setq out (list ok value error)))))
+  (dsh-test-assert "upload-attachments-stops-on-failure"
+    (equal 1 calls)
+    (null (car out))
+    (null (nth 1 out))
+    (equal "session/attachment-invalid" (cdr (assq 'code (nth 2 out)))))
+  ;; No session to upload into is a user error, thrown synchronously so the
+  ;; send path can restore the draft.
+  (dsh-test-assert "upload-attachments-requires-session"
+    (condition-case nil
+        (progn (dsh-emacs--upload-attachments nil (list fa) #'ignore) nil)
+      (user-error t))))
+
+;; --- Test 122d: a staged file reaches session/prompt as a receipt part ---
+(let ((buf (generate-new-buffer " *dsh-file-submit*"))
+      (calls nil)
+      (uploaded nil))
+  (unwind-protect
+      (with-current-buffer buf
+        (dsh-emacs-mode)
+        (setq dsh-emacs--current-session "sess-file")
+        (setq-local dsh-emacs--buffer-session "sess-file")
+        (dsh-emacs--ml-busy-clear)
+        (let ((entry (list (cons 'file "/tmp/report.pdf")
+                           (cons 'name "report.pdf") (cons 'bytes 5))))
+          (cl-letf (((symbol-function 'dsh-emacs--upload-file)
+                     (lambda (session attachment callback)
+                       (push (list session (cdr (assq 'name attachment))) uploaded)
+                       (funcall callback
+                                t
+                                (dsh-protocol-file-receipt--from-alist
+                                 '((receiptId . "r-1")))
+                                nil)))
+                    ((symbol-function 'dsh-emacs--rpc-async)
+                     (lambda (method params cb)
+                       (push (list method params) calls)
+                       (funcall cb t '((accepted . t))))))
+            (dsh-emacs--submit-prompt "please read" (list entry)))
+          (let* ((call (car calls))
+                 (params (cadr call))
+                 (content (cdr (assq 'content
+                                     (cdr (assq 'request params)))))
+                 (block (and content (> (length content) 1)
+                             (aref content 1))))
+            (dsh-test-assert "submit-prompt-uploads-then-sends-receipt"
+              (equal '(("sess-file" "report.pdf")) (nreverse uploaded))
+              (equal "session/prompt" (car call))
+              (equal "please read" (cdr (assq 'text (aref content 0))))
+              (equal '((type . "file") (receiptId . "r-1"))
+                     (append block nil))
+              ;; A file never travels as inline base64.
+              (null (assq 'data block)))
+            ;; The optimistic echo is kept when the canonical event arrives, so
+            ;; it must already name and size the file.
+            (dsh-test-assert "submit-prompt-echoes-file-chip"
+              (string-match-p
+               "\\[file: report\\.pdf · 5 B\\]"
+               (buffer-substring-no-properties (point-min) (point-max)))))))
+    (kill-buffer buf)))
+
+;; --- Test 122e: a failed upload restores the draft and sends nothing ---
+(let ((buf (generate-new-buffer " *dsh-file-fail*"))
+      (calls nil))
+  (unwind-protect
+      (with-current-buffer buf
+        (dsh-emacs-mode)
+        (setq dsh-emacs--current-session "sess-file-fail")
+        (setq-local dsh-emacs--buffer-session "sess-file-fail")
+        (dsh-emacs--ml-busy-clear)
+        (let ((entry (list (cons 'file "/tmp/big.pdf")
+                           (cons 'name "big.pdf") (cons 'bytes 9)))
+              (fail (lambda (_session _attachment callback)
+                      (funcall callback
+                               nil nil
+                               (list (cons 'code "session/attachment-invalid")
+                                     (cons 'message "File was not uploaded."))))))
+          ;; File submission clears the input before uploading (so it cannot
+          ;; be double-sent); even a synchronous failure restores both.
+          (goto-char dsh-emacs--input-marker)
+          (insert "captain")
+          (cl-letf (((symbol-function 'dsh-emacs--upload-file) fail)
+                    ((symbol-function 'dsh-emacs--rpc-async)
+                     (lambda (method params _cb)
+                       (push (list method params) calls))))
+            (dsh-emacs--submit-prompt "captain" (list entry)))
+          (dsh-test-assert "submit-prompt-upload-failure-restores-draft"
+            (string= "captain" (dsh-emacs-test--input-text))
+            (equal (list entry) (dsh-emacs-pending-attachments))
+            (null calls))
+          ;; A newer draft typed meanwhile is never clobbered — and the
+          ;; consumed attachment set is not re-staged under it.
+          (dsh-emacs--clear-input)
+          (setq dsh-emacs--pending-attachments nil)
+          (let ((pending nil))
+            (cl-letf (((symbol-function 'dsh-emacs--upload-file)
+                       (lambda (_session _attachment callback)
+                         (setq pending callback)))
+                      ((symbol-function 'dsh-emacs--rpc-async)
+                       (lambda (method params _cb)
+                         (push (list method params) calls))))
+              (dsh-emacs--submit-prompt "captain" (list entry))
+              (dsh-emacs--replace-input "newer draft")
+              (funcall pending nil nil '((message . "Upload failed")))))
+          (dsh-test-assert "submit-prompt-upload-failure-keeps-newer-draft"
+            (string= "newer draft" (dsh-emacs-test--input-text))
+            (null (dsh-emacs-pending-attachments))
+            (null calls))))
+    (kill-buffer buf)))
+
+;; --- Test 122f: a durable file block renders as a size-labelled chip ---
+(let ((buf (generate-new-buffer " *dsh-file-render*")))
+  (unwind-protect
+      (with-current-buffer buf
+        (dsh-emacs-mode)
+        (dsh-emacs-modeline-setup)
+        (dsh-emacs-render-event
+         (json-read-from-string
+          (concat "{\"type\":\"user/message\",\"seq\":3,\"data\":{\"content\":["
+                  "{\"type\":\"text\",\"text\":\"have a look\"},"
+                  "{\"type\":\"file\",\"attachment\":{\"attachmentId\":\"sha256:a\","
+                  "\"name\":\"notes.txt\",\"bytes\":2048}}]}}")))
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (pos (string-match "\\[file: notes\\.txt · 2\\.0 KB\\]" text)))
+          (dsh-test-assert "user-message-renders-file-chip"
+            pos
+            (string-match-p "have a look\n\\[file: notes\\.txt · 2\\.0 KB\\]" text)
+            ;; Display only: there is no read path for a stored file.
+            (null (get-text-property pos 'keymap (buffer-substring (point-min)
+                                                                   (point-max)))))))
+    (kill-buffer buf)))
+
+;; --- Test 122g: protocol file reference / upload receipt and byte sizes ---
+(let* ((receipt (dsh-protocol-file-receipt--from-alist
+                 '((receiptId . "r-1")
+                   (file . ((attachmentId . "sha256:a")
+                            (name . "n.pdf") (bytes . 12))))))
+       (ref (dsh-protocol-file-receipt-file receipt))
+       (empty (dsh-protocol-file-receipt--from-alist nil)))
+  (dsh-test-assert "protocol-file-receipt-parses"
+    (equal "r-1" (dsh-protocol-file-receipt-receipt-id receipt))
+    (equal "sha256:a" (dsh-protocol-file-ref-attachment-id ref))
+    (equal "n.pdf" (dsh-protocol-file-ref-name ref))
+    (equal 12 (dsh-protocol-file-ref-bytes ref)))
+  (dsh-test-assert "protocol-file-receipt-nil-safe"
+    (null (dsh-protocol-file-receipt-receipt-id empty))
+    (null (dsh-protocol-file-receipt-file empty)))
+  (dsh-test-assert "format-bytes-scales"
+    (equal "512 B" (dsh-emacs-format-bytes 512))
+    (equal "2.0 KB" (dsh-emacs-format-bytes 2048))
+    (equal "5.0 MB" (dsh-emacs-format-bytes (* 5 1024 1024)))
+    (equal "?" (dsh-emacs-format-bytes nil))
+    (equal "?" (dsh-emacs-format-bytes "x"))))
+
+;; --- Test 122h: `C-c C-a' attaches a non-image file through the upload path ---
+(let* ((file (make-temp-file "dsh-attach-entry" nil ".log"))
+       (buf (generate-new-buffer " *dsh-attach-entry*"))
+       (uploaded nil)
+       (calls nil))
+  (unwind-protect
+      (progn
+        (with-temp-file file (insert "log line\n"))
+        (with-current-buffer buf
+          (dsh-emacs-mode)
+          (setq dsh-emacs--current-session "sess-entry")
+          (setq-local dsh-emacs--buffer-session "sess-entry")
+          (dsh-emacs--ml-busy-clear)
+          (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+                    ((symbol-function 'dsh-emacs--upload-file)
+                     (lambda (_session attachment callback)
+                       (push (cdr (assq 'name attachment)) uploaded)
+                       (funcall callback
+                                t
+                                (dsh-protocol-file-receipt--from-alist
+                                 '((receiptId . "r-7")))
+                                nil)))
+                    ((symbol-function 'dsh-emacs--rpc-async)
+                     (lambda (method params cb)
+                       (push (list method params) calls)
+                       (funcall cb t '((accepted . t))))))
+            (dsh-emacs-attach-file file "see the log"))
+          (let* ((params (cadr (car calls)))
+                 (content (cdr (assq 'content
+                                     (cdr (assq 'request params))))))
+            (dsh-test-assert "attach-file-command-uploads-non-image"
+              (equal (list (file-name-nondirectory file)) uploaded)
+              (equal "see the log" (cdr (assq 'text (aref content 0))))
+              (equal '((type . "file") (receiptId . "r-7"))
+                     (append (aref content 1) nil))))))
+    (delete-file file)
+    (kill-buffer buf)))
+
+;; Upload completion must not consume a draft composed after sending, across
+;; plain, queued, steering, and slash-command/fallback dispatch.
+(dolist (route '(plain queue steer command))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs--buffer-session "upload-draft")
+    (let ((upload-callback nil) (command-callback nil) (request nil)
+          (caption (if (eq route 'command) "/unknown caption" "caption"))
+          (entry '((file . "/tmp/report?.txt")
+                   (name . "report?.txt") (bytes . 1)))
+          (new-image '((mediaType . "image/png") (data . "eA==")
+                       (name . "next.png")))
+          (dsh-emacs-busy-enter-behavior 'queue))
+      (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+                ((symbol-function 'dsh-emacs--busy-p)
+                 (lambda () (eq route 'queue)))
+                ((symbol-function 'dsh-emacs--upload-file)
+                 (lambda (_session _attachment callback)
+                   (setq upload-callback callback)))
+                ((symbol-function 'dsh-emacs-command-execute)
+                 (lambda (_session _line _parts callback)
+                   (setq command-callback callback)))
+                ((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (_method params _callback) (setq request params))))
+        (dsh-emacs--replace-input caption)
+        (dsh-emacs--stage-attachments (list entry))
+        (let ((current-prefix-arg (and (eq route 'steer) '(4))))
+          (dsh-emacs-send-or-stop))
+        (dsh-test-assert (format "upload-clears-original-draft-%s" route)
+          (equal "" (dsh-emacs--get-input))
+          (null (dsh-emacs-pending-attachments)))
+        (dsh-emacs--replace-input "next draft")
+        (dsh-emacs--stage-attachments (list new-image))
+        (funcall upload-callback t
+                 (dsh-protocol-file-receipt--from-alist
+                  '((receiptId . "receipt")
+                    (file . ((name . "report_.txt") (bytes . 2048))))) nil)
+        (dsh-test-assert (format "upload-preserves-new-draft-%s" route)
+          (equal "next draft" (dsh-emacs--get-input))
+          (equal (list new-image) (dsh-emacs-pending-attachments)))
+        (when command-callback
+          (funcall command-callback t nil nil))
+        (let* ((payload (cdr (assq 'request request)))
+               (content (cdr (assq 'content payload))))
+          (dsh-test-assert (format "upload-dispatches-original-message-%s" route)
+            (equal caption (cdr (assq 'text (aref content 0))))
+            (equal '((type . "file") (receiptId . "receipt"))
+                   (aref content 1))
+            (equal (if (eq route 'steer) "steer" "queue")
+                   (cdr (assq 'mode payload)))
+            (equal "next draft" (dsh-emacs--get-input))))
+        (when (memq route '(plain command))
+          (dsh-test-assert (format "upload-echo-uses-host-metadata-%s" route)
+            (string-match-p (regexp-quote "[file: report_.txt · 2.0 KB]")
+                            (buffer-string))
+            ;; Local staging metadata stays reusable for a retry.
+            (equal "report?.txt" (cdr (assq 'name entry)))
+            (equal 1 (cdr (assq 'bytes entry)))
+            (null (assq 'uploaded-file entry))))))))
+
+;; A read error for a later file happens after the send command has returned.
+(let* ((file (make-temp-file "dsh-later-upload" nil ".txt"))
+       (entry (dsh-emacs--staged-file-attachment file)))
+  (unwind-protect
+      (with-temp-buffer
+        (dsh-emacs-mode)
+        (setq-local dsh-emacs--buffer-session "upload-read-error")
+        (let ((pending nil) (reads 0) (sent nil) (escaped nil))
+          (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+                    ((symbol-function 'dsh-emacs--busy-p) (lambda () nil))
+                    ((symbol-function 'dsh-emacs--binary-file-string)
+                     (lambda (_path)
+                       (setq reads (1+ reads))
+                       (if (= reads 1) "a"
+                         (signal 'file-error '("File became unreadable")))))
+                    ((symbol-function 'dsh-emacs--http-post)
+                     (lambda (_url _type _body callback) (setq pending callback)))
+                    ((symbol-function 'dsh-emacs--rpc-async)
+                     (lambda (&rest _) (setq sent t))))
+            (dsh-emacs--replace-input "two files")
+            (dsh-emacs--stage-attachments (list entry (copy-tree entry)))
+            (dsh-emacs-send-or-stop)
+            (condition-case err
+                (funcall pending '((ok . t) (value . ((receiptId . "r1")))))
+              (error (setq escaped err)))
+            (dsh-test-assert "later-file-read-error-restores-draft"
+              (null escaped) (null sent) (= 2 reads)
+              (equal "two files" (dsh-emacs--get-input))
+              (equal (list entry entry) (dsh-emacs-pending-attachments))))))
+    (delete-file file)))
+
+;; Upload startup errors report failure, but errors inside a synchronously
+;; invoked consumer callback must propagate without a second callback.
+(let* ((file (make-temp-file "dsh-upload-boundary" nil ".txt"))
+       (entry (dsh-emacs--staged-file-attachment file)))
+  (unwind-protect
+      (progn
+        (let ((result 'unset) (escaped nil))
+          (cl-letf (((symbol-function 'dsh-emacs--http-post)
+                     (lambda (&rest _) (error "Request startup failed"))))
+            (condition-case err
+                (dsh-emacs--upload-file
+                 "session" entry
+                 (lambda (ok _receipt _error) (setq result ok)))
+              (error (setq escaped err))))
+          (dsh-test-assert "upload-start-error-reaches-failure-callback"
+            (null escaped) (null result)))
+        (let ((calls 0) (escaped nil))
+          (cl-letf (((symbol-function 'dsh-emacs--http-post)
+                     (lambda (_url _type _body callback)
+                       (funcall callback
+                                '((ok . t) (value . ((receiptId . "r"))))))))
+            (condition-case err
+                (dsh-emacs--upload-file
+                 "session" entry
+                 (lambda (&rest _) (setq calls (1+ calls))
+                   (error "Consumer failed")))
+              (error (setq escaped err))))
+          (dsh-test-assert "upload-does-not-mask-consumer-error"
+            (= calls 1) (equal escaped '(error "Consumer failed"))))
+        (with-temp-file file (insert "file has grown"))
+        (let ((dsh-emacs-attach-max-file-size 1)
+              (read-p nil) (posted nil) (result 'unset))
+          (cl-letf (((symbol-function 'dsh-emacs--binary-file-string)
+                     (lambda (_path) (setq read-p t) "file has grown"))
+                    ((symbol-function 'dsh-emacs--http-post)
+                     (lambda (&rest _) (setq posted t))))
+            (dsh-emacs--upload-file
+             "session" entry
+             (lambda (ok _receipt _error) (setq result ok))))
+          (dsh-test-assert "upload-rechecks-size-before-reading"
+            (null read-p) (null posted) (null result))))
+    (delete-file file)))
 
 (princ "\n===== test summary =====\n")
 (let ((pass (cl-count-if (lambda (r) (cdr r)) dsh-test-results))

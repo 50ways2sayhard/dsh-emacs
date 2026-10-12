@@ -1783,15 +1783,6 @@ providers may close earlier blocks after later blocks have already streamed."
     map)
   "Keymap on `[image …]' placeholders: opens the picture in its own buffer.")
 
-(defun dsh-emacs-render--image-blocks (content)
-  "Return the image content blocks of CONTENT (alist/vector), in order."
-  (let ((blocks '()))
-    (dolist (block (append content nil))
-      (when (and (consp block)
-                 (equal (dsh-emacs-render--aget "type" block) "image"))
-        (push block blocks)))
-    (nreverse blocks)))
-
 (defun dsh-emacs-render--image-block-field (block field)
   "Read FIELD from image BLOCK or its nested `attachment' ref.
 The wire may carry inline base64 (`{type:image, mediaType, data,
@@ -1925,6 +1916,25 @@ already in the event); an attachment ref is fetched via
                 'keymap dsh-emacs-render--image-keymap
                 'mouse-face 'highlight)))
 
+(defun dsh-emacs-render--file-placeholder (block)
+  "Build the `[file: NAME · SIZE]' placeholder string for file BLOCK.
+BLOCK is a `{type: \"file\", attachment}' content block: the durable
+reference carries the sanitized leaf name and the exact byte count, so the
+line says what the model received.  The bytes live on the host as a
+content-addressed session attachment with no read path of its own, so the
+line is display-only (unlike an image, which has `session/attachment')."
+  (let* ((ref (dsh-protocol-file-ref--from-alist
+               (or (dsh-emacs-render--aget "attachment" block) block)))
+         (name (dsh-protocol-file-ref-name ref))
+         (bytes (dsh-protocol-file-ref-bytes ref)))
+    (propertize (format "[file: %s%s]" (or name "file")
+                        (if (integerp bytes)
+                            (format " · %s" (dsh-emacs-format-bytes bytes))
+                          ""))
+                'face 'dsh-emacs-meta-face
+                'dsh-emacs-file-name name
+                'help-echo "Stored on the dsh host as a session attachment")))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: user messages
 ;;; ---------------------------------------------------------------------------
@@ -1961,27 +1971,33 @@ event seq."
                 (dsh-emacs-reference-fontify
                  (dsh-emacs-render--text-from-content content)
                  references)))
-         (images (dsh-emacs-render--image-blocks content))
          (insert-point (dsh-emacs-render--input-insert-point))
          (block-id (dsh-emacs-render--make-block-id event))
-         (specs nil))
+         (specs nil)
+         (placeholders nil))
     (prog1
         (when (dsh-emacs-render--user-authored-p event)
-          ;; Placeholder lines follow the body: one per image, with a unique id
-          ;; that lets the async fill-in locate it.
+          ;; Placeholder lines follow the body in content order, one per image
+          ;; or file attachment: an image gets a unique id so the async
+          ;; fill-in can locate its line, a file is a static chip (the
+          ;; durable reference keeps no local path to open).
           (let ((index 0))
-            (dolist (block images)
-              (setq index (1+ index)
-                    specs (append specs
-                                  (list (cons (format "%s-img-%d" block-id index)
-                                              block))))))
-          (when specs
+            (dolist (block (append content nil))
+              (pcase (dsh-emacs-render--aget "type" block)
+                ("image"
+                 (setq index (1+ index))
+                 (let ((id (format "%s-img-%d" block-id index)))
+                   (setq specs (append specs (list (cons id block))))
+                   (push (dsh-emacs-render--image-placeholder id block)
+                         placeholders)))
+                ("file"
+                 (push (dsh-emacs-render--file-placeholder block)
+                       placeholders)))))
+          (when placeholders
             (setq text (concat text
                                (and (not (string-empty-p text)) "\n")
-                               (mapconcat (lambda (spec)
-                                            (dsh-emacs-render--image-placeholder
-                                             (car spec) (cdr spec)))
-                                          specs "\n"))))
+                               (mapconcat #'identity (nreverse placeholders)
+                                          "\n"))))
           (prog1
               (dsh-emacs-render--insert-chat-message
                (concat (propertize "❯ " 'face 'dsh-emacs-input-prompt-face)
@@ -2035,7 +2051,9 @@ The block gets one blank line before and after (see
 Image content blocks render as `[image …]' placeholders on their own
 line below the text; inline base64 shows immediately, attachment refs
 fill in when `session/attachment' settles (see
-`dsh-emacs-render--show-attachment').
+`dsh-emacs-render--show-attachment').  File content blocks render as
+display-only `[file: name · size]' lines (see
+`dsh-emacs-render--file-placeholder').
 Optional REFERENCES (list of (LABEL . SESSION-ID)) from the immediately
 following `session-reference' recall event lets the readable `@label'
 session tokens the server persisted (canonical id stripped) render as real

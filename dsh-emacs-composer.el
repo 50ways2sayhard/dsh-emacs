@@ -282,8 +282,8 @@ Colored via `currentColor' mapped to the action face's foreground."
 
 (defun dsh-emacs-composer--sig (goal next attachments)
   "Return the content and layout inputs of GOAL, NEXT and ATTACHMENTS.
-Only each staged attachment's name is presentation state: the image bytes
-never enter the signature."
+Only each staged attachment's name is presentation state: the image bytes,
+and a staged file's path and size, never enter the signature."
   (list (and goal (list (dsh-protocol-goal-objective goal)
                         (dsh-protocol-goal-phase goal)
                         (dsh-protocol-goal-blocked-reason goal)))
@@ -486,10 +486,10 @@ one line height); callers add the separating space before the name."
   (let ((names (delq nil (mapcar (lambda (attachment)
                                    (cdr (assq 'name attachment)))
                                  attachments))))
-    (cond ((null names) (format "%d image%s" (length attachments)
+    (cond ((null names) (format "%d attachment%s" (length attachments)
                                 (if (= 1 (length attachments)) "" "s")))
           ((= 1 (length names)) (car names))
-          (t (format "%d images: %s" (length names)
+          (t (format "%d attachments: %s" (length names)
                      (mapconcat #'identity names ", "))))))
 
 (defun dsh-emacs-composer--attachment-remove-cell ()
@@ -505,7 +505,8 @@ one line height); callers add the separating space before the name."
 
 (defun dsh-emacs-composer--render-attachments-row (attachments)
   "Return the single-line staged-attachments row for ATTACHMENTS.
-Leads with the clip icon and lists the staged image names, with a
+Leads with the clip icon and lists the staged attachment names (an image,
+or a file waiting to be uploaded when the prompt is sent), with a
 trailing clickable remove cell (`dsh-emacs-clear-attachments'; C-c C-d
 does the same).  Fitted to the viewing windows like the other rows."
   (let* ((count (length attachments))
@@ -514,7 +515,7 @@ does the same).  Fitted to the viewing windows like the other rows."
          (body (propertize (concat (dsh-emacs-composer--attachment-icon)
                                    " " names)
                            'help-echo
-                           (format "%d staged image%s\nC-c C-c sends · C-c C-d discards"
+                           (format "%d staged attachment%s\nC-c C-c sends · C-c C-d discards"
                                    count (if (= 1 count) "" "s"))))
          (row (concat body (dsh-emacs-composer--attachment-remove-cell))))
     (truncate-string-to-width row (dsh-emacs-composer--row-width)

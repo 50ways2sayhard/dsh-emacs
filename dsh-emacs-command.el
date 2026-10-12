@@ -54,14 +54,11 @@
 ;; `type' discriminant field:
 ;;   `((type . "image") (mediaType . M) (data . B64) [name?])'
 ;;   `((type . "file") (receiptId . R))'   ← file receipt (prompt upload product)
-;; This module handles a single image attachment only: `dsh-emacs-command-execute'
-;; takes one "attachment alist" (nil = no attachment), wrapped by
-;; `dsh-emacs-command--submitted-attachments' into a one-element tagged array.
-;; Note that `((mediaType . M) (data . B64))' is both "one attachment alist"
-;; and "a list of two dotted pairs" — mapping over it item by item would split
-;; it into two attachments (on the wire: a dotted structure like
-;; `((type . "image") mediaType . M)'), so no "attachment list" inference is
-;; done here.
+;; The caller (`dsh-emacs--submit-dispatch') hands over the *resolved* part
+;; list — every local file has already been uploaded to a receipt — so this
+;; module only serializes it, with no attachment inference: a media-type
+;; alist is "one attachment alist" and also "a list of two dotted pairs",
+;; so per-item mapping over attachment shapes is never attempted here.
 
 ;;; Code:
 (declare-function dsh-emacs-subagent-require "dsh-emacs-subagent"
@@ -182,24 +179,15 @@ kept, nil when the line is exactly \"/NAME\")."
             (cons (match-string 1 trimmed)
                   (substring trimmed end))))))))
 
-(defun dsh-emacs-command--submitted-attachments (attachment)
-  "Return ATTACHMENT as the wire `submittedAttachments' array.
-
-ATTACHMENT is one wire-ready image alist
-\((mediaType . M) (data . B64) (name? . N)), or nil for a text-only
-command (the host field is required, so nil becomes the empty vector).
-The result holds exactly one tagged union member:
-\((type . \"image\") (mediaType . M) (data . B64) [name?])."
-  (vconcat (when attachment
-             (list (append (list (cons 'type "image")) attachment)))))
-
-(defun dsh-emacs-command-execute (session-id line &optional attachment on-done)
+(defun dsh-emacs-command-execute (session-id line &optional parts on-done)
   "Execute slash-command LINE (e.g. \"/compact\") in SESSION-ID.
 
 Line goes to `commands/execute' — the host admits only registered
-commands.  ATTACHMENT, when given, is one wire-ready image alist
-\((mediaType . M) (data . B64) (name? . N)); it rides the required
-`submittedAttachments' field as one `{type: \"image\"}' member.
+commands.  PARTS, when given, is the resolved attachment list the submit
+path carries (tagged wire content parts: `{type: \"image\", …}' with
+inline bytes, or `{type: \"file\", receiptId}'); it rides the required
+`submittedAttachments' field unchanged.  The host admits attachments only
+for a command whose descriptor declares them.
 Text-only commands pass nil.
 
 ON-DONE is called as (funcall ON-DONE OK EXECUTION ERR) once the RPC
@@ -214,8 +202,7 @@ asynchronously; returns nil."
    "commands/execute"
    `((agentId . ,session-id)
      (line . ,line)
-     (submittedAttachments . ,(dsh-emacs-command--submitted-attachments
-                               attachment)))
+     (submittedAttachments . ,(vconcat parts)))
    (lambda (ok value)
      (let ((execution (and ok value
                            (dsh-protocol-command-execution--from-alist

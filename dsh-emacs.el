@@ -213,11 +213,24 @@ prefix argument asks for the preset instead of using this value."
 
 (defcustom dsh-emacs-attach-media-types
   '("image/png" "image/jpeg" "image/webp" "image/gif")
-  "Image media types accepted for session attachments.
+  "Image media types sent as inline image attachments.
 
-The host validates every upload against this set (plus byte/pixel limits
-of its own), so only files resolving to one of these types are sent."
+A file whose type is in this set rides the prompt as an image (the host
+validates it against this set, plus byte/pixel limits of its own).  Every
+other file is uploaded to the host at submit time and reaches the model as
+a file attachment — see `dsh-emacs-attach-file'."
   :type '(repeat string)
+  :group 'dsh-emacs)
+
+(defcustom dsh-emacs-attach-max-file-size (* 32 1024 1024)
+  "Largest file (in bytes) `dsh-emacs-attach-file' uploads.
+
+A file attachment is read into this Emacs process and posted to the
+session's host in one request, so the limit protects Emacs memory as much
+as the host.  A larger file is refused with `user-error' before anything is
+read; images in `dsh-emacs-attach-media-types' are not governed by it
+\(they have their own host-side limits).  nil removes the check."
+  :type '(choice (const :tag "No limit" nil) integer)
   :group 'dsh-emacs)
 
 (defcustom dsh-emacs-input-history-length 50
@@ -352,10 +365,11 @@ NOT resolve their target from this variable alone — they read
   "Text of messages the user sent but that are not yet rendered in the transcript.")
 
 (defvar-local dsh-emacs--pending-attachments nil
-  "Images staged for this buffer's next prompt, in paste order.
-Each element is a wire-ready attachment alist (see
-`dsh-emacs--submit-prompt').  The Composer renders them as one read-only
-row; `C-c C-c' consumes them, `C-c C-d' discards them.")
+  "Attachments staged for this buffer's next prompt, in staging order.
+Each element is one staged entry (an image alist, or a local file entry
+uploaded at submit time) — see `dsh-emacs--submit-prompt'.  The Composer
+renders them as one read-only row; `C-c C-c' consumes them, `C-c C-d'
+discards them.")
 
 (defvar-local dsh-emacs--pending-user-echoes nil
   "Optimistic transcript echoes awaiting their submit's acceptance.
@@ -550,83 +564,96 @@ cookie lazily when a token became available after the server was probed."
   (when-let* ((auth (dsh-emacs--server-auth-header)))
     auth))
 
+(defun dsh-emacs--http-post (url content-type body callback)
+  "POST BODY to URL as CONTENT-TYPE; CALLBACK receives the decoded JSON.
+BODY is the exact bytes to send (a unibyte string already encoded by
+the caller) and CALLBACK is called as (funcall CALLBACK VALUE) in the
+buffer that made the request.  VALUE is the decoded JSON body, or nil
+when the request failed: a transport/HTTP-status failure, a body that
+does not parse, or an empty body.  Every failure is reported here (a
+message plus the stale-cookie 401 drop), so a caller only has to decide
+what its own body means.
+
+Both the RPC envelope calls and the raw file-upload route post through
+here; `url-request-data' carries BODY verbatim (no coding conversion),
+which is what makes the octet-stream upload byte-exact."
+  (let ((url-request-noninteractive t)
+        (url-request-method "POST")
+        (url-request-extra-headers
+         (append (list (cons "Content-Type" content-type))
+                 (dsh-emacs--extra-request-headers)))
+        (url-request-data body)
+        (callback-buffer (current-buffer)))
+    (cl-labels
+        ((dispatch (value)
+           (when (buffer-live-p callback-buffer)
+             (with-current-buffer callback-buffer
+               ;; Callback that interacts inside the filter
+               ;; (completing-read etc.) and hits C-g: swallow the
+               ;; quit instead of a process-filter error.
+               (condition-case nil
+                   (funcall callback value)
+                 (quit nil))))))
+      ;; Keep progress messages out of the minibuffer.  In particular,
+      ;; `Contacting host...' otherwise remains visible when a successful
+      ;; callback does not emit a follow-up message.
+      (url-retrieve
+       url
+       (lambda (status)
+         ;; JSON decode of big history windows allocates heavily;
+         ;; Profiler-measured on the default window (~30k raw events):
+         ;; Automatic GC took ~46% of the whole open.  Enlarge the GC
+         ;; threshold dynamically to defer the GC storm into one collection
+         ;; after parsing — parsing and the callback run in the same dynamic
+         ;; scope.
+         (let ((gc-cons-threshold (* 64 1024 1024))
+               (gc-cons-percentage 0.6))
+           (if (plist-get status :error)
+               (let ((err (plist-get status :error)))
+                 (kill-buffer)
+                 ;; A 401 while we sent a cookie means the cached cookie is
+                 ;; stale (an out-of-band server restarted and minted a new
+                 ;; per-process token): drop it so the next call re-mints /
+                 ;; re-prompts instead of 401-looping until Emacs restarts.
+                 (when (and (dsh-emacs--server-auth-http-401-p err)
+                            (fboundp 'dsh-emacs--server-auth-maybe-expire))
+                   (dsh-emacs--server-auth-maybe-expire))
+                 (message "HTTP POST error: %S%s" status
+                          (dsh-emacs--http-error-hint err))
+                 (dispatch nil))
+             (goto-char (point-min))
+             (re-search-forward "^$")
+             (delete-region (point) (point-min))
+             (let ((value (condition-case err
+                              (progn
+                                (dsh-emacs--decode-response-body)
+                                (goto-char (point-min))
+                                (json-read))
+                            (error
+                             ;; Body cannot be parsed (non-JSON, cut stream,
+                             ;; ...): print the reason but still dispatch the
+                             ;; callback (nil), so callers always reach their
+                             ;; failure branch instead of being silently
+                             ;; dropped.
+                             (message "HTTP POST response error: %s"
+                                      (error-message-string err))
+                             nil))))
+               (kill-buffer)
+               (dispatch value)))))
+       nil t t))))
+
 (defun dsh-emacs--rpc-async (method params callback)
   "Asynchronous RPC request; CALLBACK receives (ok-p value-or-error).
 METHOD is the `namespace/method' endpoint, PARAMS the wire `args'
 content — see `dsh-emacs--wrap-request'."
-  (let* ((url (format "%s/api/%s" (dsh-emacs--server-base-url) method))
-         (json-data (dsh-emacs--wrap-request method params))
-         (url-request-noninteractive t)
-         (url-request-method "POST")
-         (url-request-extra-headers
-          (append '(("Content-Type" . "application/json"))
-                  (dsh-emacs--extra-request-headers)))
-         (url-request-data (encode-coding-string json-data 'utf-8))
-         (callback-buffer (current-buffer)))
-    ;; Keep progress messages out of the minibuffer.  In particular,
-    ;; `Contacting host...' otherwise remains visible when a successful
-    ;; callback does not emit a follow-up message.
-    (url-retrieve url
-                  (lambda (status)
-                    ;; JSON decode of big history windows allocates heavily;
-                    ;; Profiler-measured on the default window (~30k raw
-                    ;; events): Automatic GC took ~46% of the whole open.
-                    ;; Enlarge the GC threshold dynamically to defer the GC
-                    ;; storm into one collection after parsing — parsing and
-                    ;; the callback run in the same dynamic scope.
-                    (let ((gc-cons-threshold (* 64 1024 1024))
-                          (gc-cons-percentage 0.6))
-                      (if (plist-get status :error)
-                          (let ((err (plist-get status :error)))
-                            (kill-buffer)
-                            ;; A 401 while we sent a cookie means the cached
-                            ;; cookie is stale (an out-of-band server restarted
-                            ;; and minted a new per-process token): drop it so
-                            ;; the next call re-mints / re-prompts instead of
-                            ;; 401-looping until Emacs restarts.
-                            (when (and (dsh-emacs--server-auth-http-401-p err)
-                                       (fboundp 'dsh-emacs--server-auth-maybe-expire))
-                              (dsh-emacs--server-auth-maybe-expire))
-                            (message "RPC async error: %S%s" status
-                                     (dsh-emacs--http-error-hint err))
-                            (when (buffer-live-p callback-buffer)
-                              (with-current-buffer callback-buffer
-                                ;; Callback that interacts inside the filter
-                                ;; (completing-read etc.) and hits C-g: swallow the
-                                ;; quit instead of a process-filter error.
-                                (condition-case nil
-                                    (funcall callback nil nil)
-                                  (quit nil)))))
-                        (goto-char (point-min))
-                        (re-search-forward "^$")
-                        (delete-region (point) (point-min))
-                        (let* ((response
-                                (condition-case err
-                                    (progn
-                                      (dsh-emacs--decode-response-body)
-                                      (goto-char (point-min))
-                                      (json-read))
-                                  (error
-                                   ;; Body cannot be parsed (non-JSON, cut
-                                   ;; stream, ...): print the reason but still
-                                   ;; dispatch the callback (ok=nil), so callers
-                                   ;; always reach their failure branch instead
-                                   ;; of being silently dropped.
-                                   (message "RPC response error: %s"
-                                            (error-message-string err))
-                                   nil)))
-                               (unwrapped (and response
-                                               (dsh-emacs--unwrap-response
-                                                response))))
-                          (let ((ok (car unwrapped))
-                                (value (cdr unwrapped)))
-                            (kill-buffer)
-                            (when (buffer-live-p callback-buffer)
-                              (with-current-buffer callback-buffer
-                                (condition-case nil
-                                    (funcall callback ok value)
-                                  (quit nil)))))))))
-                  nil t t)))
+  (dsh-emacs--http-post
+   (format "%s/api/%s" (dsh-emacs--server-base-url) method)
+   "application/json"
+   (encode-coding-string (dsh-emacs--wrap-request method params) 'utf-8)
+   (lambda (response)
+     (let ((unwrapped (and response
+                           (dsh-emacs--unwrap-response response))))
+       (funcall callback (car unwrapped) (cdr unwrapped))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;;  Session management
@@ -2689,12 +2716,14 @@ interrupted, so stopping stays one key away.  Success feedback arrives via the
 `inbox' projection frame; `\\[dsh-emacs-interrupt-turn]'
 (`C-c C-b') interrupts regardless of the behavior.
 
-Staged clipboard images (`C-c C-v') ride this send: they are consumed at
-submit time, an empty caption falls back to the image name, and a `!'
-line carrying attachments is ordinary caption text (the images reach the
-model, as `dsh-emacs--submit-prompt' documents).  A prompt carrying
-attachments is never recorded for `M-p' recall — replaying it as text
-would drop the images."
+Staged attachments (`C-c C-v' clipboard image, `M-x dsh-emacs-attach-file')
+ride this send: they are consumed at submit time, an empty caption falls
+back to the attachment's name, and a `!' line carrying attachments is
+ordinary caption text (the attachments reach the model, as
+`dsh-emacs--submit-prompt' documents).  A staged file is uploaded when the
+send starts, so the send completes after that round trip.  A prompt
+carrying attachments is never recorded for `M-p' recall — replaying it as
+text would drop them."
   (interactive)
   (when dsh-emacs--buffer-subagent
     (when (or (dsh-emacs-shell-parse (dsh-emacs--get-input))
@@ -2719,14 +2748,10 @@ would drop the images."
              (text (if (and attachments blank-p)
                        (dsh-emacs--attachments-summary attachments)
                      input)))
-        ;; Clear the staged set BEFORE submitting: a failure callback — even
-        ;; one invoked synchronously, before the submit returns — must see an
-        ;; empty staging area so `dsh-emacs--restore-draft' can put this
-        ;; submit's own text and images back.  An error thrown synchronously
-        ;; instead of delivered to the callback restores the exact pre-submit
-        ;; state here: no other command can have run in between, so this is
-        ;; unconditional and uses the text the user actually had, not the
-        ;; synthesized caption.
+        ;; Consume staging before submitting so even a synchronous failure
+        ;; can restore this draft.  The submit path owns clearing the input:
+        ;; after the echo for ordinary messages, before uploading for files.
+        ;; A synchronous exception restores the exact original caption.
         (cl-labels ((submit (mode)
                       (dsh-emacs--consume-pending-attachments)
                       (condition-case err
@@ -2931,22 +2956,54 @@ Slash-command lines (leading \"/name\") are routed to `commands.execute'
 instead of the model: the host admits only registered commands, and an
 admission miss falls back to sending the line as an ordinary message
 (the same semantics as dsh web).  Other lines go through
-`dsh-emacs--submit-plain' unchanged.  ATTACHMENTS, when given, is a list
-of wire-ready attachment alists
-\((mediaType . M) (data . B64) (name . N)); they are appended to the
-`content' array of `session/prompt' as `{type: \"image\"}' parts so
-the model sees them immediately.  A prompt carrying attachments is not
-recorded for `M-p' recall: every submit path skips it."
+`dsh-emacs--submit-plain' unchanged.
+
+ATTACHMENTS, when given, is a list of staged attachment entries: an
+image alist \((mediaType . M) (data . B64) (name? . N)), or a local file
+entry \((file . PATH) (name . N) (bytes . B)).  An image's bytes ride the
+prompt inline; a file's bytes are uploaded to the host first and the
+prompt carries the returned one-time receipt (see
+`dsh-emacs--upload-file' and RPC reference §4.17), so this function may
+return before anything reaches the model.  A prompt carrying attachments
+is not recorded for `M-p' recall: every submit path skips it."
 
   (dsh-emacs-subagent-require 'send)
   (when (and dsh-emacs--buffer-subagent attachments)
     (user-error "Attachments are unavailable in subagent conversations"))
-  (let ((command (and (null attachments) (dsh-emacs-shell-parse message))))
+  (if (cl-some #'dsh-emacs--attachment-file-p attachments)
+      ;; Own a copy for this upload's display metadata.  Clear the draft
+      ;; before the first round trip, then leave later edits alone.
+      (let ((staged (copy-tree attachments)))
+        (dsh-emacs--clear-input)
+        (dsh-emacs--upload-attachments
+         (dsh-emacs--active-session-id) staged
+         (lambda (ok parts err)
+           (if ok
+               (dsh-emacs--submit-dispatch message parts staged mode t)
+             ;; Nothing reached the model: restore the original staging,
+             ;; unless a newer draft has taken its place.
+             (dsh-emacs--restore-draft message attachments)
+             (message "File upload failed: %s"
+                      (or (and (listp err) (cdr (assq 'message err)))
+                          err "transport error"))))))
+    (dsh-emacs--submit-dispatch
+     message (delq nil (mapcar #'dsh-emacs--attachment-part attachments))
+     attachments mode)))
+
+(defun dsh-emacs--submit-dispatch (message parts staged mode &optional input-consumed)
+  "Dispatch MESSAGE with resolved wire PARTS as MODE.
+PARTS are tagged `session/prompt' content parts (image bytes inline, file
+receipts) and STAGED the staged attachment entries they were resolved
+from — the rollback record of this submit.  INPUT-CONSUMED means the
+upload already cleared the original draft; subsequent edits belong to
+another message.  This is the routing body of `dsh-emacs--submit-prompt'
+once every staged file has become a receipt."
+  (let ((command (and (null parts) (dsh-emacs-shell-parse message))))
     (cond
      (dsh-emacs--buffer-subagent
       (when (or command (dsh-emacs-command-parse message))
         (user-error "Commands are unavailable in subagent conversations"))
-      (dsh-emacs--submit-deferred message attachments (or mode 'queue)))
+      (dsh-emacs--submit-deferred message parts (or mode 'queue) staged input-consumed))
      ;; A `!' line with no attachments is a local action;
      ;; attachment captions do not go to the shell.
      (command
@@ -2954,7 +3011,7 @@ recorded for `M-p' recall: every submit path skips it."
      ((or mode
           (and (dsh-emacs--busy-p)
                (not (eq dsh-emacs-busy-enter-behavior 'stop))))
-      (dsh-emacs--submit-deferred message attachments mode))
+      (dsh-emacs--submit-deferred message parts mode staged input-consumed))
      ((dsh-emacs-command-parse message)
       (let ((session-id (dsh-emacs--active-session-id))
             (input-buffer (current-buffer)))
@@ -2963,31 +3020,32 @@ recorded for `M-p' recall: every submit path skips it."
         ;; the web UI): whether the host admits the command is decided
         ;; by the `commands.execute' response, and the result is
         ;; rendered from the command/run + command/done session events.
-        (unless attachments
+        (unless parts
           (dsh-emacs--push-input-history message))
-        (setq dsh-emacs--input-history-pos nil
-              dsh-emacs--input-history-pending nil)
-        (when (buffer-live-p input-buffer)
-          (with-current-buffer input-buffer
-            (dsh-emacs--clear-input)))
+        (unless input-consumed
+          (setq dsh-emacs--input-history-pos nil
+                dsh-emacs--input-history-pending nil)
+          (when (buffer-live-p input-buffer)
+            (with-current-buffer input-buffer
+              (dsh-emacs--clear-input))))
         ;; Render the command line immediately (optimistic path) —
         ;; without waiting for the RPC round trip.
         (when (buffer-live-p input-buffer)
           (with-current-buffer input-buffer
             (dsh-emacs-render-command-optimistic message)))
         (dsh-emacs-command-execute
-         session-id (string-trim message) attachments
+         session-id (string-trim message) parts
          (lambda (ok execution err)
            ;; The callback may run inside a process filter: swallow C-g's quit.
            (condition-case nil
                (cond
                 ((null ok)
                  ;; Transport failure (HTTP/parse error): clear the optimistic
-                 ;; row and restore the original text and staged images.
+                 ;; row and restore the original text and staged attachments.
                  (when (buffer-live-p input-buffer)
                    (with-current-buffer input-buffer
                      (dsh-emacs-render-command-cleanup-optimistic)
-                     (dsh-emacs--restore-draft message attachments)))
+                     (dsh-emacs--restore-draft message staged)))
                  (message "Command failed to run: %S"
                           (or err "transport error")))
                 ((null execution)
@@ -2997,23 +3055,19 @@ recorded for `M-p' recall: every submit path skips it."
                  (when (buffer-live-p input-buffer)
                    (with-current-buffer input-buffer
                      (dsh-emacs-render-command-cleanup-optimistic)))
-                 (dsh-emacs--submit-plain message attachments t))
+                 (dsh-emacs--submit-plain message parts t staged t))
                 (t nil))        ; accepted: the command/run event replaces it
              (quit nil))))))
-     (t (dsh-emacs--submit-plain message attachments)))))
+     (t (dsh-emacs--submit-plain message parts nil staged input-consumed)))))
 
-(defun dsh-emacs--attachments-prompt-content (message attachments)
-  "Return the `session/prompt' `content' array for MESSAGE and ATTACHMENTS.
-Each attachment is a wire-ready alist \((mediaType . M) (data . B64)
-(name? . N)); it becomes one `{type: \"image\"}' part after the leading
-`{type: \"text\"}' part, so the model sees the caption first.  The same
-parts feed the optimistic transcript echo."
-  (vconcat `(((type . "text") (text . ,message)))
-            (mapcar (lambda (attachment)
-                      (cons '(type . "image") attachment))
-                    attachments)))
+(defun dsh-emacs--attachments-prompt-content (message parts)
+  "Return the `session/prompt' `content' array for MESSAGE and PARTS.
+PARTS are tagged wire content parts — `{type: \"image\", …}' carrying the
+bytes inline, or `{type: \"file\", receiptId}' — appended after the
+leading `{type: \"text\"}' part, so the model sees the caption first."
+  (vconcat `(((type . "text") (text . ,message))) parts))
 
-(defun dsh-emacs--submit-deferred (message attachments mode)
+(defun dsh-emacs--submit-deferred (message parts mode &optional staged input-consumed)
   "Submit MESSAGE into the running turn's inbox as MODE.
 MODE is `queue' (line up as the next turn) or `steer' (wake the running
 agent before its next step); nil means resolve from
@@ -3022,19 +3076,21 @@ the mode field.  Unlike `dsh-emacs--submit-plain' this renders NO
 optimistic transcript card and does not touch the spinner: the item is
 not part of the conversation until the host claims it (the durable
 `user/message' event renders then), and the queue/steer feedback rides
-the `inbox' projection frame the host pushes on the splice.  IMAGES is the
-same wire-ready attachment list `dsh-emacs--submit-prompt' takes; the
-host admits images by the session's current model at claim time.  Slash
-lines are NOT routed to `commands.execute' here — busy input is queued
-as literal text, the same semantics as dsh web's busyEnter.  A prompt
-carrying attachments is not recorded for `M-p' recall.
+the `inbox' projection frame the host pushes on the splice.  PARTS is the
+resolved attachment list `dsh-emacs--submit-dispatch' carries (wire
+content parts), STAGED the entries it was resolved from, for draft
+rollback.  INPUT-CONSUMED skips clearing a draft already consumed before
+uploading; the host admits images by the session's current model at claim
+time.  Slash lines are NOT routed to `commands.execute' here — busy input
+is queued as literal text, the same semantics as dsh web's busyEnter.  A
+prompt carrying attachments is not recorded for `M-p' recall.
 With nothing already pending in the mirror, the submit arms
 `dsh-emacs-queue--mark-submit-suppress': the splice+claim transient of
 this own message gets no `queued:' / `running:' echo (nothing to order
 against); genuinely parked items keep their feedback."
 
   (dsh-emacs-subagent-require 'send)
-  (when (and dsh-emacs--buffer-subagent attachments)
+  (when (and dsh-emacs--buffer-subagent parts)
     (user-error "Attachments are unavailable in subagent conversations"))
   (let* ((mode (pcase mode
                  ((or "queue" "steer") mode)
@@ -3043,7 +3099,7 @@ against); genuinely parked items keep their feedback."
                  (_ (if (eq dsh-emacs-busy-enter-behavior 'steer) "steer" "queue"))))
          (session-id (dsh-emacs--active-session-id))
          (input-buffer (current-buffer))
-         (content (dsh-emacs--attachments-prompt-content message attachments))
+         (content (dsh-emacs--attachments-prompt-content message parts))
          (payload (if dsh-emacs--buffer-subagent
                       (dsh-protocol-subagent-prompt-request
                        dsh-emacs--buffer-subagent (dsh-emacs--rpc-id) mode message
@@ -3054,13 +3110,14 @@ against); genuinely parked items keep their feedback."
                                   (clientTimeZone . ,(dsh-emacs--client-time-zone))))))))
     ;; Same web-style feel as the immediate path: the draft leaves the
     ;; input area and lands in history right away, before the RPC settles.
-    (unless attachments
+    (unless parts
       (dsh-emacs--push-input-history message))
-    (setq dsh-emacs--input-history-pos nil
-          dsh-emacs--input-history-pending nil)
-    (when (buffer-live-p input-buffer)
-      (with-current-buffer input-buffer
-        (dsh-emacs--clear-input)))
+    (unless input-consumed
+      (setq dsh-emacs--input-history-pos nil
+            dsh-emacs--input-history-pending nil)
+      (when (buffer-live-p input-buffer)
+        (with-current-buffer input-buffer
+          (dsh-emacs--clear-input))))
     ;; Queue-empty submit (busy or idle): the host still splices the message
     ;; into the inbox and claims it at the turn start; with nothing already
     ;; parked those frames do not carry any ordering information, so their
@@ -3094,21 +3151,29 @@ against); genuinely parked items keep their feedback."
                               (when (buffer-live-p input-buffer)
                                 (with-current-buffer input-buffer
                                   (dsh-emacs--restore-draft
-                                   message attachments))))))))
+                                   message staged))))))))
 
-(defun dsh-emacs--submit-plain (message &optional attachments skip-history)
+(defun dsh-emacs--submit-plain (message &optional parts skip-history staged
+                                       input-consumed)
   "Submit MESSAGE (a plain string) to the current session.
 
-ATTACHMENTS, when given, is a list of wire-ready attachment alists
-\((mediaType . M) (data . B64) (name . N)); the canonical wire shape
-is part of `content' (each becomes a `{type: \"image\"}' part) — there is
-no top-level attachment field on `session/prompt'.
+PARTS, when given, is the resolved attachment list
+`dsh-emacs--submit-dispatch' carries: tagged wire content parts
+\(`{type: \"image\", …}' with inline bytes, `{type: \"file\", receiptId}'),
+appended to `content' after the caption — there is no top-level
+attachment field on `session/prompt'.  STAGED is the staged attachment
+list those parts were resolved from, kept for the failure branch's draft
+restore (a re-submit re-uploads a staged file).  The optimistic echo is
+built from STAGED, so a file attachment shows its name and size before
+the host's durable reference arrives.
 On acceptance the message is echoed into the transcript (when non-empty),
 the running spinner lights up while the run is still awaited (a fast run
 that already finished on the stream before the callback repeats must not
 re-light it), and the watchdog starts.  Non-nil
 SKIP-HISTORY suppresses the input-history push: used by the slash-command
 fallback after the line was already recorded at submit time.
+INPUT-CONSUMED means the original draft was already cleared; leave any
+subsequent input alone.
 Submitting with an empty queue arms
 `dsh-emacs-queue--mark-submit-suppress': the host's append+claim splice of
 this prompt (the wire has no direct mode) is rendered directly and
@@ -3117,7 +3182,7 @@ The draft leaves the input area at submit time — the same web-style feel
 as the command and deferred paths — so a second submit keypress during
 the RPC round-trip reads an empty input instead of sending the message
 twice; on a transport failure the draft is restored only when both the
-input and staged images are empty (a newer draft is left alone)."
+input and staged attachments are empty (a newer draft is left alone)."
 
   (dsh-emacs-subagent-require 'mutate)
   (let* ((session-id (dsh-emacs--active-session-id))
@@ -3125,7 +3190,7 @@ input and staged images are empty (a newer draft is left alone)."
                            dsh-emacs--buffer-session
                            (current-buffer)))
          (input-buffer (current-buffer))
-         (content (dsh-emacs--attachments-prompt-content message attachments))
+         (content (dsh-emacs--attachments-prompt-content message parts))
          (payload `((request . ((requestId . ,(dsh-emacs--rpc-id))
                                 (sessionId . ,session-id)
                                 (mode . "queue")
@@ -3154,7 +3219,7 @@ input and staged images are empty (a newer draft is left alone)."
           ;; (a rejected prompt rolls the echo back, see the failure branch).
           (setq echo-entry
                 (dsh-emacs--render-user-message-optimistic
-                 message attachments)))
+                 message staged)))
         ;; A submit with an empty queue still passes through the host
         ;; inbox (the wire knows only queue/steer modes): the host splices
         ;; the message in and claims it again at the turn start, and the
@@ -3170,14 +3235,14 @@ input and staged images are empty (a newer draft is left alone)."
     ;; round trip then reads an empty input and never sends the
     ;; same message twice; the text is restored in the
     ;; transport-failure branch below.
-    (when (buffer-live-p input-buffer)
+    (when (and (not input-consumed) (buffer-live-p input-buffer))
       (with-current-buffer input-buffer
         (dsh-emacs--clear-input)))
     (dsh-emacs--rpc-async "session/prompt" payload
                           (lambda (ok value)
                             (if ok
                                 (progn
-                                  (unless (or skip-history attachments)
+                                  (unless (or skip-history parts)
                                     (dsh-emacs--push-input-history message))
                                   (setq dsh-emacs--input-history-pos nil
                                         dsh-emacs--input-history-pending nil)
@@ -3245,14 +3310,14 @@ input and staged images are empty (a newer draft is left alone)."
                               ;; The input was cleared on submit: on a
                               ;; transport failure put the draft back into
                               ;; the input area.  Restore only when the input
-                              ;; and staged images are still empty — a newer
-                              ;; draft composed during the RPC is left alone
-                              ;; (matching the failure restore in
+                              ;; and staged attachments are still empty — a
+                              ;; newer draft composed during the RPC is left
+                              ;; alone (matching the failure restore in
                               ;; `dsh-emacs--submit-deferred').
                               (when (buffer-live-p input-buffer)
                                 (with-current-buffer input-buffer
                                   (dsh-emacs--restore-draft
-                                   message attachments))))))))
+                                   message staged))))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;;  Attachments / model selection / input history
@@ -3274,6 +3339,140 @@ one continuous base64 run."
         (list (cons 'mediaType media)
               (cons 'data (base64-encode-string bytes t))
               (cons 'name (file-name-nondirectory file)))))))
+
+;; A non-image attachment is a *staged file entry*: metadata only, no
+;; bytes.  The host admits a file into a prompt as a one-time receipt
+;; minted by the upload route, so the bytes leave this machine at submit
+;; time (`dsh-emacs--upload-file') — never when the draft is composed,
+;; and never as base64 in the prompt.  See rpc.md §4.17.
+
+(defun dsh-emacs--attachment-file-p (attachment)
+  "Non-nil when staged ATTACHMENT is a local file awaiting upload."
+  (and (consp attachment) (assq 'file attachment)))
+
+(defun dsh-emacs--attachment-part (attachment)
+  "Return staged ATTACHMENT as a tagged wire content part, or nil.
+An image's base64 bytes ride the prompt inline (a `{type: \"image\"}'
+part, the shape `session/prompt' has always taken); a file entry has no
+part yet — its upload returns the receipt that becomes one."
+  (when (assq 'mediaType attachment)
+    (cons '(type . "image") attachment)))
+
+(defun dsh-emacs--staged-file-attachment (file)
+  "Return FILE as a staged local file attachment, or nil.
+The entry \((file . PATH) (name . N) (bytes . B)) carries metadata only,
+so a draft never keeps a copy of the file.  A path that is not a readable
+regular file, or is larger than `dsh-emacs-attach-max-file-size', yields
+nil."
+  (when (and (file-regular-p file) (file-readable-p file))
+    (let ((size (file-attribute-size (file-attributes file))))
+      (when (or (null dsh-emacs-attach-max-file-size)
+                (<= size dsh-emacs-attach-max-file-size))
+        (list (cons 'file (expand-file-name file))
+              (cons 'name (file-name-nondirectory file))
+              (cons 'bytes size))))))
+
+(defun dsh-emacs--attachable-file (file)
+  "Return FILE as a staged attachment: an accepted image inline, else a file.
+An image whose type is in `dsh-emacs-attach-media-types' carries its
+base64 bytes inline (the host gives it to the model as an image); every
+other file becomes a staged file entry uploaded at submit time.  Nil when
+FILE cannot be attached, which is what `dsh-emacs-attach-file' reports."
+  (let ((media (ignore-errors
+                 (mailcap-file-name-to-mime-type
+                  (file-name-nondirectory file)))))
+    (if (and media (member media dsh-emacs-attach-media-types))
+        (dsh-emacs--file-attachment file)
+      (dsh-emacs--staged-file-attachment file))))
+
+(defun dsh-emacs--upload-file (session-id attachment callback)
+  "Upload local file ATTACHMENT for SESSION-ID; CALLBACK gets (OK RECEIPT ERROR).
+The bytes POST to the host's raw upload route as
+`application/octet-stream' (rpc.md §4.17) and the answer carries the
+one-time receipt the prompt must submit.  CALLBACK receives OK non-nil
+and the `dsh-protocol-file-receipt' as RECEIPT when the host accepted the
+upload, else ERROR: the route's own error object (`{code, message,
+details}'), or nil when local file validation, reading, or the request
+itself failed (already reported in the echo area)."
+  (let* ((path (cdr (assq 'file attachment)))
+         (name (or (cdr (assq 'name attachment))
+                   (file-name-nondirectory path)))
+         (url (format "%s/api/session/uploadFileBinary?sessionId=%s&name=%s"
+                      (dsh-emacs--server-base-url)
+                      (url-hexify-string session-id)
+                      (url-hexify-string name)))
+         (callback-started nil)
+         (startup-error nil))
+    (message "Uploading %s…" name)
+    (condition-case err
+        (progn
+          ;; A staged file may have disappeared or grown since composition.
+          (unless (dsh-emacs--staged-file-attachment path)
+            (user-error "File is unreadable or exceeds attachment size limit: %s"
+                        path))
+          (dsh-emacs--http-post
+           url "application/octet-stream" (dsh-emacs--binary-file-string path)
+           (lambda (body)
+             ;; A synchronous response must not turn downstream callback
+             ;; exceptions into a second, failed upload completion.
+             (setq callback-started t)
+             ;; The route has its own {ok, value|error} discriminant.
+             (let ((ok (and (consp body) (cdr (assq 'ok body)))))
+               (if (and ok (not (eq ok :json-false)))
+                   (funcall callback
+                            t
+                            (dsh-protocol-file-receipt--from-alist
+                             (cdr (assq 'value body)))
+                            nil)
+                 (funcall callback nil nil
+                          (and (consp body) (cdr (assq 'error body)))))))))
+      (error
+       (if callback-started
+           (signal (car err) (cdr err))
+         (setq startup-error err))))
+    (when startup-error
+      (message "File upload failed: %s" (error-message-string startup-error))
+      (funcall callback nil nil nil))))
+
+(defun dsh-emacs--upload-attachments (session-id attachments callback)
+  "Upload the staged files of ATTACHMENTS, then resolve every part.
+Image entries become inline parts without a round trip; file entries
+upload one after another, so PARTS always follows the staged order.
+CALLBACK receives (OK PARTS ERROR): on success PARTS is the complete
+tagged content-part list; on failure OK is nil and ERROR is the failing
+upload's value, with no part list (the caller restores its draft)."
+  (unless session-id
+    (user-error "No active session to attach a file to"))
+  (let ((pending attachments)
+        (parts nil))
+    (cl-labels
+        ((next ()
+           (if (null pending)
+               (funcall callback t (nreverse parts) nil)
+             (let* ((entry pending)
+                    (attachment (car entry)))
+               (setq pending (cdr pending))
+               (if (dsh-emacs--attachment-file-p attachment)
+                   (dsh-emacs--upload-file
+                    session-id attachment
+                    (lambda (ok receipt err)
+                      (if ok
+                          (progn
+                            ;; Keep authoritative display metadata separate
+                            ;; from the local name used for retry uploads.
+                            (let ((file (dsh-protocol-file-receipt-file receipt)))
+                              (when (or file (assq 'uploaded-file attachment))
+                                (setf (alist-get 'uploaded-file (car entry)) file)))
+                            (push (list (cons 'type "file")
+                                        (cons 'receiptId
+                                              (dsh-protocol-file-receipt-receipt-id
+                                               receipt)))
+                                  parts)
+                            (next))
+                        (funcall callback nil nil err))))
+                 (push (dsh-emacs--attachment-part attachment) parts)
+                 (next))))))
+      (next))))
 
 ;;; Clipboard images
 ;;
@@ -3401,20 +3600,22 @@ type is not accepted\"."
 ;;; Staged attachments (Composer row)
 
 (defun dsh-emacs-pending-attachments ()
-  "Return this buffer's staged (not yet sent) image attachments.
-Each element is a wire-ready alist, as `dsh-emacs--submit-prompt'
-takes.  The Composer renders them from this list, so it is the single
-source of truth for the row, never a copy."
+  "Return this buffer's staged (not yet sent) attachments.
+Each element is one staged entry, as `dsh-emacs--submit-prompt' takes:
+an image alist \((mediaType . M) (data . B64) (name? . N)), or a local
+file entry \((file . PATH) (name . N) (bytes . B)).  The Composer renders
+them from this list, so it is the single source of truth for the row,
+never a copy."
   dsh-emacs--pending-attachments)
 
 (defun dsh-emacs--attachments-summary (attachments)
-  "Return a short human summary of ATTACHMENTS (names, or an image count)."
+  "Return a short human summary of staged ATTACHMENTS (names, or a count)."
   (let ((names (delq nil (mapcar (lambda (attachment)
                                    (cdr (assq 'name attachment)))
                                  attachments))))
-    (cond ((null names) (format "%d image(s)" (length attachments)))
+    (cond ((null names) (format "%d attachment(s)" (length attachments)))
           ((= 1 (length names)) (car names))
-          (t (format "%d images" (length names))))))
+          (t (format "%d attachments" (length names))))))
 
 (defun dsh-emacs--stage-attachments (attachments)
   "Append ATTACHMENTS to this buffer's staged set and repaint the row."
@@ -3434,8 +3635,10 @@ source of truth for the row, never a copy."
     (dsh-emacs-composer-refresh)))
 
 (defun dsh-emacs--restore-draft (text attachments)
-  "Restore TEXT and ATTACHMENTS together after a failed submit.
-Leave a newer draft alone if either its text or staged images is nonempty."
+  "Restore TEXT and the STAGED attachments of a failed submit.
+Leave a newer draft alone if either its text or staged attachments is
+nonempty.  A restored file entry still carries its path, so the next
+submit uploads it again and never reuses a spent receipt."
   (when (and (string-empty-p (or (dsh-emacs--get-input) ""))
              (null dsh-emacs--pending-attachments))
     (dsh-emacs--replace-input text)
@@ -3520,7 +3723,7 @@ the host accepts are taken as-is; TIFF is converted to PNG through
 
 ;;;###autoload
 (defun dsh-emacs-clear-attachments ()
-  "Discard this buffer's staged image attachments (C-c C-d)."
+  "Discard this buffer's staged attachments (C-c C-d)."
   (interactive)
   (dsh-emacs--ensure-chat-buffer)
   (if (null dsh-emacs--pending-attachments)
@@ -3531,17 +3734,22 @@ the host accepts are taken as-is; TIFF is converted to PNG through
 
 ;;;###autoload
 (defun dsh-emacs-attach-file (&optional file caption)
-  "Attach an image FILE to the current session and send it as a prompt.
-CAPTION (or the file name) accompanies the image as the message text.
-Only the media types in `dsh-emacs-attach-media-types' are sent."
+  "Attach FILE to the current session and send it as a prompt.
+CAPTION (or the file name) accompanies it as the message text.
+
+An image whose type is in `dsh-emacs-attach-media-types' rides the prompt
+inline as an image.  Every other file is uploaded to the host at submit
+time and reaches the model as a file attachment; such a file must be a
+readable regular file no larger than `dsh-emacs-attach-max-file-size'."
   (interactive
-   (list (read-file-name "Image to attach: " default-directory)
+   (list (read-file-name "File to attach: " default-directory)
          (read-string "Caption (optional): ")))
   (dsh-emacs-subagent-require 'mutate)
   (dsh-emacs-server-ensure)
-  (let ((attachment (dsh-emacs--file-attachment file)))
+  (let ((attachment (dsh-emacs--attachable-file file)))
     (unless attachment
-      (user-error "Unsupported or unreadable image: %s" file))
+      (user-error "Cannot attach %s (not a readable file, or above `dsh-emacs-attach-max-file-size')"
+                  file))
     (dsh-emacs--submit-prompt (if (string-empty-p caption)
                                   (file-name-nondirectory file)
                                 caption)
@@ -3559,9 +3767,9 @@ Only the media types in `dsh-emacs-attach-media-types' are sent."
     (if (not (y-or-n-p (format "Attach %d file(s) to this session? "
                                (length paths))))
         (message "Attach cancelled")
-      (let ((attachments (delq nil (mapcar #'dsh-emacs--file-attachment paths))))
+      (let ((attachments (delq nil (mapcar #'dsh-emacs--attachable-file paths))))
         (if (null attachments)
-            (message "No supported image files among the dropped files")
+            (message "No attachable files among the dropped files")
           (dsh-emacs--submit-prompt
            (dsh-emacs--attachments-summary attachments)
            attachments))))))
@@ -4240,16 +4448,32 @@ prompts when `dsh-emacs-input-history-cross-session' is nil."
 
 (defun dsh-emacs--render-user-message-optimistic (message attachments)
   "Render MESSAGE's transcript echo immediately, before its RPC settles.
-ATTACHMENTS is a list of wire-ready attachment alists; they become
-`{type: \"image\"}' content blocks so the renderer displays them inline
-immediately — the bytes are already local, no `session/attachment'
-round-trip is needed.  The inserted region is recorded in
-`dsh-emacs--pending-user-echoes' so
+ATTACHMENTS is a list of staged attachment entries.  An image becomes a
+`{type: \"image\"}' block carrying its already-local base64, so the
+renderer shows it inline with no `session/attachment' round trip.  A
+staged file becomes the `{type: \"file\", attachment}'-shaped block the
+host will persist, using its uploaded name and size when available.
+The chip is display-only (the durable reference carries no local path).
+The inserted region is recorded in `dsh-emacs--pending-user-echoes' so
 `dsh-emacs--discard-user-message-echo' can roll it back when the submit is
 rejected."
-  (let* ((event `((type . "user/message")
+  (let* ((blocks (delq nil (mapcar
+                            (lambda (attachment)
+                              (if (dsh-emacs--attachment-file-p attachment)
+                                  (let ((file (cdr (assq 'uploaded-file attachment))))
+                                    `((type . "file")
+                                      (attachment
+                                       (name . ,(if file
+                                                    (dsh-protocol-file-ref-name file)
+                                                  (cdr (assq 'name attachment))))
+                                       (bytes . ,(if file
+                                                     (dsh-protocol-file-ref-bytes file)
+                                                   (cdr (assq 'bytes attachment)))))))
+                                (dsh-emacs--attachment-part attachment)))
+                            attachments)))
+         (event `((type . "user/message")
                   (data . ((content . ,(dsh-emacs--attachments-prompt-content
-                                        message attachments))))))
+                                        message blocks))))))
          (region (dsh-emacs-render--insert-user-block event nil)))
     (when region
       (let ((entry (cons message

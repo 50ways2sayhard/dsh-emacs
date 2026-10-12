@@ -17,6 +17,16 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Attach any file to a prompt**: `C-c C-a` (`dsh-emacs-attach-file`) and a
+  drag-and-drop onto a chat buffer now take any readable file, not only images.
+  An image still travels inline as an image; every other file is uploaded to
+  the host when the prompt is submitted (`POST /api/session/uploadFileBinary`)
+  and reaches the model as a file attachment, shown in the transcript as a
+  display-only `[file: name · size]` line. `dsh-emacs-attach-max-file-size`
+  (32 MiB) caps an uploaded file; a failed upload restores the draft and sends
+  nothing. Session attachments are never recorded for `M-p` recall.
+  (rationale: postmortem/092)
+
 - **Switch reasoning effort directly**: `C-c C-e`
   (`dsh-emacs-select-effort`) changes the running model's reasoning effort
   without re-picking the model — it reads the session's live selection,
@@ -174,6 +184,20 @@ minor) and stay undated until the release is cut.
   (rationale: postmortem/085)
 
 ### Fixed
+
+- **Keep drafts written during file uploads**: completing an upload no longer
+  clears text or attachments staged for the next message, including queued,
+  steering, and slash-command submissions.
+
+- **Undo restores sent text**: sending an ordinary message keeps the undo
+  record needed to recover its draft without changing the transcript echo.
+
+- **Recover from local upload failures**: files that become unreadable or
+  exceed the size limit while waiting to upload restore the draft, as do
+  request-start failures, even after an earlier file has uploaded.
+
+- **File echoes match the upload**: the transcript uses the host's sanitized
+  filename and uploaded byte count while retaining local filenames for retries.
 
 - **Expand only sessions with subagents**: session-list `TAB` now acts only
   on sessions with confirmed children. Empty and unknown catalogs no longer

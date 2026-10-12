@@ -204,26 +204,43 @@ queue leaves the goal.
 
 The Attachments row appears while `dsh-emacs--pending-attachments` is non-nil:
 the SVG Repo `file-send' icon (tinted from the attachment face; a text glyph
-when Emacs lacks SVG), the staged images' names and a trailing clickable `✕`
+when Emacs lacks SVG), the staged attachments' names and a trailing clickable `✕`
 (`dsh-emacs-clear-attachments`, also on `C-c C-d`).  Staging is owned by
 `dsh-emacs.el`: `C-c C-v` (`dsh-emacs-attach-clipboard-image`) reads the system
 clipboard, `s-v` (`dsh-emacs-paste`) does the same but falls back to
 `yank` when the clipboard holds no image, and
 `dsh-emacs--yank-media-handler` (registered per chat buffer for
-Emacs 29+ `yank-media`) feeds the same state.  Accepted media types are the
-`dsh-emacs-attach-media-types` MIME flavors, each validated against its magic
-number; a macOS pasteboard exposes TIFF only, so those bytes are converted to
-PNG through the system `sips` tool only when PNG is accepted.  `C-c C-c`
-clears the staged set before submitting (so a failure callback, even a
-synchronous one, finds it empty) and appends the images to `session/prompt` as
-`{type:'image'}` content parts, with the image name as the caption when the
-input is empty.  A failed submit puts text and images back together only while
-neither has been replaced; a submit that throws synchronously instead restores
-the exact pre-submit draft.  A prompt carrying attachments is never recorded
+Emacs 29+ `yank-media`) feeds the same state.  A staged entry is either an
+image (accepted `dsh-emacs-attach-media-types` MIME flavors, each validated
+against its magic number; a macOS pasteboard exposes TIFF only, so those bytes
+are converted to PNG through the system `sips` tool only when PNG is accepted)
+or a **file entry** — only `(file . PATH) (name . N) (bytes . B)`, capped by
+`dsh-emacs-attach-max-file-size`, with the bytes read and uploaded at submit
+time, after rechecking readability and size.  `C-c C-c` consumes the staged
+set immediately.  File submissions clear the input before uploading and leave
+later edits alone when uploads complete; ordinary submissions clear after the
+optimistic echo so undo retains the sent draft.  Both clear before sending the
+prompt RPC, so even a synchronous failure can restore it.  The resolved parts
+append to `session/prompt`: `{type:'image'}` with inline bytes, or
+`{type:'file', receiptId}` after the raw-byte upload route
+(`/api/session/uploadFileBinary`, `dsh-emacs--upload-file`) minted a one-time
+receipt for that file.  The image name (or the attachment summary) is the
+caption when the input is empty.  A failed submit puts text and attachments
+back together only while neither has been replaced; a submit that throws
+synchronously — or an upload that fails — restores the pre-submit draft, and a
+restored file entry keeps its path so the next submit uploads it again rather
+than reusing a spent receipt.  A prompt carrying attachments is never recorded
 for `M-p` recall — neither at submit time nor by the history backfill — since a
-text-only replay would drop the images, which is also why the synthesized
-caption cannot resurface as a prompt.  The row's signature carries only image
-names, never the bytes.
+text-only replay would drop them, which is also why the synthesized caption
+cannot resurface as a prompt.  The row's signature carries only attachment
+names, never image bytes or a file's path and size.  The optimistic echo builds
+the same display blocks the host will persist (`{type:'file', attachment:{name,
+bytes}}` renders through `dsh-emacs-render--file-placeholder`), because the
+canonical `user/message` that matches it is never rendered a second time.
+Upload completion stores the receipt's typed file reference as `uploaded-file`
+on a per-submit copy of staging, so the echo uses the host's sanitized name and
+actual byte count while retries retain the original local upload name.  The
+wire prompt still carries only the receipt ID.
 
 Geometry: `dsh-emacs--composer-top-marker` and
 `dsh-emacs--composer-end-marker` delimit the complete read-only chrome region,

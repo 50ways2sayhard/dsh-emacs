@@ -2391,6 +2391,15 @@ body: raw bytes
 - The obtained `receiptId` is used for §4.1's `{type:'file', receiptId}` or §4.11's
   `CommandSubmitAttachment`; small files may also use the unary
   `fileUploads/upload` (base64).
+- **dsh-emacs posts every non-image attachment through this route** (postmortem/092):
+  the bytes go to `url-request-data` unibyte, so the body is byte-exact and needs no
+  base64 pass.  It does not use `fileUploads/upload`: that path's canonical base64
+  would be an extra encoding for no benefit, since this client already aggregates the
+  whole body in memory.  The receipt is minted at submit time and never staged — it is
+  one-time, session-scoped, and must ride the same prompt's `requestId`.  A live probe
+  against a 0.2.0 host confirmed the stored `name`/`bytes` match what was posted and
+  that a forged receipt is refused with `session/attachment-invalid` before the prompt
+  is admitted.
 
 ---
 
