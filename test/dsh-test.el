@@ -26046,8 +26046,11 @@ messages (e.g. `command/done')."
       (with-temp-buffer
         (dsh-emacs-mode)
         (setq-local dsh-emacs--buffer-session "upload-read-error")
-        (let ((pending nil) (reads 0) (sent nil) (escaped nil))
-          (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+        (let ((pending nil) (reads 0) (sent nil) (escaped nil) messages)
+          (cl-letf (((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args) messages)))
+                    ((symbol-function 'dsh-emacs-server-ensure) #'ignore)
                     ((symbol-function 'dsh-emacs--busy-p) (lambda () nil))
                     ((symbol-function 'dsh-emacs--binary-file-string)
                      (lambda (_path)
@@ -26066,6 +26069,10 @@ messages (e.g. `command/done')."
               (error (setq escaped err)))
             (dsh-test-assert "later-file-read-error-restores-draft"
               (null escaped) (null sent) (= 2 reads)
+              (equal "File upload failed: File became unreadable" (car messages))
+              (= 1 (cl-count-if
+                    (lambda (text) (string-prefix-p "File upload failed:" text))
+                    messages))
               (equal "two files" (dsh-emacs--get-input))
               (equal (list entry entry) (dsh-emacs-pending-attachments))))))
     (delete-file file)))
@@ -26076,16 +26083,22 @@ messages (e.g. `command/done')."
        (entry (dsh-emacs--staged-file-attachment file)))
   (unwind-protect
       (progn
-        (let ((result 'unset) (escaped nil))
+        (let ((result 'unset) (escaped nil) (failure nil) (messages nil))
           (cl-letf (((symbol-function 'dsh-emacs--http-post)
-                     (lambda (&rest _) (error "Request startup failed"))))
+                     (lambda (&rest _) (error "Request startup failed")))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (push (apply #'format format-string args) messages))))
             (condition-case err
                 (dsh-emacs--upload-file
                  "session" entry
-                 (lambda (ok _receipt _error) (setq result ok)))
+                 (lambda (ok _receipt err) (setq result ok failure err)))
               (error (setq escaped err))))
           (dsh-test-assert "upload-start-error-reaches-failure-callback"
-            (null escaped) (null result)))
+            (null escaped) (null result)
+            (equal "Request startup failed" (cdr (assq 'message failure)))
+            (equal (list (format "Uploading %s…" (cdr (assq 'name entry))))
+                   messages)))
         (let ((calls 0) (escaped nil))
           (cl-letf (((symbol-function 'dsh-emacs--http-post)
                      (lambda (_url _type _body callback)

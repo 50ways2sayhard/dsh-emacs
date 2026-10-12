@@ -197,7 +197,8 @@ minor) and stay undated until the release is cut.
 
 - **Recover from local upload failures**: files that become unreadable or
   exceed the size limit while waiting to upload restore the draft, as do
-  request-start failures, even after an earlier file has uploaded.
+  request-start failures, even after an earlier file has uploaded. The specific
+  local error is reported once instead of being replaced by "transport error".
   (rationale: postmortem/092)
 
 - **File echoes match the upload**: the transcript uses the host's sanitized

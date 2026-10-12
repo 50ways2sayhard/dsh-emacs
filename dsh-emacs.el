@@ -3412,8 +3412,8 @@ The bytes POST to the host's raw upload route as
 one-time receipt the prompt must submit.  CALLBACK receives OK non-nil
 and the `dsh-protocol-file-receipt' as RECEIPT when the host accepted the
 upload, else ERROR: the route's own error object (`{code, message,
-details}'), or nil when local file validation, reading, or the request
-itself failed (already reported in the echo area)."
+details}'), a message-bearing alist for local validation, read or startup
+errors, or nil for transport failures already reported by HTTP."
   (let* ((path (cdr (assq 'file attachment)))
          (name (or (cdr (assq 'name attachment))
                    (file-name-nondirectory path)))
@@ -3451,8 +3451,8 @@ itself failed (already reported in the echo area)."
            (signal (car err) (cdr err))
          (setq startup-error err))))
     (when startup-error
-      (message "File upload failed: %s" (error-message-string startup-error))
-      (funcall callback nil nil nil))))
+      (funcall callback nil nil
+               (list (cons 'message (error-message-string startup-error)))))))
 
 (defun dsh-emacs--upload-attachments (session-id attachments callback)
   "Upload the staged files of ATTACHMENTS, then resolve every part.
