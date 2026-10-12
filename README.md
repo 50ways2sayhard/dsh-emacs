@@ -115,7 +115,7 @@ See [subagent integration](docs/subagents.md) for protocol and test details.
 | `C-c C-g` | Open the goal-action prefix |
 | `C-c C-m` | Switch model / reasoning effort |
 | `C-c C-e` | Switch the running model's reasoning effort |
-| `C-c C-a` | Attach a file and send it now |
+| `C-c C-a` | Stage one file for the next message; repeat to add more |
 | `C-c C-v` | Paste the clipboard image into the next message |
 | `C-c C-d` | Discard staged attachments |
 | `s-v` | Paste a clipboard image, else yank text |
@@ -162,8 +162,8 @@ Refresh existing chats after changing the option. See
 
 **Sending during a running turn:** by default, `C-c C-c` queues a non-empty
 message for the next turn. `C-u C-c C-c` steers the running turn instead;
-`C-c C-c` with empty input interrupts it. Configure this with
-`dsh-emacs-busy-enter-behavior`. The `C-c C-q` queue menu acts on the
+`C-c C-c` with blank input and no staged attachments interrupts it. Configure
+this with `dsh-emacs-busy-enter-behavior`. The `C-c C-q` queue menu acts on the
 highlighted item; `x` deletes all pending items.
 
 Type **`@`** to choose file, directory or session references: `@src/` drills
@@ -306,17 +306,23 @@ An **image** whose type is in `dsh-emacs-attach-media-types` rides the prompt
 inline and reaches the model as an image. Any **other file** is uploaded to
 the host when the prompt is submitted and reaches the model as a file
 attachment; the transcript shows it as a display-only `[file: name · size]`
-line. `C-c C-a` picks a file and sends it immediately with a caption (the file
-name when the caption is empty), and a drag-and-drop onto a chat buffer sends
-the dropped files as one prompt — `dsh-emacs-attach-max-file-size` caps an
-uploaded file (32 MiB by default, `nil` lifts the cap), and an image is not
-governed by it.
+line. `dsh-emacs-attach-max-file-size` caps an uploaded file (32 MiB by
+default, `nil` lifts the cap), and an inline image is not governed by it.
 
-`C-c C-v` pastes the system clipboard's image into the next message: it joins
-a staged-attachments row above the input, you type a caption (or leave the
-input empty to use the attachment name), and `C-c C-c` sends text and
-attachments together — a staged file is uploaded as the send starts. `C-c C-d`
-discards the staged attachments; the trailing `✕` on the row does the same.
+`C-c C-a` (`dsh-emacs-attach-file`) reads one existing file with Emacs's
+standard file-name prompt and appends it to the staged-attachments row above
+the input. Repeat the command to add more files. It neither contacts the
+server nor asks for a caption. Drag-and-drop keeps its yes/no confirmation
+and appends all valid dropped files in their existing order to the same
+list; neither action sends immediately. There is no separate multi-select
+picker.
+
+Type your message in the chat input, then press `C-c C-c` to send it with the
+whole staged set. Blank input sends the staged file names as the message text.
+Files upload when the send starts. Each file's `✕` on the row drops just that
+file; `C-c C-d` discards the whole staged set.
+
+`C-c C-v` pastes the system clipboard's image into the same staged list.
 `s-v` does the same as `C-c C-v` whenever the clipboard holds an image, and
 falls back to ordinary text yank otherwise; `C-y` always stays a plain text
 yank, so a clipboard carrying both an image and text can still paste the text.

@@ -1,5 +1,8 @@
 # 063 — Clipboard image paste into the chat input
 
+Superseded by [094](094-staged-file-attachments.md) for the file-picker and
+drag-and-drop immediate-send policy; clipboard behavior remains in effect.
+
 _Status: Complete._
 
 Implementation: `feat: paste clipboard images into the chat input`

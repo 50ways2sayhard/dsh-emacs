@@ -10,6 +10,14 @@ minor) and stay undated until the release is cut.
 
 ### Breaking Changes
 
+- **Stage files before sending**: `C-c C-a` now adds one file to the existing
+  attachment list; repeat to add more. Drag-and-drop keeps its confirmation
+  and stages valid files in order. Neither sends immediately or prompts for
+  a caption. `C-c C-c` sends the staged set with the current input (the
+  staged file names when blank); `C-c C-d` clears all. Lisp callers now use
+  `(dsh-emacs-attach-file file)`; the caption argument is removed.
+  (rationale: postmortem/094)
+
 - **Remove the mode-line job indicator**: job status stays in the tool rows;
   the duplicate `[Jn]` count and its mouse shortcut are removed, along with
   `dsh-emacs-jobs-modeline-face` and `dsh-emacs-jobs-map`. Use `C-c C-j` to
@@ -172,6 +180,15 @@ minor) and stay undated until the release is cut.
   postmortem/069)
 
 ### Changed
+
+- **Attachment icon**: use the SVG Repo `attachment` file-and-paperclip icon
+  in the staged-attachments row, retaining its theme tint and size.
+
+- **Per-file attachment removal**: the staged-attachments row lists only the
+  file names, each followed by its own `✕` that drops that file, while
+  `C-c C-d` still discards the whole set. A blank input sends the staged file
+  names as the message text instead of an attachment count. (rationale:
+  postmortem/094)
 
 - **Clearer subagent count**: bold mode-line digits and a thin gap after the
   icon follow Flycheck's compact layout, retaining the muted status color.

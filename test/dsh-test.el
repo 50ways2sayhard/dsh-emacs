@@ -6701,11 +6701,21 @@ Lets a test drive a malformed content value through the result path."
           (insert (base64-decode-string
                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")))
         (with-current-buffer buf
+          (dsh-emacs-mode)
           (setq dsh-emacs--current-session "sess-a")
-          (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+          (setq-local dsh-emacs--buffer-session "sess-a")
+          (dsh-emacs--ml-busy-clear)
+          (dsh-emacs--replace-input "the pixel")
+          (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+                    ((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params _cb)
                        (push (list method params) calls))))
-            (dsh-emacs-attach-file png-file "the pixel"))
+            (dsh-emacs-attach-file png-file)
+            (dsh-test-assert "attach-image-stages-without-sending"
+              (null calls)
+              (= 1 (length (dsh-emacs-pending-attachments)))
+              (equal "the pixel" (dsh-emacs--get-input)))
+            (dsh-emacs-send-or-stop))
           (let* ((call (car calls))
                  (params (cadr call))
                  (req (cdr (assq 'request params)))
@@ -6956,6 +6966,78 @@ Lets a test drive a malformed content value through the result path."
           (null (dsh-emacs-pending-attachments))
           (not (dsh-test--has-text-property-p
                 'dsh-emacs-composer-attachments-row))))
+    (kill-buffer buf)))
+
+;; --- Attachment row: file names only, one remove cell per file ---
+(let* ((first '((file . "/tmp/row-a.log") (name . "row-a.log") (bytes . 3)))
+       (second '((file . "/tmp/row-b.txt") (name . "row-b.txt") (bytes . 4)))
+       (buf (generate-new-buffer " *dsh-attach-row*")))
+  (unwind-protect
+      (with-current-buffer buf
+        (dsh-emacs-mode)
+        (dsh-emacs-modeline-setup)
+        (setq dsh-emacs--buffer-session "sess-row")
+        (setq dsh-emacs--pending-attachments (list first second))
+        (dsh-emacs-composer-refresh)
+        (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+          (dsh-test-assert "attachments-row-lists-file-names-only"
+            (string-match-p "row-a\\.log" text)
+            (string-match-p "row-b\\.txt" text)
+            (not (string-match-p "attachment" text))
+            (= 2 (cl-count ?✕ text))))
+        (let* ((row-prop 'dsh-emacs-composer-attachments-row)
+               (cells (cl-loop for pos from (point-min) below (point-max)
+                               when (and (get-text-property pos row-prop)
+                                         (get-text-property pos 'keymap))
+                               collect pos)))
+          (dsh-test-assert "attachments-row-has-one-remove-cell-per-file"
+            (= 4 (length cells)))
+          ;; Click the second file's ✕: only that file leaves the set.
+          (let* ((cell (car (last cells)))
+                 (cmd (lookup-key (get-text-property cell 'keymap) [mouse-1])))
+            (dsh-test-assert "attachments-row-remove-cell-is-clickable"
+              (functionp cmd)
+              (equal "Remove row-b.txt · C-c C-d discards all"
+                     (get-text-property cell 'help-echo)))
+            (call-interactively cmd)))
+        (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+          (dsh-test-assert "attachments-row-remove-drops-only-its-file"
+            (equal (list first) (dsh-emacs-pending-attachments))
+            (string-match-p "row-a\\.log" text)
+            (not (string-match-p "row-b\\.txt" text))
+            (= 1 (cl-count ?✕ text)))))
+    (kill-buffer buf)))
+
+;; --- A blank input sends the staged file names as the message text ---
+(let* ((first '((file . "/tmp/cap-a.log") (name . "cap-a.log") (bytes . 3)))
+       (second '((file . "/tmp/cap-b.txt") (name . "cap-b.txt") (bytes . 4)))
+       (uploaded nil)
+       (calls nil)
+       (buf (generate-new-buffer " *dsh-attach-caption*")))
+  (unwind-protect
+      (with-current-buffer buf
+        (dsh-emacs-mode)
+        (dsh-emacs-modeline-setup)
+        (setq dsh-emacs--buffer-session "sess-caption-names")
+        (setq dsh-emacs--pending-attachments (list first second))
+        (cl-letf (((symbol-function 'dsh-emacs--upload-file)
+                   (lambda (_session attachment callback)
+                     (push (cdr (assq 'name attachment)) uploaded)
+                     (funcall callback
+                              t
+                              (dsh-protocol-file-receipt--from-alist
+                               `((receiptId . ,(cdr (assq 'name attachment)))))
+                              nil)))
+                  ((symbol-function 'dsh-emacs--rpc-async)
+                   (lambda (method params _cb)
+                     (push (list method params) calls)))
+                  ((symbol-function 'dsh-emacs--busy-p) (lambda () nil)))
+          (dsh-emacs-send-or-stop))
+        (let* ((req (cdr (assq 'request (cadr (car calls)))))
+               (content (cdr (assq 'content req))))
+          (dsh-test-assert "blank-caption-uses-staged-file-names"
+            (equal "cap-a.log, cap-b.txt" (cdr (assq 'text (aref content 0))))
+            (equal '("cap-a.log" "cap-b.txt") (reverse uploaded)))))
     (kill-buffer buf)))
 
 ;; --- Test 48i: yank-media handler stages accepted types, refuses others ---
@@ -25769,43 +25851,146 @@ messages (e.g. `command/done')."
     (equal "?" (dsh-emacs-format-bytes nil))
     (equal "?" (dsh-emacs-format-bytes "x"))))
 
-;; --- Test 122h: `C-c C-a' attaches a non-image file through the upload path ---
+;; --- Test 122h: repeated `C-c C-a' stages files until an explicit send ---
 (let* ((file (make-temp-file "dsh-attach-entry" nil ".log"))
+       (second-file (make-temp-file "dsh-attach-second" nil ".txt"))
        (buf (generate-new-buffer " *dsh-attach-entry*"))
        (uploaded nil)
+       (server-checks 0)
        (calls nil))
   (unwind-protect
       (progn
         (with-temp-file file (insert "log line\n"))
+        (with-temp-file second-file (insert "second file\n"))
         (with-current-buffer buf
           (dsh-emacs-mode)
           (setq dsh-emacs--current-session "sess-entry")
           (setq-local dsh-emacs--buffer-session "sess-entry")
           (dsh-emacs--ml-busy-clear)
-          (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+          (dsh-emacs--replace-input "see the logs")
+          (cl-letf (((symbol-function 'dsh-emacs-server-ensure)
+                     (lambda () (cl-incf server-checks)))
                     ((symbol-function 'dsh-emacs--upload-file)
                      (lambda (_session attachment callback)
                        (push (cdr (assq 'name attachment)) uploaded)
                        (funcall callback
                                 t
                                 (dsh-protocol-file-receipt--from-alist
-                                 '((receiptId . "r-7")))
+                                 `((receiptId . ,(format "r-%d" (length uploaded)))))
                                 nil)))
                     ((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
-                       (funcall cb t '((accepted . t))))))
-            (dsh-emacs-attach-file file "see the log"))
+                       (funcall cb t '((accepted . t)))))
+                    ((symbol-function 'read-file-name)
+                     (lambda (_prompt _dir _default mustmatch &rest _)
+                       (dsh-test-assert "attach-picker-requires-existing-file"
+                         mustmatch)
+                       file))
+                    ((symbol-function 'read-string)
+                     (lambda (&rest _) (error "Unexpected caption prompt"))))
+            (call-interactively #'dsh-emacs-attach-file)
+            (dsh-emacs-attach-file second-file)
+            (dsh-test-assert "attach-files-append-without-network-or-input-changes"
+              (zerop server-checks)
+              (null uploaded)
+              (null calls)
+              (equal "see the logs" (dsh-emacs--get-input))
+              (equal (list file second-file)
+                     (mapcar (lambda (entry) (cdr (assq 'file entry)))
+                             (dsh-emacs-pending-attachments))))
+            (dsh-emacs-send-or-stop))
           (let* ((params (cadr (car calls)))
                  (content (cdr (assq 'content
                                      (cdr (assq 'request params))))))
-            (dsh-test-assert "attach-file-command-uploads-non-image"
-              (equal (list (file-name-nondirectory file)) uploaded)
-              (equal "see the log" (cdr (assq 'text (aref content 0))))
-              (equal '((type . "file") (receiptId . "r-7"))
-                     (append (aref content 1) nil))))))
+            (dsh-test-assert "attach-files-upload-together-on-send"
+              (= 1 (length calls))
+              (equal "session/prompt" (caar calls))
+              (equal (list (file-name-nondirectory file)
+                           (file-name-nondirectory second-file))
+                     (reverse uploaded))
+              (= 3 (length content))
+              (equal "see the logs" (cdr (assq 'text (aref content 0))))
+              (equal '((type . "file") (receiptId . "r-1"))
+                     (aref content 1))
+              (equal '((type . "file") (receiptId . "r-2"))
+                     (aref content 2))
+              (null (dsh-emacs-pending-attachments))))))
     (delete-file file)
+    (delete-file second-file)
     (kill-buffer buf)))
+
+;; Attachment acquisition preserves the existing draft on cancel/rejection,
+;; and a multi-file drop appends to clipboard staging without a network call.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (dsh-emacs--replace-input "keep this caption")
+  (let* ((image '((mediaType . "image/png") (data . "eA==")
+                  (name . "clipboard.png")))
+         (first '((file . "/tmp/first.log") (name . "first.log") (bytes . 3)))
+         (second '((file . "/tmp/second.txt") (name . "second.txt") (bytes . 4)))
+         (confirm t))
+    (dsh-emacs--stage-attachments (list image))
+    (cl-letf (((symbol-function 'dsh-emacs-server-ensure)
+               (lambda () (error "Staging must not start the server")))
+              ((symbol-function 'dsh-emacs--submit-prompt)
+               (lambda (&rest _) (error "Staging must not submit")))
+              ((symbol-function 'dnd-get-local-file-name)
+               (lambda (path &rest _) path))
+              ((symbol-function 'dsh-emacs--attachable-file)
+               (lambda (path)
+                 (cond ((equal path "/tmp/first.log") first)
+                       ((equal path "/tmp/second.txt") second))))
+              ((symbol-function 'y-or-n-p) (lambda (&rest _) confirm))
+              ((symbol-function 'read-file-name)
+               (lambda (&rest _) (signal 'quit nil))))
+      (let ((cancelled nil) (rejected nil))
+        (condition-case nil
+            (call-interactively #'dsh-emacs-attach-file)
+          (quit (setq cancelled t)))
+        (condition-case nil
+            (dsh-emacs-attach-file "/tmp/invalid")
+          (user-error (setq rejected t)))
+        (dsh-test-assert "attach-cancel-or-invalid-keeps-draft"
+          cancelled rejected
+          (equal (list image) (dsh-emacs-pending-attachments))
+          (equal "keep this caption" (dsh-emacs--get-input))))
+      (dsh-emacs--dnd-attach
+       '(drag-n-drop ("/tmp/first.log" "/tmp/invalid" "/tmp/second.txt")))
+      (dsh-test-assert "drop-appends-valid-files-in-order"
+        (equal (list image first second) (dsh-emacs-pending-attachments))
+        (equal "keep this caption" (dsh-emacs--get-input)))
+      (setq confirm nil)
+      (dsh-emacs--dnd-attach '(drag-n-drop ("/tmp/first.log")))
+      (dsh-test-assert "drop-cancel-keeps-staged-set"
+        (equal (list image first second) (dsh-emacs-pending-attachments)))
+      (dsh-emacs-clear-attachments)
+      (dsh-test-assert "discard-mixed-attachments-keeps-caption"
+        (null (dsh-emacs-pending-attachments))
+        (equal "keep this caption" (dsh-emacs--get-input))))))
+
+;; Reject acquisition before opening the picker or reading files in contexts
+;; that cannot own staged attachments.
+(dolist (context '(outside-chat subagent))
+  (with-temp-buffer
+    (when (eq context 'subagent)
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-subagent t))
+    (cl-letf (((symbol-function 'read-file-name)
+               (lambda (&rest _) (error "Unexpected file picker")))
+              ((symbol-function 'dsh-emacs--attachable-file)
+               (lambda (&rest _) (error "Unexpected file read"))))
+      (dolist (invoke (list (lambda () (call-interactively #'dsh-emacs-attach-file))
+                            (lambda () (dsh-emacs-attach-file "/tmp/first.log"))
+                            (lambda () (dsh-emacs--dnd-attach
+                                        '(drag-n-drop ("/tmp/first.log"))))))
+        (let ((rejected nil))
+          (condition-case nil
+              (funcall invoke)
+            (user-error (setq rejected t)))
+          (dsh-test-assert (format "attachment-acquisition-rejects-%s" context)
+            rejected
+            (null (dsh-emacs-pending-attachments))))))))
 
 ;; Upload completion must not consume a draft composed after sending, across
 ;; plain, queued, steering, and slash-command/fallback dispatch.

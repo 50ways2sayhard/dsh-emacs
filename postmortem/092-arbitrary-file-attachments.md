@@ -1,5 +1,8 @@
 # 092 — Arbitrary file attachments (raw upload route)
 
+Superseded by [094](094-staged-file-attachments.md) for file-picker and
+drag-and-drop submission: both now stage into the existing pending list.
+
 Submit input consumption and its undo lifetime are superseded by
 [093](093-consumed-input-undo.md); the upload route, receipt lifetime and file
 rendering remain in effect.

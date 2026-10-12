@@ -157,8 +157,10 @@ input geometry (the `❯ ` prompt,
 `dsh-emacs.el`; `dsh-emacs-composer.el` owns all three chrome rows and the seam
 that keeps streamed transcript above them. The queue module supplies the
 visible next item directly from its mirror; Composer keeps no second queue.
-Staged images stay in `dsh-emacs.el` (the paste command and the submit path own
-them); Composer only reads them, exactly as it reads the queue mirror.
+Staged attachments stay in `dsh-emacs.el` (file/drop acquisition, clipboard
+paste and the submit path own them); Composer reads them, exactly as it reads
+the queue mirror, and a row's per-file remove cell only calls back into
+`dsh-emacs--remove-attachment`.
 
 Word and region kills are clipped to both editable input boundaries while
 preserving their direction. Backward word motion over punctuation such as
@@ -203,10 +205,20 @@ independently; clearing a goal leaves pending input visible, and clearing the
 queue leaves the goal.
 
 The Attachments row appears while `dsh-emacs--pending-attachments` is non-nil:
-the SVG Repo `file-send' icon (tinted from the attachment face; a text glyph
-when Emacs lacks SVG), the staged attachments' names and a trailing clickable `✕`
-(`dsh-emacs-clear-attachments`, also on `C-c C-d`).  Staging is owned by
-`dsh-emacs.el`: `C-c C-v` (`dsh-emacs-attach-clipboard-image`) reads the system
+the SVG Repo `attachment' icon (tinted from the attachment face; a text glyph
+when Emacs lacks SVG) and each staged attachment's name followed by its own
+clickable `✕` (`dsh-emacs--remove-attachment`, which drops only that entry;
+`C-c C-d`, `dsh-emacs-clear-attachments`, clears the whole list).
+Staging is owned by `dsh-emacs.el`: `dsh-emacs-attach-file` takes only `file`;
+its interactive `C-c C-a` entry calls standard `read-file-name` once with
+`mustmatch` t, then appends one attachment through
+`dsh-emacs--stage-attachments`. Repeating it adds more files without a caption
+prompt or server/network activity. Drag-and-drop retains its `y-or-n-p`
+confirmation and existing filtering, then appends all valid files in their
+existing order through the same staging function. Neither entry submits.
+There is no new selector or command; see
+[decision record 094](../postmortem/094-staged-file-attachments.md).
+`C-c C-v` (`dsh-emacs-attach-clipboard-image`) reads the system
 clipboard, `s-v` (`dsh-emacs-paste`) does the same but falls back to
 `yank` when the clipboard holds no image, and
 `dsh-emacs--yank-media-handler` (registered per chat buffer for
@@ -216,10 +228,11 @@ against its magic number; a macOS pasteboard exposes TIFF only, so those bytes
 are converted to PNG through the system `sips` tool only when PNG is accepted)
 or a **file entry** — only `(file . PATH) (name . N) (bytes . B)`, capped by
 `dsh-emacs-attach-max-file-size`, with the bytes read and uploaded at submit
-time, after rechecking readability and size.  `C-c C-c` consumes the staged
-set immediately.  File submissions clear the input before uploading and leave
-later edits alone when uploads complete; ordinary submissions clear after the
-optimistic echo.  Both consume through `dsh-emacs--clear-input`, which saves
+time, after rechecking readability and size.  `C-c C-c` sends the staged set
+with the current input and consumes the set immediately.  File submissions
+clear the input before uploading and leave later edits alone when uploads
+complete; ordinary submissions clear after the optimistic echo.  Both consume
+through `dsh-emacs--clear-input`, which saves
 the actual input for undo and resets history navigation at consumption time.
 Completion callbacks leave newer editing/navigation state alone.  Undo uses
 the shared input state described below, without restoring attachments or
@@ -228,16 +241,17 @@ sending the prompt RPC, so even a synchronous failure can restore it.
 The resolved parts append to `session/prompt`: `{type:'image'}` with inline
 bytes, or `{type:'file', receiptId}` after the raw-byte upload route
 (`/api/session/uploadFileBinary`, `dsh-emacs--upload-file`) minted a one-time
-receipt for that file.  The image name (or the attachment summary) is the
-caption when the input is empty.  A failed submit puts text and attachments
-back together only while neither has been replaced; a submit that throws
-synchronously — or an upload that fails — restores the pre-submit draft, and a
-restored file entry keeps its path so the next submit uploads it again rather
-than reusing a spent receipt.  A prompt carrying attachments is never recorded
-for `M-p` recall — neither at submit time nor by the history backfill — since a
-text-only replay would drop them, which is also why the synthesized caption
-cannot resurface as a prompt.  The row's signature carries only attachment
-names, never image bytes or a file's path and size.  The optimistic echo builds
+receipt for that file.  Blank input uses the staged file names as its
+caption.  A failed submit puts text and attachments back together only while
+neither has been replaced; a submit that throws synchronously — or an upload
+that fails — restores the pre-submit draft, and a restored file entry keeps
+its path so the next submit uploads it again rather than reusing a spent
+receipt.  A prompt carrying attachments is
+never recorded for `M-p` recall — neither at submit time nor by the history
+backfill — since a text-only replay would drop them, which is also why the
+synthesized caption cannot resurface as a prompt.  The row's signature carries
+only attachment names, never image bytes or a file's path and size.  The
+optimistic echo builds
 the same display blocks the host will persist (`{type:'file', attachment:{name,
 bytes}}` renders through `dsh-emacs-render--file-placeholder`), because the
 canonical `user/message` that matches it is never rendered a second time.

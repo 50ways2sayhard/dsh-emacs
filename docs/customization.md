@@ -43,12 +43,12 @@ The most commonly used options, straight in your config:
 (setq dsh-emacs-input-history-length 50)           ; prompts kept for M-p / M-n recall
 (setq dsh-emacs-input-history-cross-session nil)   ; M-p / M-n recall only the current session's prompts (nil, default); t = recall prompts from every session
 (setq dsh-emacs-word-completion-limit 100000)      ; how many characters above the input TAB searches when completing an ordinary word from the draft/transcript (nil = whole buffer)
-(setq dsh-emacs-busy-enter-behavior 'queue)          ; what C-c C-c does while a turn runs: `queue` lines input up as the next turn (default), `steer` wakes the running agent before its next step, `stop` interrupts like before; `C-u C-c C-c` explicitly sends a nonempty message with steer mode regardless of this setting or the local busy indicator, an empty input interrupts a running turn, and `C-c C-b` interrupts explicitly (C-c C-q manages the queue)
+(setq dsh-emacs-busy-enter-behavior 'queue)          ; what C-c C-c does while a turn runs: `queue` lines input up as the next turn (default), `steer` wakes the running agent before its next step, `stop` interrupts like before; `C-u C-c C-c` explicitly sends a nonempty message with steer mode regardless of this setting or the local busy indicator, a blank input with no staged attachments interrupts a running turn, and `C-c C-b` interrupts explicitly (C-c C-q manages the queue)
 (setq dsh-emacs-question-skip-key "C-c C-s") ; key that skips the current ask question inside the reader (nil = no shortcut; empty input also skips)
 (setq dsh-emacs-ui-label-separator "·")            ; separator between Think/Tool title and its right-side summary ("" = plain gap)
 (setq dsh-emacs-tool-titles '(("pwsh" . "PowerShell"))) ; tool name -> display title overrides (icons stay per variant; unnamed tools get a humanized name, e.g. grep -> "Grep")
 (setq dsh-emacs-attach-media-types '("image/png" "image/jpeg" "image/webp" "image/gif")) ; image types sent inline (`C-c C-a' file attach, `C-c C-v' clipboard paste, `M-x yank-media'); every other file is uploaded at submit time
-(setq dsh-emacs-attach-max-file-size (* 32 1024 1024)) ; largest file `C-c C-a' uploads, in bytes (nil = no limit; images are not governed by it)
+(setq dsh-emacs-attach-max-file-size (* 32 1024 1024)) ; largest staged file, in bytes; checked again at upload (nil = no limit; inline images are not governed by it)
 (setq dsh-emacs-session-auto-refresh-interval nil) ; seconds between automatic session-list refreshes (nil = off)
 (setq dsh-emacs-workspaces-collapsed-by-default nil) ; workspace and Ungrouped groups start expanded (t = collapsed); TAB/RET overrides a group in the current list buffer
 (setq dsh-emacs-composer-goal-actions t)             ; show pause/resume/edit/clear buttons on the Goal Row (nil = hide them; C-c C-g keys still work; C-c C-g a / dsh-emacs-goal-actions-toggle toggles the current buffer)
@@ -68,6 +68,23 @@ The most commonly used options, straight in your config:
 (setq dsh-emacs-shell-timeout nil)                  ; nil = no limit; positive integer seconds only (surviving background children are untracked)
 (setq dsh-emacs-jobs-kill-arm-seconds 3)           ; how long the `k' press in the `C-c C-j' background-job menu stays armed before a second press stops the job (matches dsh web's two-press stop)
 ```
+
+## Attachment staging
+
+`C-c C-a` (`dsh-emacs-attach-file`) uses standard `read-file-name` once with
+`mustmatch` t, so your normal file-name completion applies and the selected
+path must exist. Each invocation appends one valid file to the current staged
+list; repeat to add more. There is no multi-select picker, caption prompt or
+server request during staging. Drag-and-drop keeps its `y-or-n-p` confirmation
+and appends the valid files in their existing order. Clipboard commands keep
+their existing behavior and feed the same list.
+
+Lisp callers use `(dsh-emacs-attach-file file)`; the caption argument has been
+removed. Put the message in the chat input and use `C-c C-c` to submit it with
+all staged attachments; blank input uses the staged file names. Each file's
+`✕` on the row drops just that file, and `C-c C-d` clears the entire staged
+list. File uploads happen only at submission; the media-type and size options
+above still control how files are accepted.
 
 ## Reply footer
 

@@ -2734,14 +2734,14 @@ interrupted, so stopping stays one key away.  Success feedback arrives via the
 `inbox' projection frame; `\\[dsh-emacs-interrupt-turn]'
 (`C-c C-b') interrupts regardless of the behavior.
 
-Staged attachments (`C-c C-v' clipboard image, `M-x dsh-emacs-attach-file')
-ride this send: they are consumed at submit time, an empty caption falls
-back to the attachment's name, and a `!' line carrying attachments is
-ordinary caption text (the attachments reach the model, as
-`dsh-emacs--submit-prompt' documents).  A staged file is uploaded when the
-send starts, so the send completes after that round trip.  A prompt
-carrying attachments is never recorded for `M-p' recall — replaying it as
-text would drop them."
+Staged attachments (`C-c C-v' clipboard image, `C-c C-a' file, drop) ride
+this send: they are consumed at submit time, an empty caption falls back
+to the staged file names (or a count when none are named), and a `!'
+line carrying attachments is ordinary caption text (the attachments reach
+the model, as `dsh-emacs--submit-prompt' documents).  A staged file is
+uploaded when the send starts, so the send completes after that round
+trip.  A prompt carrying attachments is never recorded for `M-p' recall —
+replaying it as text would drop them."
   (interactive)
   (when dsh-emacs--buffer-subagent
     (when (or (dsh-emacs-shell-parse (dsh-emacs--get-input))
@@ -2967,10 +2967,9 @@ Non-nil MODE (\"queue\" or \"steer\") submits the message into a
 RUNNING turn's inbox instead of starting one — the deferred path of
 `dsh-emacs--submit-deferred', which neither renders a transcript card
 nor touches the spinner.  With MODE nil while the session is already
-busy (e.g. `C-c C-a' during a run), the configured
-`dsh-emacs-busy-enter-behavior' picks the mode; with `stop' the deferred
-path is never taken (`C-c C-c' interrupts then, attach-file keeps
-sending a plain queue-mode prompt as before).
+busy, the configured `dsh-emacs-busy-enter-behavior' picks the mode;
+with `stop' the deferred path is never taken (`C-c C-c' interrupts
+before reaching this function).
 
 Lines without attachments starting with \"!<command>\" (e.g. \"!git status\") are
 client-side shell commands (see `dsh-emacs-shell-submit'): they run
@@ -3629,13 +3628,17 @@ never a copy."
   dsh-emacs--pending-attachments)
 
 (defun dsh-emacs--attachments-summary (attachments)
-  "Return a short human summary of staged ATTACHMENTS (names, or a count)."
+  "Return the names of staged ATTACHMENTS, or a count when none are named.
+This is the message text of a blank-input send and the feedback of a
+staging or removal step, so it names the files themselves instead of
+reporting an attachment count."
   (let ((names (delq nil (mapcar (lambda (attachment)
                                    (cdr (assq 'name attachment)))
                                  attachments))))
-    (cond ((null names) (format "%d attachment(s)" (length attachments)))
-          ((= 1 (length names)) (car names))
-          (t (format "%d attachments" (length names))))))
+    (if names
+        (mapconcat #'identity names ", ")
+      (format "%d attachment%s" (length attachments)
+              (if (= 1 (length attachments)) "" "s")))))
 
 (defun dsh-emacs--stage-attachments (attachments)
   "Append ATTACHMENTS to this buffer's staged set and repaint the row."
@@ -3647,6 +3650,18 @@ never a copy."
     (dsh-emacs-composer-refresh)
     (message "%s staged · C-c C-c sends · C-c C-d discards"
              (dsh-emacs--attachments-summary attachments))))
+
+(defun dsh-emacs--remove-attachment (attachment)
+  "Drop staged ATTACHMENT, one entry of `dsh-emacs-pending-attachments'.
+The Composer's per-file remove cell calls this with the very entry it
+rendered, so only that entry goes; `dsh-emacs-clear-attachments'
+(C-c C-d) still drops the whole set.  A no-op when ATTACHMENT is not
+staged."
+  (when (memq attachment dsh-emacs--pending-attachments)
+    (setq dsh-emacs--pending-attachments
+          (delq attachment dsh-emacs--pending-attachments))
+    (dsh-emacs-composer-refresh)
+    (message "%s removed" (dsh-emacs--attachments-summary (list attachment)))))
 
 (defun dsh-emacs--consume-pending-attachments ()
   "Drop the staged attachments this buffer just submitted."
@@ -3753,46 +3768,46 @@ the host accepts are taken as-is; TIFF is converted to PNG through
     (message "Attachments discarded")))
 
 ;;;###autoload
-(defun dsh-emacs-attach-file (&optional file caption)
-  "Attach FILE to the current session and send it as a prompt.
-CAPTION (or the file name) accompanies it as the message text.
+(defun dsh-emacs-attach-file (file)
+  "Stage FILE for the next message (C-c C-a).
+Repeat to add more files.  Write the caption in the chat input, then use
+`C-c C-c' to send the text and all staged attachments together; `C-c C-d'
+discards the staged set.
 
 An image whose type is in `dsh-emacs-attach-media-types' rides the prompt
 inline as an image.  Every other file is uploaded to the host at submit
 time and reaches the model as a file attachment; such a file must be a
 readable regular file no larger than `dsh-emacs-attach-max-file-size'."
   (interactive
-   (list (read-file-name "File to attach: " default-directory)
-         (read-string "Caption (optional): ")))
+   (progn
+     (dsh-emacs-subagent-require 'mutate)
+     (dsh-emacs--ensure-chat-buffer)
+     (list (read-file-name "File to attach: " default-directory nil t))))
   (dsh-emacs-subagent-require 'mutate)
-  (dsh-emacs-server-ensure)
+  (dsh-emacs--ensure-chat-buffer)
   (let ((attachment (dsh-emacs--attachable-file file)))
     (unless attachment
       (user-error "Cannot attach %s (not a readable file, or above `dsh-emacs-attach-max-file-size')"
                   file))
-    (dsh-emacs--submit-prompt (if (string-empty-p caption)
-                                  (file-name-nondirectory file)
-                                caption)
-                              (list attachment))))
+    (dsh-emacs--stage-attachments (list attachment))))
 
 (defun dsh-emacs--dnd-attach (event)
-  "Handle a `drag-n-drop' EVENT in a chat buffer by attaching the files."
+  "Stage files from a `drag-n-drop' EVENT for the next message."
   (interactive "e")
-  (dsh-emacs-server-ensure)
+  (dsh-emacs-subagent-require 'mutate)
+  (dsh-emacs--ensure-chat-buffer)
   (let* ((files (and (listp event) (nth 1 event)))
          (paths (and files
                      (delq nil (mapcar (lambda (f) (dnd-get-local-file-name f t))
                                        (if (listp files) files (list files)))))))
     (unless paths (user-error "No files in drop event"))
-    (if (not (y-or-n-p (format "Attach %d file(s) to this session? "
+    (if (not (y-or-n-p (format "Stage %d file(s) for the next message? "
                                (length paths))))
         (message "Attach cancelled")
       (let ((attachments (delq nil (mapcar #'dsh-emacs--attachable-file paths))))
         (if (null attachments)
             (message "No attachable files among the dropped files")
-          (dsh-emacs--submit-prompt
-           (dsh-emacs--attachments-summary attachments)
-           attachments))))))
+          (dsh-emacs--stage-attachments attachments))))))
 
 (defun dsh-emacs--model-candidates (value)
   "Flatten a `session/modelCatalog' VALUE into per-model entries, sorted.
