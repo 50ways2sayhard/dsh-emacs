@@ -621,7 +621,19 @@ Muted like dsh web's `label-tertiary'."
 
 (defface dsh-emacs-modeline-separator-face
   '((t :inherit dsh-emacs-modeline-face))
-  "The “•” separator between mode-line segments."
+  "Face for the separator between mode-line segments (default: one space)."
+  :group 'dsh-emacs-faces)
+
+(defface dsh-emacs-modeline-running-face
+  '((t :inherit dsh-emacs-modeline-face))
+  "Running caption and elapsed time beside the mode-line whale."
+  :group 'dsh-emacs-faces)
+
+(defface dsh-emacs-modeline-running-highlight-face
+  '((((background light)) :foreground "#202638")
+    (((background dark)) :foreground "#e0e4ef")
+    (t :inherit mode-line))
+  "Peak foreground of the gentle sweep across Deep diving."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-modeline-token-face

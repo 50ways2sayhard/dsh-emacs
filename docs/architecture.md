@@ -12,7 +12,7 @@ dsh-emacs/
 ├── dsh-emacs-markdown.el     # Markdown syntax highlighting
 ├── dsh-emacs-render.el       # Event renderer (user/assistant/tool/thinking)
 ├── dsh-emacs-events.el       # Event stream: native WebSocket + reconnect
-├── dsh-emacs-modeline.el     # Mode-line stats
+├── dsh-emacs-modeline.el     # Mode-line stats and whale-tail playback
 ├── dsh-emacs-queue.el        # Pending-input queue mirror (queue/steer)
 ├── dsh-emacs-subagent.el     # Durable child catalogs, completion, availability and navigation
 ├── dsh-emacs-jobs.el         # Background jobs: job/list + job/follow streams, stop
@@ -787,7 +787,24 @@ faces; the resulting offscreen cursor made Emacs scroll back on every redraw.
 The transcript's after-change hook uses `restore-buffer-modified-p` so text
 and property edits do not repeatedly invalidate the mode line. The animation
 advances during pending text batches without forcing a separate redraw.
-Quiet visible turns still refresh the indicator on its normal timer.
+When installed, the optional `motion-line` package refreshes quiet visible
+turns. It is installed independently; there is no bundled engine. If it is
+absent, the modeline renders a static Deep diving caption and explicitly
+redraws on busy-state changes. That path calls no animation API, reads no
+animation asset and creates no animation timer. It omits the elapsed clock.
+Library load errors other than a missing file still propagate. The modeline
+module owns the web whale asset,
+color cache and `dsh-running` slot. The independent package owns elapsed-time
+sampling, cached output, one shared scheduler and buffer cleanup. Native
+mode lines render the slot next to the mode name; Doom reuses its major-mode
+slot. The modeline sets a buffer-local redisplay callback to preserve batching.
+See [095](../postmortem/095-running-status.md) and
+[096](../postmortem/096-standalone-motion-line.md).
+The same cached output includes the English Deep diving caption and its
+foreground sweep. A buffer-local running-start timestamp provides the clock;
+the three-second animation phase never acts as elapsed turn time. Completion
+and disconnect clear the timestamp. Doom appends its base face so the caption's
+per-character foregrounds survive. See [095](../postmortem/095-running-status.md).
 
 After a ready chat socket delivers input, the events module suspends further
 reads for 50ms with `set-process-filter` set to t. Bytes remain in the socket;

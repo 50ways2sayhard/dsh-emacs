@@ -49,6 +49,20 @@ Chat buffers show the DeepSeek Harness whale in the mode line when SVG is
 supported: blue on dark themes, black on light themes, with `DSH` as the
 terminal fallback. Colors follow theme changes. The icon keeps the
 standard Emacs major-mode menu. See [Mode-line status](docs/modeline.md).
+With [Motion Line](https://github.com/vritser/motion-line) installed, a running
+turn shows the same swinging whale tail as dsh web (18×18 display size,
+60 frames, three-second loop), followed by `Deep diving · 12s` with a gentle text sweep and elapsed
+time. Terminals show cycling `DSH...` text with the caption and clock.
+Opening an already-running session restores this indicator after an Emacs
+restart, even when its turn started before the loaded history window.
+
+Motion Line is optional and installed separately. Without it, the mode line
+shows a static `Deep diving` caption while running and clears it when the
+turn ends or disconnects. This fallback uses no animation timer or elapsed
+clock. See [Mode-line status](docs/modeline.md) for setup.
+
+When `nerd-icons-completion` is active, DSH chat buffers use the whale icon in
+Consult's buffer-switch minibuffer (`C-x b`).
 
 ### Session list
 

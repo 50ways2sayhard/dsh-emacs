@@ -25,8 +25,8 @@ builds on agent-shell, the mode-line stats on pi-mono):
   read rows into a line-numbered file card, write/edit rows into a diff card,
   `ask_user_question` rows into their question/answer record, and every other
   variant into an IN/OUT section
-- **Mode-line stats**: a compact status section spliced into the mode line (cwd, git branch, model,
-  tokens, context%, and cost)
+- **Mode-line stats**: a compact status section spliced into the mode line (model, effort, preset,
+  permission, context%; cwd, branch, tokens, provider and cost are opt-in)
 - **Session list**: card view showing session title, working directory, branch,
   and last activity time
 
@@ -296,7 +296,9 @@ not a working grouping surface.
 | Face | Description |
 |---|---|
 | `dsh-emacs-modeline-face` | The entire stats strip |
-| `dsh-emacs-modeline-separator-face` | The "•" separator |
+| `dsh-emacs-modeline-running-face` | Deep diving caption and elapsed clock |
+| `dsh-emacs-modeline-running-highlight-face` | Peak color of the caption's gentle sweep |
+| `dsh-emacs-modeline-separator-face` | Separator between stats (default: one space) |
 | `dsh-emacs-modeline-token-face` | Token count |
 | `dsh-emacs-modeline-cost-face` | Cost |
 | `dsh-emacs-modeline-ctx-ok-face` | Context < 50% (green) |

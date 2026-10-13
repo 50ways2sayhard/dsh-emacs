@@ -10,6 +10,13 @@ minor) and stay undated until the release is cut.
 
 ### Breaking Changes
 
+- **Extract the animation engine as Motion Line**: the unreleased
+  `mode-line-animate` API becomes `motion-line-*`, including `motion-line-demo`.
+  dsh-emacs uses an independently installed Motion Line when available and
+  otherwise shows a static running caption. Existing prototype
+  configuration, including the provisional `kineline-*` names, must use the
+  new names. (rationale: postmortem/096)
+
 - **Stage files before sending**: `C-c C-a` now adds one file to the existing
   attachment list; repeat to add more. Drag-and-drop keeps its confirmation
   and stages valid files in order. Neither sends immediately or prompts for
@@ -23,7 +30,63 @@ minor) and stay undated until the release is cut.
   `dsh-emacs-jobs-modeline-face` and `dsh-emacs-jobs-map`. Use `C-c C-j` to
   view output or stop background jobs. (rationale: postmortem/088)
 
+### Fixed
+
+- **Make the whale tail easier to see**: running and idle tails now use a
+  centered 18×18 display box, enlarged from 16×16.
+
+- **Keep the whale animation self-contained**: its GIF data is embedded in
+  Elisp and decoded lazily, so installing the client needs no separate image
+  file. Frame timing and colors stay unchanged. (rationale: postmortem/098)
+
+- **Keep completed sessions idle on reconnect**: a delayed running cache no
+  longer restarts the indicator after the chat has received `turn/end`.
+
+- **Preserve status in custom Doom Modeline layouts**: layouts with the standard
+  anchors receive the whale and DSH status segments, including layouts added
+  after another chat was opened, without duplicate segments.
+
+- **Restore running status after restarting Emacs**: opening an already-running
+  session starts its whale animation (or static caption) from the cached session
+  status, even when the initial history window no longer contains `turn/start`.
+
+- **Run without Motion Line installed**: dsh-emacs loads normally and shows
+  static `Deep diving` text while working. It clears on completion or
+  disconnect and creates no animation timer. Installing Motion Line enables
+  the whale animation, caption sweep and elapsed clock. No bundled animation
+  library is required. (rationale: postmortem/096)
+
+- **Keep running animations moving across sessions**: starting, pausing or
+  clearing another buffer's animation no longer postpones the shared timer,
+  which could freeze the whale tail until those operations stopped.
+
+- **Place the DSH whale before the buffer name in Doom Modeline**: the larger
+  whale appears on the left, and the DSH Web running-status whale tail fills the
+  right-side major-mode slot with its standard menu.
+
+- **Open chat sessions with Doom Modeline enabled**: file-icon refresh now
+  skips fileless DSH chat buffers, avoiding the mode-change hook error.
+
+- **Use the DSH whale in the buffer-switch minibuffer**: Consult candidates for
+  DSH chat buffers show the whale when `nerd-icons-completion` is active,
+  instead of the generic Emacs icon. Without SVG support, the label is `DSH`.
+
 ### Added
+
+- **Show Deep diving beside the running whale**: the English caption has a
+  gentle foreground sweep and a seconds/minutes elapsed clock in both native
+  and Doom mode lines. It disappears when the turn stops or disconnects and
+  shares the existing animation timer. (rationale: postmortem/095)
+
+- **Use the web whale-tail running animation**: native and Doom mode lines
+  replace the progress bar with the web whale's 60-frame, three-second loop,
+  driven by the optional `motion-line` package. Doom animates its existing
+  tail without duplicating it; terminals use cycling `DSH...` text. Completed
+  turns, disconnects and buffer cleanup release each chat's playback slot.
+  The tail uses the logo color and a centered 18px display box
+  in both running and idle states. GIF frames clear correctly between
+  poses, preventing trails.
+  (rationale: postmortem/095)
 
 - **Attach any file to a prompt**: `C-c C-a` (`dsh-emacs-attach-file`) and a
   drag-and-drop onto a chat buffer now take any readable file, not only images.

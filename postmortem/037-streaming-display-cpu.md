@@ -1,5 +1,8 @@
 # 037 — Reduce Streaming Redraws and Stop Scroll Corrections
 
+Animation scheduling superseded by [095](095-running-status.md);
+the pending-text redraw coalescing decision is retained.
+
 Implementation commit: `perf: reduce streaming redisplay work`.
 
 ## Background

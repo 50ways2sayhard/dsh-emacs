@@ -1089,8 +1089,14 @@ reconnect — while other sessions' sockets kept rendering.  On error the
 reconnect is re-armed and another connect scheduled."
   (when (buffer-live-p chat)
     (with-current-buffer chat
-      (let ((was-busy (bound-and-true-p dsh-emacs--ml-busy))
-            (process nil))
+      (let* ((session (and dsh-emacs--buffer-session
+                           (dsh-emacs--chat-session-item
+                            dsh-emacs--buffer-session)))
+             (was-busy (or (bound-and-true-p dsh-emacs--ml-busy)
+                           (and (zerop (or dsh-emacs--anchor-seq 0))
+                                session
+                                (dsh-protocol-session-running session))))
+             (process nil))
         (dsh-emacs-events-disconnect chat)
         (condition-case err
             (let* ((url (url-generic-parse-url dsh-emacs-base-url))
@@ -1156,14 +1162,13 @@ reconnect is re-armed and another connect scheduled."
               ;; for fresh buffers and already-settled rows).
               (when (fboundp 'dsh-emacs--command-spinner-revive)
                 (dsh-emacs--command-spinner-revive))
-              ;; The disconnect above also cleared the mode-line busy flag —
-              ;; and with it the C-c C-c interrupt gate, which keys on the
-              ;; same flag.  The send path is the only other place that sets
-              ;; it, so a mid-turn reconnect would leave the turn
-              ;; uninterruptible until the next send.  If a turn was in flight
-              ;; when this connect ran, re-light the spinner; the real
-              ;; `turn/end' render still clears it when the turn ends (no-op
-              ;; for fresh buffers and settled turns).
+              ;; Disconnect clears the local busy flag.  Restore a running
+              ;; turn from the previous connection; only a fresh transcript
+              ;; may seed from cached host status, since its bounded follow
+              ;; window may omit turn/start.  An existing transcript may have
+              ;; consumed turn/end before the host cache caught up: that end
+              ;; is deduplicated on replay and must not be undone by the cache.
+              ;; Seed before replay so a new turn/end can still clear it.
               (when (and was-busy (fboundp 'dsh-emacs--ml-busy-set))
                 (dsh-emacs--ml-busy-set t)))
           (error

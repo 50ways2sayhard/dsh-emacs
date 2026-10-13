@@ -39,10 +39,19 @@
 (declare-function dsh-emacs-subagent-indicator "dsh-emacs-subagent" ())
 
 (require 'cl-lib)
+(require 'color)
 (require 'dsh-emacs-protocol)
 (require 'dsh-emacs-ui)
 (require 'dsh-emacs-faces)
 (require 'dsh-emacs-tokens)
+;; Animation is optional; a missing library leaves a static running caption.
+(require 'motion-line nil t)
+(declare-function motion-line-playing-p "motion-line" (slot))
+(declare-function motion-line-play "motion-line" (slot clip &rest options))
+(declare-function motion-line-clip "motion-line" (duration renderer))
+(declare-function motion-line-stop "motion-line" (slot))
+(declare-function motion-line-string "motion-line" (slot))
+(defvar motion-line-redisplay-function)
 
 ;; doom-modeline integration references it without depending on it: when
 ;; present, the official API splices the stats segment into its layout (right
@@ -51,6 +60,7 @@
 (declare-function doom-modeline-def-segment "doom-modeline-core" (name &rest body))
 (declare-function doom-modeline-add-segment "doom-modeline-core" (segment anchor &optional position modeline))
 (declare-function doom-modeline-remove-segment "doom-modeline-core" (segment &optional modeline))
+(defvar nerd-icons-mode-icon-alist)
 
 ;; Queue indicator (dsh-emacs assembles dsh-emacs-queue and reads it back at
 ;; runtime).
@@ -90,7 +100,7 @@ shows the work, and the step number is diagnostic rather than actionable."
     :segments (model effort preset permission ctx))
   "Plist describing the mode-line segments to render and the separator.
 The compact status line sits right next to the DSH mode name in the mode
-line, e.g.  DSH(deepseek-v4-flash·max·code·[shield] CH95%).  Each
+line, e.g.  DSH (deepseek-v4-flash max code [shield] 95.0%).  Each
 segment is one of:
   provider   — provider id serving the model (e.g. deepseek; opt-in — the
                provider also rides the model segment's tooltip)
@@ -142,7 +152,7 @@ cell wide and inherit the segment's face color, which emoji do not."
   "Seconds to cache the git branch shown in the mode-line.
 The branch segment runs `git rev-parse' in a subprocess, which is far too
 expensive to re-run on every mode-line redraw (the running animation alone
-forces a redraw ~12x/s while dsh is executing).  Within this interval the
+can request a redraw ~20x/s while dsh is executing).  Within this interval the
 last result — including a \"not a git repo\" nil — is reused."
   :type 'number
   :group 'dsh-emacs-modeline)
@@ -890,107 +900,58 @@ PERMISSION is the `permissions' projection's `currentValue'."
   (dsh-emacs-modeline-update))
 
 ;;; ---------------------------------------------------------------------------
-;;; Mode line running-state animation (characters that scroll while dsh runs)
+;;; Mode line running-state animation
 ;;; ---------------------------------------------------------------------------
-
-(defconst dsh-emacs--ml-busy-frames
-  ;; Progress bar that fills left→right then drains right→left, borrowing
-  ;; the `progress-bar-filled' type from Malabarba's spinner.el
-  ;; (https://github.com/Malabarba/spinner.el), with the track drawn as
-  ;; square brackets instead of pipes.
-  '("[    ]" "[█   ]" "[██  ]" "[███ ]" "[████]" "[ ███]" "[  ██]" "[   █]")
-  "Frames for the mode-line running animation (filled progress bar).")
-
-(defconst dsh-emacs--ml-busy-interval 0.08
-  "Seconds between mode-line running-animation frames (~12.5fps).")
 
 (defvar-local dsh-emacs--ml-busy nil
   "Non-nil while this chat buffer's dsh session is executing a prompt.")
 
-(defvar-local dsh-emacs--ml-busy-index 0
-  "Current frame index of the mode-line running animation.
-Buffer-local: each busy session owns its animation frame, so two sessions
-running at once never fight over one counter (the index is only advanced
-by the owning buffer's own timer).")
+(defvar-local dsh-emacs--modeline-run-start nil
+  "Local time when this buffer last entered the running state.
+Cleared on turn completion or disconnect; never inferred from old history.")
 
-(defvar-local dsh-emacs--ml-busy-timer nil
-  "Timer object driving the mode-line running animation.
-Buffer-local: every busy chat buffer drives its own animation; a single
-global timer would let one session's `turn/end' (rendered in a hidden
-buffer) cancel the visible session's spinner.")
-
-(defun dsh-emacs--ml-busy-tick (buffer)
-  "Advance one frame of the mode-line running animation and redraw it.
-Auto-stops when BUFFER is gone or no longer busy.  BUFFER is passed
-explicitly because the timer callback may otherwise run in any buffer."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (if (and dsh-emacs--ml-busy (timerp dsh-emacs--ml-busy-timer))
-          (progn
-            (setq dsh-emacs--ml-busy-index
-                  (mod (1+ dsh-emacs--ml-busy-index)
-                       (length dsh-emacs--ml-busy-frames)))
-            ;; Pending text will redraw this window shortly.  Advance the
-            ;; indicator now, but avoid a separate mode-line layout between
-            ;; text batches.  Quiet visible turns keep their animation.
-            (when (and (get-buffer-window (current-buffer) 0)
-                       (not (or (plist-get
-                                 (bound-and-true-p dsh-emacs--streaming-assistant)
-                                 :timer)
-                                (plist-get
-                                 (bound-and-true-p dsh-emacs--streaming-thinking)
-                                 :timer))))
-              (force-mode-line-update)))
-        ;; Buffer no longer busy (turn/end already ran): stop in place.
-        (dsh-emacs--ml-busy-stop)))))
-
-(defun dsh-emacs--ml-busy-start ()
-  "Start the mode-line running animation for the current buffer."
-  (dsh-emacs--ml-busy-stop)
-  (setq dsh-emacs--ml-busy-index 0
-        dsh-emacs--ml-busy-timer
-        (run-at-time nil dsh-emacs--ml-busy-interval
-                     #'dsh-emacs--ml-busy-tick (current-buffer))))
-
-(defun dsh-emacs--ml-busy-stop ()
-  "Stop the mode-line running animation and cancel its timer."
-  (when (timerp dsh-emacs--ml-busy-timer)
-    (cancel-timer dsh-emacs--ml-busy-timer))
-  (setq dsh-emacs--ml-busy-timer nil
-        dsh-emacs--ml-busy-index 0))
+(defun dsh-emacs-modeline--animation-redisplay ()
+  "Let pending text paint the whale tail, otherwise request a redraw."
+  (unless (or (plist-get (bound-and-true-p dsh-emacs--streaming-assistant)
+                        :timer)
+              (plist-get (bound-and-true-p dsh-emacs--streaming-thinking)
+                        :timer))
+    (force-mode-line-update)))
 
 (defun dsh-emacs--ml-busy-set (flag)
-  "Set the current buffer's running-state flag to FLAG.
-Starting the flag drives the mode-line spinner; clearing it stops the timer
-and drops the turn's step badge (the turn is over).
-Call in the chat buffer whose mode-line should animate."
+  "Set this buffer's running state to FLAG and update its animation slot.
+Repeated running snapshots preserve playback position.  Clearing the flag
+also drops the finished turn's step badge."
   (setq dsh-emacs--ml-busy (and flag t))
   (if dsh-emacs--ml-busy
-      (dsh-emacs--ml-busy-start)
-    (setq dsh-emacs--modeline-step nil)
-    (dsh-emacs--ml-busy-stop)))
+      (progn
+        (unless dsh-emacs--modeline-run-start
+          (setq dsh-emacs--modeline-run-start (float-time)))
+        (when (and (featurep 'motion-line)
+                   (not (motion-line-playing-p 'dsh-running)))
+          (setq-local motion-line-redisplay-function
+                      #'dsh-emacs-modeline--animation-redisplay)
+          (motion-line-play
+           'dsh-running
+           (motion-line-clip 3 #'dsh-emacs-modeline--running-status))))
+    (setq dsh-emacs--modeline-step nil
+          dsh-emacs--modeline-run-start nil)
+    (when (featurep 'motion-line)
+      (motion-line-stop 'dsh-running)))
+  (unless (featurep 'motion-line)
+    (force-mode-line-update)))
 
 (defun dsh-emacs--ml-busy-clear ()
-  "Clear the running-state flag and cancel the animation timer.
-Public teardown used when the event stream is disconnected or the chat
-buffer is being abandoned; the spinner must never keep ticking detached."
-  (setq dsh-emacs--ml-busy nil
-        dsh-emacs--modeline-step nil)
-  (dsh-emacs-modeline-reset-execution)
-  (dsh-emacs--ml-busy-stop))
+  "Clear execution status and release this buffer's running animation."
+  (dsh-emacs--ml-busy-set nil)
+  (dsh-emacs-modeline-reset-execution))
 
 (defun dsh-emacs--ml-busy-indicator ()
-  "Return the current running-animation character for the mode-line.
-Empty string when this buffer is not executing, so the spinner is hidden."
-  (if (and (bound-and-true-p dsh-emacs--ml-busy)
-           (boundp 'dsh-emacs--ml-busy-frames)
-           (boundp 'dsh-emacs--ml-busy-index))
-      (propertize
-       (nth (mod dsh-emacs--ml-busy-index
-                 (length dsh-emacs--ml-busy-frames))
-            dsh-emacs--ml-busy-frames)
-       'face 'dsh-emacs-mode-line-busy-face)
-    ""))
+  "Return the running animation or a static caption, empty when idle."
+  (cond
+   ((not dsh-emacs--ml-busy) "")
+   ((featurep 'motion-line) (motion-line-string 'dsh-running))
+   (t (propertize "Deep diving" 'face 'dsh-emacs-modeline-running-face))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Structural overlay initialization
@@ -1052,13 +1013,14 @@ and text properties remain intact."
 (defun dsh-emacs-modeline--ml-indicator ()
   "Return the running animation, step and execution feedback near the mode name.
 Standalone compaction has feedback even while no turn animation is running."
-  (let* ((frame (dsh-emacs--ml-busy-indicator))
+  (let* ((frame (if dsh-emacs-modeline--doom-segment-installed ""
+                  (dsh-emacs--ml-busy-indicator)))
          (text (dsh-emacs-modeline--join
                 (unless (string-empty-p frame)
                   (propertize frame
                               'help-echo "dsh is running a request…"
                               'mouse-face 'mode-line-highlight))
-                (unless (string-empty-p frame)
+                (when dsh-emacs--ml-busy
                   (dsh-emacs-modeline--step-indicator))
                 (dsh-emacs-modeline--plan-indicator)
                 (dsh-emacs-modeline--execution-indicator))))
@@ -1206,22 +1168,337 @@ The visible whale matches the shield height without making the line taller.")
 (defvar dsh-emacs-modeline--logo-labels nil
   "Alist of whale colors to cached mode names with image display properties.")
 
-(defun dsh-emacs-modeline--mode-name ()
-  "Return a blue whale on dark frames, black on light frames, or DSH.
-Displays without SVG support use the text label.
-Keep the underlying text for accessibility and the standard major-mode menu."
+(defun dsh-emacs-modeline--logo-color ()
+  "Return the shared logo and whale-tail color for the selected frame."
+  (if (eq (frame-parameter nil 'background-mode) 'dark) "#4d6bfe" "#000"))
+
+(defun dsh-emacs-modeline--whale-label ()
+  "Return a larger DSH whale label, or `DSH' when SVG is unavailable."
   (if (and (display-graphic-p) (image-type-available-p 'svg))
-      (let ((color (if (eq (frame-parameter nil 'background-mode) 'dark)
-                       "#4d6bfe" "#000")))
+      (let ((color (dsh-emacs-modeline--logo-color)))
         (or (cdr (assoc color dsh-emacs-modeline--logo-labels))
             (let* ((svg (replace-regexp-in-string
                          "#000" color dsh-emacs-modeline--logo-svg t t))
                    (label (propertize
                            "DSH" 'display
-                           (create-image svg 'svg t :ascent 'center :height 1.0))))
+                           (create-image svg 'svg t :ascent 'center :height 1.3))))
               (push (cons color label) dsh-emacs-modeline--logo-labels)
               label)))
     "DSH"))
+
+;; Static fallback from @deepseek-ai/dsh-client-ui-chat 0.2.0-rc.2,
+;; RunningWhaleTail.js (MIT). The animated web version uses an APNG mask.
+(defconst dsh-emacs-modeline--whale-tail-path
+  "M8.844 13.742C8.967 12.328 8.45 10.4 8.45 9.65C8.45 8.94 8.88 8.43 9.6 8.43C11.285 8.43 12.106 8.281 12.685 8.104C13.71 7.791 14.585 6.768 15.055 5.945C15.137 5.803 14.99 5.641 14.829 5.671C13.829 5.86 12.828 5.376 11.827 4.978C10.659 4.514 9.491 4.707 8.935 4.876C8.805 4.915 8.658 4.819 8.636 4.686C8.468 3.643 7.405 2.615 5.498 2.238C4.54 2.048 3.748 1.574 3.347 1.202C3.252 1.113 3.088 1.125 3.03 1.242C2.628 2.059 2.168 3.82 5.248 6.115C5.82 6.494 6.31 6.785 6.574 7.637C6.72 8.104 6.157 9.168 6.061 9.368C5.157 11.27 5.089 12.19 4.926 13.742")
+
+(defvar dsh-emacs-modeline--whale-tail-labels nil
+  "Alist of mode-line colors to cached DSH whale-tail labels.")
+
+;; Embedded whale artwork, derived from DeepSeek Harness (MIT).
+;; Regenerate with scripts/build-whale-tail.py; see assets/dsh-whale-tail.md.
+;; Copyright (c) 2026 DeepSeek
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
+(defconst dsh-emacs-modeline--whale-tail-gif-base64
+  "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
+hDrUJsWqS2dKzWk0KACqUFnuDOu1rFmBAQEAOw=="
+  "Base64 GIF mask: sixty 28×28 frames, each displayed for 50ms.")
+
+(defvar dsh-emacs-modeline--whale-tail-gif-data nil
+  "Raw APNG-derived GIF frames used for the running whale tail.")
+
+(defun dsh-emacs-modeline--whale-tail-animation-data (color)
+  "Return the animated tail GIF tinted to COLOR."
+  (unless dsh-emacs-modeline--whale-tail-gif-data
+    (setq dsh-emacs-modeline--whale-tail-gif-data
+          (base64-decode-string dsh-emacs-modeline--whale-tail-gif-base64)))
+  (let ((data (copy-sequence dsh-emacs-modeline--whale-tail-gif-data))
+        (rgb (color-values color)))
+    ;; The asset's two-entry global palette reserves index 0 for transparent
+    ;; pixels and index 1 for the foreground color.
+    (when (and (> (length data) 18)
+               (string-prefix-p "GIF89a" data)
+               (= (aref data 10) #xf0)
+               (= (length rgb) 3))
+      (let ((offset 16))
+        (dolist (component rgb)
+          (aset data offset (logand #xff (lsh component -8)))
+          (setq offset (1+ offset)))))
+    data))
+
+(defvar dsh-emacs-modeline--whale-tail-frames nil
+  "Last (COLOR . FRAMES) for the web whale's sixty indexed GIF images.")
+
+(defun dsh-emacs-modeline--running-frame (seconds)
+  "Render the web whale at local SECONDS without starting image timers.
+The embedded asset retains the web APNG's sixty 50ms frames.  GIF image
+indices are selected explicitly; redisplay only sees the cached string."
+  (if (and (display-graphic-p) (image-type-available-p 'gif))
+      (let ((color (dsh-emacs-modeline--logo-color)))
+        (unless (equal color (car dsh-emacs-modeline--whale-tail-frames))
+          (let ((data (dsh-emacs-modeline--whale-tail-animation-data color)))
+            (setq dsh-emacs-modeline--whale-tail-frames
+                  (cons color
+                        (vconcat
+                         (cl-loop for index below 60 collect
+                                  (propertize
+                                   "DSH" 'display
+                                   (create-image data 'gif t :index index
+                                                 :width 18 :height 18
+                                                 :ascent 'center))))))))
+        (aref (cdr dsh-emacs-modeline--whale-tail-frames)
+              (min 59 (floor (* seconds 20)))))
+    (propertize (aref ["DSH.  " "DSH.. " "DSH..."]
+                      (min 2 (floor seconds)))
+                'face 'dsh-emacs-mode-line-busy-face)))
+
+(defun dsh-emacs-modeline--running-status (phase)
+  "Compose the whale, sweeping caption and elapsed time at loop PHASE.
+PHASE drives only the three-second visual loop.  Elapsed time measures
+this buffer's running interval and continues across animation loops."
+  (let* ((caption (propertize "Deep diving"
+                              'face 'dsh-emacs-modeline-running-face))
+         (elapsed (max 0 (floor (- (float-time)
+                                   (or dsh-emacs--modeline-run-start
+                                       (float-time))))))
+         (duration (if (< elapsed 60) (format "%ds" elapsed)
+                     (format "%dm%02ds" (/ elapsed 60) (% elapsed 60)))))
+    (when (display-graphic-p)
+      (let* ((base (color-name-to-rgb
+                    (face-foreground 'dsh-emacs-modeline-running-face nil t)))
+             (peak (color-name-to-rgb
+                    (face-foreground
+                     'dsh-emacs-modeline-running-highlight-face nil t)))
+             ;; Enter and exit outside the text so the loop has a quiet gap.
+             (center (- (* (/ phase 3.0) (+ (length caption) 6)) 3)))
+        (when (and base peak)
+          (dotimes (index (length caption))
+            (let ((strength (max 0 (- 1 (/ (abs (- index center)) 2.0)))))
+              (when (> strength 0)
+                (put-text-property
+                 index (1+ index) 'face
+                 (list :inherit 'dsh-emacs-modeline-running-face
+                       :foreground
+                       (apply #'color-rgb-to-hex
+                              (append (cl-mapcar
+                                       (lambda (low high)
+                                         (+ low (* strength (- high low))))
+                                       base peak)
+                                      '(2))))
+                 caption)))))))
+    (concat (dsh-emacs-modeline--running-frame phase) " " caption
+            (propertize (concat " · " duration)
+                        'face 'dsh-emacs-modeline-running-face))))
+
+(defun dsh-emacs-modeline--whale-tail-label ()
+  "Return the running or idle tail, using a centered 18-pixel display box."
+  (cond
+   (dsh-emacs--ml-busy (dsh-emacs--ml-busy-indicator))
+   ((and (display-graphic-p) (image-type-available-p 'svg))
+    (let ((color (dsh-emacs-modeline--logo-color)))
+      (or (cdr (assoc color dsh-emacs-modeline--whale-tail-labels))
+          (let* ((svg (format
+                       (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                               "width=\"18\" height=\"18\" "
+                               "viewBox=\"0 0 16 16\" fill=\"none\">"
+                               "<path d=\"%s\" stroke=\"%s\" "
+                               "stroke-width=\"1\"/></svg>")
+                       dsh-emacs-modeline--whale-tail-path color))
+                 (label (propertize
+                         "DSH" 'display
+                         (create-image svg 'svg t :ascent 'center))))
+            (push (cons color label) dsh-emacs-modeline--whale-tail-labels)
+            label))))
+   (t "DSH")))
+
+(defun dsh-emacs-modeline--nerd-icon (_icon-name &rest _args)
+  "Return the DSH whale for Nerd Icons' major-mode lookup."
+  (dsh-emacs-modeline--whale-label))
+
+(defun dsh-emacs-modeline--nerd-icon-for-mode (orig-fn mode &rest args)
+  "Return the DSH whale for MODE, otherwise call ORIG-FN with ARGS."
+  (if (eq mode 'dsh-emacs-mode)
+      (dsh-emacs-modeline--whale-label)
+    (apply orig-fn mode args)))
+
+(with-eval-after-load 'nerd-icons
+  ;; Nerd Icons caches mode icons; this intercepts DSH before stale cached
+  ;; results reach `nerd-icons-completion' buffer candidates.
+  (advice-add 'nerd-icons-icon-for-mode :around
+              #'dsh-emacs-modeline--nerd-icon-for-mode)
+  (add-to-list 'nerd-icons-mode-icon-alist
+               '(dsh-emacs-mode dsh-emacs-modeline--nerd-icon "DSH")))
+
+(defun dsh-emacs-modeline--mode-name ()
+  "Return a blue whale on dark frames, black on light frames, or DSH.
+Displays without SVG support use the text label.
+Keep the underlying text for accessibility and the standard major-mode menu."
+  (dsh-emacs-modeline--whale-label))
 
 (defun dsh-emacs-modeline--splice (base)
   "Return BASE with the dsh mode-line segments spliced in.
@@ -1261,27 +1538,43 @@ mode name and protects the final column on right-aligned mode lines."
       (if (string-empty-p text) "" (concat " " text " ")))))
 
 (defun dsh-emacs-modeline--doom-major-mode (text)
-  "Remove Doom's duplicate mode-label padding in dsh buffers from TEXT.
-Neighboring Doom segments and our stats already supply the separating
-spaces.  Keep the label's image, faces and standard major-mode menu."
+  "Show the DSH Web running-status whale tail in Doom's mode slot.
+Preserve the standard major-mode menu and Doom's segment styling."
   (if (and (derived-mode-p 'dsh-emacs-mode) (stringp text))
-      (dsh-emacs-modeline--join text)
+      (let ((label (copy-sequence (dsh-emacs-modeline--whale-tail-label))))
+        (add-face-text-property 0 (length label)
+                                (get-text-property 1 'face text) t label)
+        (propertize label
+                    'help-echo (get-text-property 1 'help-echo text)
+                    'mouse-face (get-text-property 1 'mouse-face text)
+                    'local-map mode-line-major-mode-keymap))
     text))
 
+(defun dsh-emacs-modeline--doom-buffer-file-icon (orig-fn &rest args)
+  "Skip Doom's file-icon refresh for a fileless DSH chat buffer."
+  (if (and (derived-mode-p 'dsh-emacs-mode) (null buffer-file-name))
+      nil
+    (apply orig-fn args)))
+
+(with-eval-after-load 'doom-modeline-segments
+  (when (fboundp 'doom-modeline-update-buffer-file-icon)
+    (advice-add 'doom-modeline-update-buffer-file-icon :around
+                #'dsh-emacs-modeline--doom-buffer-file-icon)))
+
 (defun dsh-emacs-modeline--install-doom-segment ()
-  "Register the dsh stats as a doom-modeline segment after `major-mode'.
-Returns t on success; nil when doom-modeline is unavailable or lacks the
+  "Register the DSH whale before `buffer-info' and stats after `major-mode'.
+Returns t on success; nil when Doom Modeline is unavailable or lacks either
 anchor (caller then falls back to the plain mode-line splice)."
   (when (and (featurep 'doom-modeline)
              (fboundp 'doom-modeline-def-segment)
              (fboundp 'doom-modeline-add-segment)
              (boundp 'doom-modeline--modelines)
              (boundp 'doom-modeline--fn-alist)
-             ;; Probe the built-in "main" modeline for the mode-name anchor.
              (let* ((def (assq 'main (symbol-value 'doom-modeline--modelines)))
-                    (sides (cdr def))              ; (lhs rhs)
-                    (rhs (and sides (cadr sides))))
-               (and rhs (memq 'major-mode rhs))))
+                    (sides (cdr def))
+                    (lhs (car sides))
+                    (rhs (cadr sides)))
+               (and (memq 'buffer-info lhs) (memq 'major-mode rhs))))
     (let ((renderer (alist-get 'major-mode
                                (symbol-value 'doom-modeline--fn-alist))))
       (when (and (symbolp renderer) (fboundp renderer))
@@ -1291,21 +1584,44 @@ anchor (caller then falls back to the plain mode-line splice)."
       ;; Define the segment at runtime with eval so the official macro
       ;; (not expandable at our byte-compile time — it lives in the user's
       ;; doom-modeline) expands against the actually installed version.
+      (unless (alist-get 'dsh-emacs-whale
+                         (symbol-value 'doom-modeline--fn-alist))
+        (eval '(doom-modeline-def-segment dsh-emacs-whale
+                 (when (derived-mode-p 'dsh-emacs-mode)
+                   (propertize
+                     (dsh-emacs-modeline--mode-name)
+                     'help-echo "Major mode\nmouse-1: Display major mode menu\nmouse-2: Show help for major mode\nmouse-3: Toggle minor modes"
+                     'face (doom-modeline-face
+                            'doom-modeline-buffer-major-mode)
+                     'mouse-face 'doom-modeline-highlight
+                     'local-map mode-line-major-mode-keymap)))))
       (unless (alist-get 'dsh-emacs-stats
                          (symbol-value 'doom-modeline--fn-alist))
         (eval '(doom-modeline-def-segment dsh-emacs-stats
                 (dsh-emacs-modeline--doom-segment))))
-      (doom-modeline-add-segment 'dsh-emacs-stats 'major-mode :after)
       (setq dsh-emacs-modeline--doom-segment-installed t))
+    ;; Custom layouts use the same anchors.  Check each layout on every setup
+    ;; so a later definition gets its segments without duplicating earlier ones.
+    ;; Doom's API continues to honor `doom-modeline-excluded-modelines'.
+    (dolist (definition (symbol-value 'doom-modeline--modelines))
+      (pcase-let* ((`(,name ,lhs ,rhs) definition)
+                   (segments (append lhs rhs)))
+        (when (and (memq 'buffer-info segments)
+                   (not (memq 'dsh-emacs-whale segments)))
+          (doom-modeline-add-segment 'dsh-emacs-whale 'buffer-info :before name))
+        (when (and (memq 'major-mode segments)
+                   (not (memq 'dsh-emacs-stats segments)))
+          (doom-modeline-add-segment 'dsh-emacs-stats 'major-mode :after name))))
     ;; Verify the segment actually landed somewhere.
     (let* ((def (assq 'main (symbol-value 'doom-modeline--modelines)))
            (sides (cdr def))
            (lhs (car sides))
            (rhs (cadr sides)))
-      (or (memq 'dsh-emacs-stats lhs) (memq 'dsh-emacs-stats rhs)))))
+      (and (memq 'dsh-emacs-whale lhs)
+           (memq 'dsh-emacs-stats rhs)))))
 
 (defun dsh-emacs-modeline--remove-doom-segment ()
-  "Unregister the dsh stats segment from doom-modeline."
+  "Unregister the DSH whale and stats segments from Doom Modeline."
   (when (boundp 'doom-modeline--fn-alist)
     (let ((renderer (alist-get 'major-mode
                                (symbol-value 'doom-modeline--fn-alist))))
@@ -1314,18 +1630,20 @@ anchor (caller then falls back to the plain mode-line splice)."
   (when (and dsh-emacs-modeline--doom-segment-installed
              (featurep 'doom-modeline)
              (fboundp 'doom-modeline-remove-segment))
+    (doom-modeline-remove-segment 'dsh-emacs-whale)
     (doom-modeline-remove-segment 'dsh-emacs-stats)
     (setq dsh-emacs-modeline--doom-segment-installed nil)))
 
 (defun dsh-emacs-modeline-setup ()
   "Initialize the mode-line structures and splice dsh segments into the mode line.
 The buffer keeps its existing (default or user-customized) mode-line-format;
-dsh only adds the compact stats next to the DSH mode name and the running
-animation.  Splice and structural overlay happen unconditionally: whether
-stats are actually shown is decided per redraw by `dsh-emacs-modeline-enabled'
-(evaluated inside the mode-line `:eval'), so toggling the mode-line on later
-works without reopening the session.  Should be called from
-`dsh-emacs-mode-hook' or after creating a dsh-emacs buffer."
+Doom places the DSH whale before the buffer name, and the stats stay beside the
+right-side major-mode segment.  The running animation is also composed here.
+Splice and structural overlay happen unconditionally: whether stats are shown
+is decided per redraw by `dsh-emacs-modeline-enabled' (evaluated inside the
+mode-line `:eval'), so toggling the mode-line on later works without reopening
+the session.  Should be called from `dsh-emacs-mode-hook' or after creating a
+dsh-emacs buffer."
   ;; Each open re-accumulates usage from the freshly loaded history, so
   ;; drop any usage left over from a previous visit to this buffer.
   (setq dsh-emacs--modeline-usage nil)

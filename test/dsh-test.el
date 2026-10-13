@@ -691,6 +691,35 @@ candidates as the UI would via `all-completions', not by destructuring."
       (null (dsh-emacs-modeline--permission-nerd-icon "auto" 'default))
       (null (dsh-emacs-modeline--permission-nerd-icon "custom" 'default)))))
 
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (let ((called nil))
+    (dsh-test-assert "doom-file-icon-skipped-for-fileless-dsh-buffer"
+      (null
+       (dsh-emacs-modeline--doom-buffer-file-icon
+        (lambda (&rest _args)
+          (setq called t)
+          (signal 'wrong-type-argument '(stringp nil)))))
+      (not called))))
+(let ((called nil))
+  (dsh-test-assert "doom-file-icon-delegates-for-other-buffers"
+    (eq 'delegated
+        (with-temp-buffer
+          (dsh-emacs-modeline--doom-buffer-file-icon
+           (lambda (&rest _args)
+             (setq called t)
+             'delegated))))
+    called))
+
+(let ((cached-icon (lambda (&rest _args) "cached generic icon")))
+  (dsh-test-assert "nerd-icons-dsh-mode-bypasses-cached-generic-icon"
+    (equal "DSH"
+           (dsh-emacs-modeline--nerd-icon-for-mode
+            cached-icon 'dsh-emacs-mode))
+    (equal "cached generic icon"
+           (dsh-emacs-modeline--nerd-icon-for-mode
+            cached-icon 'fundamental-mode))))
+
 (dsh-test-assert "permission-short-fallback-bounded"
   (equal "ws" (dsh-emacs-modeline--permission-short "workspace-write"))
   (equal "full" (dsh-emacs-modeline--permission-short "danger-full-access"))
@@ -5779,18 +5808,18 @@ Lets a test drive a malformed content value through the result path."
                            (dsh-emacs-make-usage 100 50)
                            dsh-emacs--modeline-model "deepseek-v4-flash-0731"
                            dsh-emacs--modeline-effort "max"
-                           dsh-emacs--modeline-preset "standard"
-                           dsh-emacs--ml-busy t
-                           dsh-emacs--ml-busy-index 4)
+                           dsh-emacs--modeline-preset "standard")
+               (dsh-emacs--ml-busy-set t)
                (dsh-emacs-modeline--doom-segment)))))
-  (dsh-test-assert "doom-segment-includes-busy-animation"
+  (dsh-test-assert "doom-segment-includes-running-caption"
     (string-match-p "deepseek-v4-flash-0731" txt)
     (string-match-p "max" txt)
     (string-match-p "standard" txt)
-    (string-match-p "████" txt)
-    ;; The animation comes before the stats (right after the DSH mode name)
-    (< (string-match "████" txt)
-       (string-match "deepseek-v4" txt))))
+    (string-match-p "Deep diving" txt)
+    ;; The running caption precedes the stats with or without animation.
+    (let ((caption (string-match "Deep diving" txt))
+          (model (string-match "deepseek-v4" txt)))
+      (and caption model (< caption model)))))
 
 (let ((dsh-emacs--ml-busy nil)
       (dsh-emacs--modeline-usage nil))
@@ -5798,6 +5827,49 @@ Lets a test drive a malformed content value through the result path."
   ;; animation
   (when (not (string-match-p "█" (dsh-emacs-modeline--doom-segment)))
     (dsh-test-pass "doom-segment-idle-has-no-spinner")))
+
+;; Register through Doom's layout API for custom layouts too, including a
+;; layout defined after another chat has installed the segments already.
+(let ((dsh-emacs-modeline--doom-segment-installed nil))
+  (cl-progv '(features doom-modeline--modelines doom-modeline--fn-alist)
+      (list (cons 'doom-modeline features)
+            (copy-tree '((main (buffer-info) (major-mode))
+                         (custom (buffer-info) (major-mode))))
+            '((dsh-emacs-whale . defined) (dsh-emacs-stats . defined)))
+    (cl-letf (((symbol-function 'doom-modeline-def-segment) #'ignore)
+              ((symbol-function 'doom-modeline-add-segment)
+               (lambda (segment anchor &optional position modeline)
+                 (dolist (layout (symbol-value 'doom-modeline--modelines))
+                   (when (or (null modeline) (eq modeline (car layout)))
+                     (setcdr layout
+                             (mapcar
+                              (lambda (side)
+                                (cl-loop for item in side append
+                                         (if (eq item anchor)
+                                             (if (eq position :before)
+                                                 (list segment item)
+                                               (list item segment))
+                                           (list item))))
+                              (cdr layout))))))))
+      (dsh-emacs-modeline--install-doom-segment)
+      (dsh-test-assert "doom-custom-layout-receives-whale-and-stats"
+        (equal (assq 'custom (symbol-value 'doom-modeline--modelines))
+               '(custom (dsh-emacs-whale buffer-info)
+                        (major-mode dsh-emacs-stats))))
+      (set 'doom-modeline--modelines
+           (append (symbol-value 'doom-modeline--modelines)
+                   '((late-custom (buffer-info) (major-mode)))))
+      (dsh-emacs-modeline--install-doom-segment)
+      (dsh-emacs-modeline--install-doom-segment)
+      (dsh-test-assert "doom-late-layout-installed-without-duplicates"
+        (equal (cdr (assq 'late-custom
+                          (symbol-value 'doom-modeline--modelines)))
+               '((dsh-emacs-whale buffer-info) (major-mode dsh-emacs-stats)))
+        (cl-every
+         (lambda (layout)
+           (and (= 1 (cl-count 'dsh-emacs-whale (cadr layout)))
+                (= 1 (cl-count 'dsh-emacs-stats (caddr layout)))))
+         (symbol-value 'doom-modeline--modelines))))))
 
 ;; --- Test 46: send-or-stop interrupts when busy (session/cancel) and sends
 ;; when idle ---
@@ -15798,7 +15870,7 @@ received, RESULT is FN's return value."
           (dsh-emacs-events-connect buf)
           (dsh-emacs-events--health-stop))
         (when (and dsh-emacs--ml-busy
-                   (timerp dsh-emacs--ml-busy-timer))
+                   (not (string-empty-p (dsh-emacs--ml-busy-indicator))))
           (dsh-test-pass "reconnect-keeps-busy-flag"))
         (dsh-emacs--ml-busy-clear))
     (kill-buffer buf)))
@@ -15828,6 +15900,86 @@ received, RESULT is FN's return value."
           (dsh-test-pass "reconnect-idle-keeps-busy-off")))
     (kill-buffer buf)))
 
+;; A fresh client has no local busy flag.  A long running turn's opening
+;; history window can omit turn/start, so connection must seed from its own
+;; cached session row.  Later turn/end remains authoritative even before the
+;; separate host cache receives its idle update.
+(dolist (running '(t nil))
+  (let ((dsh-emacs--sessions
+         (list (dsh-protocol-session--from-alist
+                `((sessionId . "resumed-running") (running . ,running)))))
+        (dsh-emacs--current-session "resumed-running"))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "resumed-running")
+      (unwind-protect
+          (cl-letf (((symbol-function 'open-network-stream)
+                     (lambda (&rest _) :fake-proc))
+                    ((symbol-function 'set-process-query-on-exit-flag) #'ignore)
+                    ((symbol-function 'set-process-coding-system) #'ignore)
+                    ((symbol-function 'process-put) #'ignore)
+                    ((symbol-function 'set-process-filter) #'ignore)
+                    ((symbol-function 'set-process-sentinel) #'ignore))
+            (dsh-emacs-events-connect (current-buffer))
+            (dsh-emacs-events--health-stop)
+            (dsh-emacs-events--follow-snapshot
+             (current-buffer)
+             '((cursor . 100) (hasMore . t)
+               (records . [((type . "event")
+                            (event . ((type . "step/start") (seq . 100)
+                                      (data . ((turn . 1) (step . 20))))))])))
+            (dsh-test-assert (format "fresh-connect-restores-running-%s" running)
+              (eq dsh-emacs--ml-busy running)
+              (eq (not (string-empty-p (dsh-emacs--ml-busy-indicator))) running)
+              (or (not (featurep 'motion-line))
+                  (eq (and (motion-line-playing-p 'dsh-running) t) running)))
+            (dsh-emacs-render-event '((type . "turn/end") (seq . 101)))
+            (dsh-test-assert (format "resumed-turn-end-clears-running-%s" running)
+              (null dsh-emacs--ml-busy)
+              (string-empty-p (dsh-emacs--ml-busy-indicator)))
+            ;; A global selection must never light another chat's indicator.
+            (setq-local dsh-emacs--buffer-session "unlisted-session")
+            (dsh-emacs-events-connect (current-buffer))
+            (dsh-emacs-events--health-stop)
+            (dsh-test-assert (format "fresh-connect-isolates-running-%s" running)
+              (null dsh-emacs--ml-busy)))
+        (dsh-emacs-events-disconnect (current-buffer))))))
+
+;; A host status can lag the transcript on the other socket.  Once this
+;; buffer has observed turn/end, reconnect must not resurrect it from cache.
+(let ((dsh-emacs--sessions
+       (list (dsh-protocol-session--from-alist
+              '((sessionId . "settled-reconnect") (running . t))))))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs--buffer-session "settled-reconnect")
+    (dsh-emacs-render-event '((type . "turn/start") (seq . 1)))
+    (dsh-emacs-render-event '((type . "turn/end") (seq . 2)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'open-network-stream)
+                   (lambda (&rest _) :fake-proc))
+                  ((symbol-function 'set-process-query-on-exit-flag) #'ignore)
+                  ((symbol-function 'set-process-coding-system) #'ignore)
+                  ((symbol-function 'process-put) #'ignore)
+                  ((symbol-function 'set-process-filter) #'ignore)
+                  ((symbol-function 'set-process-sentinel) #'ignore))
+          (dsh-emacs-events-connect (current-buffer))
+          (dsh-emacs-events--health-stop)
+          (dsh-test-assert "reconnect-keeps-confirmed-turn-end-over-stale-cache"
+            (null dsh-emacs--ml-busy))
+          (dsh-emacs-events--follow-snapshot
+           (current-buffer)
+           '((cursor . 2)
+             (records . [((type . "event")
+                          (event . ((type . "turn/start") (seq . 1))))
+                         ((type . "event")
+                          (event . ((type . "turn/end") (seq . 2))))])))
+          (dsh-emacs-events--host-session-status "settled-reconnect" :json-false)
+          (dsh-test-assert "reconnect-deduped-completion-stays-idle"
+            (null dsh-emacs--ml-busy)
+            (string-empty-p (dsh-emacs--ml-busy-indicator))))
+      (dsh-emacs-events-disconnect (current-buffer)))))
+
 ;; --- Test 98j: event stream decides busy --- turn/start lights it up,
 ;; turn/end turns it off ---
 ;; When reopening a session / refetching history, an unclosed turn
@@ -15839,7 +15991,7 @@ received, RESULT is FN's return value."
         (dsh-emacs--ml-busy-clear)
         (dsh-emacs-render-event '((type . "turn/start") (seq . 1)))
         (when (and dsh-emacs--ml-busy
-                   (timerp dsh-emacs--ml-busy-timer))
+                   (not (string-empty-p (dsh-emacs--ml-busy-indicator))))
           (dsh-test-pass "turn-start-lights-busy"))
         (dsh-emacs-render-event '((type . "turn/end") (seq . 2)))
         (when (null dsh-emacs--ml-busy)
@@ -15906,12 +16058,12 @@ received, RESULT is FN's return value."
         (with-current-buffer buf-a
           (dsh-emacs-mode)
           (dsh-emacs--ml-busy-set t)
-          (when (and dsh-emacs--ml-busy (timerp dsh-emacs--ml-busy-timer))
+          (when (and dsh-emacs--ml-busy (not (string-empty-p (dsh-emacs--ml-busy-indicator))))
             (dsh-test-pass "multi-session-busy-a-lit")))
         (with-current-buffer buf-b
           (dsh-emacs-mode)
           (dsh-emacs--ml-busy-set t)
-          (when (and dsh-emacs--ml-busy (timerp dsh-emacs--ml-busy-timer))
+          (when (and dsh-emacs--ml-busy (not (string-empty-p (dsh-emacs--ml-busy-indicator))))
             (dsh-test-pass "multi-session-busy-b-lit"))
           ;; B ends: only B's own spinner goes dark
           (dsh-emacs--ml-busy-set nil)
@@ -15919,7 +16071,7 @@ received, RESULT is FN's return value."
             (dsh-test-pass "multi-session-busy-b-cleared")))
         ;; Key point: B's turn/end must not cut off A's spinner too
         (with-current-buffer buf-a
-          (when (and dsh-emacs--ml-busy (timerp dsh-emacs--ml-busy-timer))
+          (when (and dsh-emacs--ml-busy (not (string-empty-p (dsh-emacs--ml-busy-indicator))))
             (dsh-test-pass "multi-session-busy-a-survives-b-clear"))
           (dsh-emacs--ml-busy-clear))
         ;; command spinner: same-key optimistic rows do not overwrite each other
@@ -16026,7 +16178,7 @@ received, RESULT is FN's return value."
           (dsh-emacs--submit-plain "fast" nil t))
         (dsh-test-assert "fast-run-end-before-callback-keeps-spinner-off"
           (null dsh-emacs--ml-busy)
-          (null dsh-emacs--ml-busy-timer))
+          (string-empty-p (dsh-emacs--ml-busy-indicator)))
         (dsh-emacs-events--watchdog-stop))
     (kill-buffer buf)))
 
@@ -16048,7 +16200,7 @@ received, RESULT is FN's return value."
                    (lambda () nil)))
           (dsh-emacs--submit-plain "normal" nil t))
         (dsh-test-assert "pending-run-callback-lights-spinner"
-          (and dsh-emacs--ml-busy (timerp dsh-emacs--ml-busy-timer)))
+          (and dsh-emacs--ml-busy (not (string-empty-p (dsh-emacs--ml-busy-indicator)))))
         (dsh-emacs--ml-busy-clear)
         (dsh-emacs-events--watchdog-stop))
     (kill-buffer buf)))
@@ -16458,7 +16610,7 @@ input-area draft (which carries no such property) is not counted."
         (dsh-emacs--ml-busy-clear)
         (dsh-emacs-render-event
          '((type . "turn/start") (seq . 1) (data . ((turn . 1)))))
-        (when (and dsh-emacs--ml-busy (timerp dsh-emacs--ml-busy-timer))
+        (when (and dsh-emacs--ml-busy (not (string-empty-p (dsh-emacs--ml-busy-indicator))))
           (dsh-test-pass "turn-error-lights-busy-before-end"))
         ;; Model failure: turn/end + data.reason.kind = "error"
         (dsh-emacs-render-event
@@ -21328,33 +21480,48 @@ ID is the message id, TEXT its single text block, KIND its source kind
             (null (process-get process 'dsh-emacs-event-read-timer))))
       (delete-process process))))
 
-;; Pending text will redraw the busy indicator without an extra forced pass.
-(dolist (kind '(assistant thinking))
-  (with-temp-buffer
-    (let ((owner (current-buffer))
-          (redraws 0))
-      (unwind-protect
-          (progn
-            (dsh-emacs--ml-busy-set t)
-            (set (make-local-variable
-                  (if (eq kind 'assistant) 'dsh-emacs--streaming-assistant
-                    'dsh-emacs--streaming-thinking))
-                 (list :timer 'pending))
-            (cl-letf (((symbol-function 'get-buffer-window)
-                       (lambda (&rest _) (selected-window)))
-                      ((symbol-function 'force-mode-line-update)
-                       (lambda (&rest _) (cl-incf redraws))))
-              (with-temp-buffer (dsh-emacs--ml-busy-tick owner))
-              (dsh-test-assert (format "busy-%s-shares-text-redraw" kind)
-                (= dsh-emacs--ml-busy-index 1)
-                (zerop redraws))
-              (setq dsh-emacs--streaming-assistant nil
-                    dsh-emacs--streaming-thinking nil)
-              (dsh-emacs--ml-busy-tick owner)
-              (dsh-test-assert (format "busy-%s-redraws-during-text-silence" kind)
-                (= dsh-emacs--ml-busy-index 2)
-                (= redraws 1))))
-        (dsh-emacs--ml-busy-clear)))))
+;; Pending text paints the shared animation's cached frame without an extra pass.
+;; Motion Line exposes its clock and visibility as variables (postmortem/002 in
+;; that repository), so the engine needs no `cl-letf' on built-in subrs -- a
+;; stub there cannot reach compiled code.  dsh's own elapsed clock still reads
+;; `float-time', which is our interpreted code.
+(if (featurep 'motion-line)
+    (progn
+      (unless (boundp 'motion-line-current-time-function)
+        (error "Motion Line on the load path predates the clock/visibility seams"))
+      (dolist (kind '(assistant thinking))
+        (with-temp-buffer
+          (let* ((now 100.0)
+                 (redraws 0)
+                 (motion-line-current-time-function (lambda () now))
+                 (motion-line-visible-p-function (lambda () t)))
+            (unwind-protect
+                (cl-letf (((symbol-function 'float-time) (lambda (&rest _) now))
+                          ((symbol-function 'dsh-emacs-modeline--running-frame)
+                           (lambda (seconds) (format "frame-%.1f" seconds))))
+                  (dsh-emacs--ml-busy-set t)
+                  (set (make-local-variable
+                        (if (eq kind 'assistant) 'dsh-emacs--streaming-assistant
+                          'dsh-emacs--streaming-thinking))
+                       (list :timer 'pending))
+                  (cl-letf (((symbol-function 'force-mode-line-update)
+                             (lambda (&rest _) (cl-incf redraws))))
+                    (setq now 100.5)
+                    (cancel-timer motion-line--timer)
+                    (with-temp-buffer (motion-line--tick))
+                    (dsh-test-assert (format "busy-%s-shares-text-redraw" kind)
+                      (equal (dsh-emacs--ml-busy-indicator) "frame-0.5 Deep diving · 0s")
+                      (zerop redraws))
+                    (setq dsh-emacs--streaming-assistant nil
+                          dsh-emacs--streaming-thinking nil
+                          now 101.0)
+                    (cancel-timer motion-line--timer)
+                    (motion-line--tick)
+                    (dsh-test-assert (format "busy-%s-redraws-during-text-silence" kind)
+                      (equal (dsh-emacs--ml-busy-indicator) "frame-1.0 Deep diving · 1s")
+                      (= redraws 1))))
+              (dsh-emacs--ml-busy-clear))))))
+  (princ "SKIP: animation redraw batching (Motion Line not installed)\n"))
 
 ;; A burst writes once per flush; finalization reuses the painted body.
 (with-temp-buffer
@@ -25515,18 +25682,260 @@ messages (e.g. `command/done')."
           (dsh-test-assert "modeline-empty-composition-has-no-padding"
                            (equal (dsh-emacs-modeline--doom-segment) "")))))))
 
+;; A source-only installation can omit an installed Motion Line.
+;; Use a fresh Emacs so this suite's already-loaded engine cannot mask failures.
+(let* ((root (file-name-directory (locate-library "dsh-emacs")))
+       (copy (make-temp-file "dsh-no-motion-line-" t))
+       (probe (expand-file-name "probe.el" copy)))
+  (unwind-protect
+      (progn
+        (dolist (file (directory-files root t "\\`dsh-emacs.*\\.el\\'"))
+          (copy-file file (expand-file-name (file-name-nondirectory file) copy)))
+        (with-temp-file probe
+          (insert ";;; -*- lexical-binding: t; -*-\n")
+          (prin1
+           '(progn
+              (require 'cl-lib)
+              (require 'dsh-emacs)
+              (cl-assert (not (featurep 'motion-line)))
+              (cl-assert (not (fboundp 'motion-line-play)))
+              ;; A source-only install contains no assets directory.  The mask
+              ;; is decoded lazily, cached unchanged, and copied before tinting.
+              (cl-assert (null dsh-emacs-modeline--whale-tail-gif-data))
+              (let* ((data (dsh-emacs-modeline--whale-tail-animation-data "#000"))
+                     (cached dsh-emacs-modeline--whale-tail-gif-data))
+                (cl-assert (not (multibyte-string-p data)))
+                (cl-assert (equal (substring data 16 19) (unibyte-string 0 0 0)))
+                (cl-assert (equal (secure-hash 'sha256 cached)
+                                  "9bf571e538386cef0a76d4e741cae9c3df0a8dbaafa915be71119ea685d8826f"))
+                (dsh-emacs-modeline--whale-tail-animation-data "#000")
+                (cl-assert (eq cached dsh-emacs-modeline--whale-tail-gif-data)))
+              (with-temp-buffer
+                (dsh-emacs-mode)
+                (let ((redraws 0)
+                      (dsh-emacs-modeline-show-step t))
+                  (cl-letf (((symbol-function 'run-at-time)
+                             (lambda (&rest _) (error "Unexpected timer")))
+                            ((symbol-function 'dsh-emacs-modeline--running-frame)
+                             (lambda (&rest _) (error "Unexpected animation")))
+                            ((symbol-function 'force-mode-line-update)
+                             (lambda (&rest _) (cl-incf redraws))))
+                    (dsh-emacs--ml-busy-set nil)
+                    (cl-assert (equal (dsh-emacs--ml-busy-indicator) ""))
+                    (setq redraws 0)
+                    (dsh-emacs--ml-busy-set t)
+                    (cl-assert dsh-emacs--ml-busy)
+                    (cl-assert (> redraws 0))
+                    (cl-assert (equal (dsh-emacs--ml-busy-indicator)
+                                      "Deep diving"))
+                    (let ((start dsh-emacs--modeline-run-start))
+                      (dsh-emacs--ml-busy-set t)
+                      (cl-assert (= start dsh-emacs--modeline-run-start)))
+                    (setq dsh-emacs--modeline-step '(:turn 1 :step 2))
+                    (cl-assert (string-match-p
+                                "Deep diving.*step 2"
+                                (dsh-emacs-modeline--ml-indicator)))
+                    (let* ((dsh-emacs-modeline--doom-segment-installed t)
+                           (label (dsh-emacs-modeline--doom-major-mode
+                                   (propertize " DSH " 'face 'mode-line))))
+                      (cl-assert (equal label "Deep diving"))
+                      (cl-assert (eq (get-text-property 0 'local-map label)
+                                     mode-line-major-mode-keymap))
+                      (cl-assert (not (string-match-p
+                                       "Deep diving"
+                                       (dsh-emacs-modeline--ml-indicator)))))
+                    (setq redraws 0)
+                    (dsh-emacs--ml-busy-clear)
+                    (cl-assert (> redraws 0))
+                    (cl-assert (not dsh-emacs--ml-busy))
+                    (cl-assert (not dsh-emacs--modeline-step))
+                    (cl-assert (not dsh-emacs--modeline-run-start))
+                    (cl-assert (equal (dsh-emacs--ml-busy-indicator) "")))))
+              (princ "fallback-ok"))
+           (current-buffer)))
+        (with-temp-buffer
+          (let ((status (call-process
+                         (expand-file-name invocation-name invocation-directory)
+                         nil t nil "-Q" "--batch" "-L" copy "-l" probe)))
+            (dsh-test-assert "modeline-without-motion-line"
+              (equal status 0)
+              (string-match-p "fallback-ok" (buffer-string)))
+            (unless (equal status 0) (princ (buffer-string))))))
+    (delete-directory copy t)))
+
+;; Running images are indexed frames, never image-animate side effects.
+(let ((dsh-emacs-modeline--whale-tail-frames nil)
+      (created 0)
+      (background 'dark))
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+              ((symbol-function 'image-type-available-p) (lambda (_) t))
+              ((symbol-function 'frame-parameter) (lambda (&rest _) background))
+              ((symbol-function 'color-values)
+               (lambda (color)
+                 (pcase color
+                   ("#4d6bfe" '(#x4d4d #x6b6b #xfefe))
+                   ("#000" '(0 0 0))
+                   (_ (error "Unexpected whale color: %s" color)))))
+              ((symbol-function 'create-image)
+               (lambda (data type data-p &rest props)
+                 (cl-incf created)
+                 (append (list 'image :type type :data data :data-p data-p) props))))
+      (let* ((first (dsh-emacs-modeline--running-frame 0))
+             (next (dsh-emacs-modeline--running-frame 0.05))
+             (last (dsh-emacs-modeline--running-frame 2.99))
+             (image (get-text-property 0 'display first))
+             (data (plist-get (cdr image) :data)))
+        (dsh-test-assert "whale-uses-sixty-web-frames-at-50ms"
+          (= created 60)
+          (= (plist-get (cdr image) :index) 0)
+          (= (plist-get (cdr (get-text-property 0 'display next)) :index) 1)
+          (= (plist-get (cdr (get-text-property 0 'display last)) :index) 59)
+          (= (plist-get (cdr image) :width) 18)
+          (= (plist-get (cdr image) :height) 18)
+          (equal (substring data 16 19) (unibyte-string #x4d #x6b #xfe)))
+        (dsh-test-assert "whale-asset-clears-all-sixty-frames-without-trails"
+          (= 60 (cl-loop with start = 0
+                         with gce = (regexp-quote
+                                     (unibyte-string #x21 #xf9 4 9 5 0 0 0))
+                         while (string-match gce data start)
+                         do (setq start (match-end 0)) count t)))
+        (setq background 'light)
+        (let* ((changed (dsh-emacs-modeline--running-frame 0.5))
+               (changed-image (get-text-property 0 'display changed)))
+          (dsh-test-assert "whale-rebuilds-theme-color-without-resetting-time"
+            (= created 120)
+            (= (plist-get (cdr changed-image) :index) 10)
+            (equal (substring (plist-get (cdr changed-image) :data) 16 19)
+                   (unibyte-string 0 0 0))))))))
+
+(if (featurep 'motion-line)
+    (with-temp-buffer
+      (let ((now 100.0))
+        (cl-letf (((symbol-function 'float-time) (lambda (&rest _) now))
+                  ((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
+          (unwind-protect
+              (progn
+                (dsh-emacs--ml-busy-set t)
+                (setq now 101.5)
+                (motion-line-seek 'dsh-running 1.5)
+                (dsh-emacs--ml-busy-set t)
+                (dsh-test-assert "whale-running-snapshot-keeps-playback-position"
+                  (equal (dsh-emacs--ml-busy-indicator) "DSH..  Deep diving · 1s"))
+                (let ((dsh-emacs-modeline--doom-segment-installed t)
+                      (dsh-emacs-modeline-show-step t)
+                      (dsh-emacs--modeline-step '(:turn 1 :step 2 :start 100)))
+                  (dsh-test-assert "doom-has-one-running-tail-and-keeps-step"
+                    (not (string-match-p "DSH" (dsh-emacs-modeline--ml-indicator)))
+                    (string-match-p "step 2" (dsh-emacs-modeline--ml-indicator))
+                    (equal (dsh-emacs-modeline--whale-tail-label)
+                           "DSH..  Deep diving · 1s")))
+                (cl-letf (((symbol-function 'motion-line-play)
+                           (lambda (&rest _) (error "Playback during redisplay"))))
+                  (dotimes (_ 3) (dsh-emacs-modeline--whale-tail-label)))
+                (dsh-emacs--ml-busy-clear)
+                (dsh-test-assert "whale-stops-and-restores-idle-label"
+                  (not (motion-line-playing-p 'dsh-running))
+                  (equal (dsh-emacs--ml-busy-indicator) "")
+                  (equal (dsh-emacs-modeline--whale-tail-label) "DSH")))
+            (dsh-emacs--ml-busy-clear)))))
+  (princ "SKIP: animation playback (Motion Line not installed)\n"))
+
+;; The running caption counts local busy time independently of its visual loop.
+(if (featurep 'motion-line)
+    (with-temp-buffer
+      (let ((now 100.0))
+        (cl-letf (((symbol-function 'float-time) (lambda (&rest _) now))
+                  ((symbol-function 'display-graphic-p) (lambda (&rest _) nil))
+                  ((symbol-function 'dsh-emacs-modeline--running-frame)
+                   (lambda (_) "tail")))
+          (unwind-protect
+              (progn
+                (dsh-emacs--ml-busy-set t)
+                (dsh-test-assert "running-caption-starts-at-zero"
+                  (equal (dsh-emacs--ml-busy-indicator) "tail Deep diving · 0s"))
+                (setq now 112.9)
+                (motion-line-seek 'dsh-running 12.9)
+                (dsh-emacs--ml-busy-set t)
+                (dsh-test-assert "running-caption-survives-loops-and-snapshots"
+                  (= dsh-emacs--modeline-run-start 100.0)
+                  (equal (dsh-emacs--ml-busy-indicator) "tail Deep diving · 12s"))
+                (setq now 165.0)
+                (motion-line-seek 'dsh-running 65.0)
+                (dsh-test-assert "running-caption-formats-long-turns"
+                  (equal (dsh-emacs--ml-busy-indicator) "tail Deep diving · 1m05s"))
+                (dsh-emacs--ml-busy-clear)
+                (dsh-test-assert "running-caption-clears-clock-and-text"
+                  (null dsh-emacs--modeline-run-start)
+                  (equal (dsh-emacs--ml-busy-indicator) ""))
+                (setq now 200.0)
+                (dsh-emacs--ml-busy-set t)
+                (dsh-test-assert "running-caption-restarts-for-next-turn"
+                  (= dsh-emacs--modeline-run-start 200.0)
+                  (equal (dsh-emacs--ml-busy-indicator) "tail Deep diving · 0s")))
+            (dsh-emacs--ml-busy-clear)))))
+  (princ "SKIP: animation clock (Motion Line not installed)\n"))
+
+;; Doom must append its face without overwriting the caption's sweep.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (let ((dsh-emacs--modeline-run-start 100.0)
+        (image '(image :type gif :index 30))
+        (dsh-emacs--ml-busy t))
+    (cl-letf (((symbol-function 'float-time) (lambda (&rest _) 112.0))
+              ((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+              ((symbol-function 'face-foreground) (lambda (face &rest _) face))
+              ((symbol-function 'color-name-to-rgb)
+               (lambda (face)
+                 (if (eq face 'dsh-emacs-modeline-running-face)
+                     '(0.25 0.25 0.25) '(0.75 0.75 0.75))))
+              ((symbol-function 'dsh-emacs-modeline--running-frame)
+               (lambda (_) (propertize "tail" 'display image))))
+      (let* ((rest (dsh-emacs-modeline--running-status 0))
+             (sweep (dsh-emacs-modeline--running-status 1.5))
+             (pos (+ (string-match "Deep diving" sweep) 5))
+             (face (get-text-property pos 'face sweep)))
+        (dsh-test-assert "running-caption-sweep-changes-properties-only"
+          (equal (substring-no-properties rest) "tail Deep diving · 12s")
+          (equal rest sweep)
+          (not (equal-including-properties rest sweep))
+          (equal (plist-get face :foreground) "#9f9f9f")
+          (equal (get-text-property 0 'display sweep) image))
+        (cl-letf (((symbol-function 'dsh-emacs-modeline--whale-tail-label)
+                   (lambda () sweep)))
+          (let ((formatted (dsh-emacs-modeline--doom-major-mode
+                            (propertize " DSH " 'face 'mode-line))))
+            (dsh-test-assert "doom-keeps-shimmer-face-and-major-mode-menu"
+              (member face (get-text-property pos 'face formatted))
+              (equal (get-text-property 0 'display formatted) image)
+              (eq (get-text-property pos 'local-map formatted)
+                  mode-line-major-mode-keymap)
+              (equal (get-text-property pos 'face sweep) face))))))))
+
 ;; Doom pads both the mode name and its neighboring segments.
-(let* ((image '(image :type svg :data "whale"))
+(let* ((image '(image :type svg :data "whale-tail"))
        (map (make-sparse-keymap))
+       (face '(:inherit (doom-modeline doom-modeline-buffer-major-mode)))
        (label (propertize "DSH" 'display image 'local-map map
-                          'help-echo "Major mode"))
+                          'help-echo "Major mode" 'face face
+                          'mouse-face 'highlight))
        (padded (concat " " label " ")))
   (with-temp-buffer
     (dsh-emacs-mode)
-    (dsh-test-assert "doom-major-mode-removes-duplicate-edge-padding"
-                     (and (fboundp 'dsh-emacs-modeline--doom-major-mode)
-                          (equal-including-properties
-                           (dsh-emacs-modeline--doom-major-mode padded) label))))
+    (cl-letf (((symbol-function 'dsh-emacs-modeline--whale-tail-label)
+               (lambda () label)))
+      (let ((right (dsh-emacs-modeline--doom-major-mode padded)))
+        (dsh-test-assert "doom-major-mode-shows-runtime-whale-tail"
+                         (and (fboundp 'dsh-emacs-modeline--doom-major-mode)
+                              (equal right "DSH")
+                              (eq (get-text-property 0 'display right) image)
+                              (equal (get-text-property 0 'face right) face)
+                              (eq (get-text-property 0 'mouse-face right)
+                                  'highlight)
+                              (equal (get-text-property 0 'help-echo right)
+                                     "Major mode")
+                              (eq (get-text-property 0 'local-map right)
+                                  mode-line-major-mode-keymap))))))
   (with-temp-buffer
     (dsh-test-assert "doom-major-mode-preserves-other-buffers"
                      (and (fboundp 'dsh-emacs-modeline--doom-major-mode)
