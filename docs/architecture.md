@@ -1026,6 +1026,11 @@ reasoning-driven buffer invalidation. See [027](../postmortem/027-thinking-refre
 `emacs -Q --batch -L . -l test/dsh-e2e.el` runs the transport smoke suite.
 `DSH_E2E_URL` selects the server and `DSH_E2E_PRESET` selects the test session's
 preset. `DSH_E2E_PLAN_REVIEW=1` additionally exercises model-generated review.
+`DSH_E2E_RUNNING=1` starts a real sleeping turn and then proves that a cold
+client reopen seeds its running status from the cached host status before the
+follow snapshot can replay anything (the opening window is one message), and
+that cancelling the turn clears the indicator; it needs a working model
+provider and a bash-capable preset.
 
 Timed-question E2E needs a working model and a preset that configures
 `@deepseek-ai/dsh-tool-ask-user` with `mode: timed`, plus the Plan capability

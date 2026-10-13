@@ -19,6 +19,9 @@
 ;; Set DSH_E2E_PLAN_REVIEW=1 to exercise model-generated plan review,
 ;; requesting changes, and approval (requires a working model provider).
 ;; Set DSH_E2E_SUBAGENTS=1 for real delegation, paging, follow-up and stop.
+;; Set DSH_E2E_RUNNING=1 to exercise a real running turn, the running status a
+;; cold client reopen seeds from it, and the cleared animation (requires a
+;; working model provider and a bash-capable preset).
 ;; For timed questions, load this file in a running graphical Emacs, select
 ;; a timed preset via DSH_E2E_PRESET, then call (dsh-emacs-e2e-run t).
 ;; Keep other answer-capable clients disconnected during this test: a Web
@@ -35,6 +38,10 @@
 
 (require 'cl-lib)
 (require 'dsh-emacs)
+
+;; Animation is optional; the slot checks run only when Motion Line is on the
+;; batch load path (see postmortem/096).
+(declare-function motion-line-playing-p "motion-line" (slot))
 
 (defvar dsh-e2e--results nil)
 (defvar dsh-e2e--session-id nil)
@@ -521,6 +528,82 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
         (dolist (chat children)
           (when (buffer-live-p chat) (kill-buffer chat)))))))
 
+(defun dsh-e2e--running-status ()
+  "Exercise a real running turn across a cold client reopen.
+The host must genuinely report the session as running while the turn is in
+flight.  The reopened buffer inherits no local flag, and its connect seed is
+read before the socket can deliver the follow snapshot, so the indicator can
+only come from the session's cached host status.  Needs a working model
+provider and a bash-capable preset: the turn is asked to sleep, keeping it
+in flight across the reopen."
+  (let ((chat dsh-e2e--chat)
+        (session dsh-e2e--session-id))
+    (with-current-buffer chat
+      (dsh-emacs--submit-prompt
+       (concat "Run the bash command `sleep 30` exactly once with the bash "
+               "tool, then reply RUNNING_DONE. Do not use other tools and "
+               "do not ask any question.")))
+    (dsh-e2e--check
+     "running-status-host-reports-running"
+     (dsh-e2e--wait-until
+      (lambda ()
+        (let ((item (dsh-emacs--chat-session-item session)))
+          (and item (dsh-protocol-session-running item))))
+      60)
+     "the live turn never reached the cached session status")
+    (dsh-e2e--check
+     "running-status-live-turn-indicator"
+     (dsh-e2e--wait-until
+      (lambda () (buffer-local-value 'dsh-emacs--ml-busy chat)) 30))
+    (with-current-buffer chat
+      (dsh-e2e--check
+       "running-status-caption-shown"
+       (string-match-p "Deep diving" (dsh-emacs--ml-busy-indicator))))
+    ;; Cold client: killing the buffer drops the local flag.  The seed runs
+    ;; synchronously in `dsh-emacs-events-connect', before the socket can
+    ;; deliver its follow snapshot, so reading the flag here — with no
+    ;; `accept-process-output' since the reopen — observes the cached session
+    ;; status alone.
+    (dsh-emacs-events-disconnect chat)
+    (kill-buffer chat)
+    (let ((dsh-emacs-history-window 1))
+      (dsh-emacs-open-session session)
+      (setq dsh-e2e--chat dsh-emacs--current-buffer)
+      (dsh-e2e--check
+       "running-status-seeded-before-snapshot"
+       (eq (buffer-local-value 'dsh-emacs--ml-busy dsh-e2e--chat) t)
+       "a cold client did not seed the indicator from the cached session status")
+      (unless (dsh-e2e--wait-until
+               (lambda ()
+                 (and (buffer-live-p dsh-e2e--chat)
+                      (buffer-local-value 'dsh-emacs--event-ready
+                                          dsh-e2e--chat)))
+               15)
+        (error "Running session did not reopen")))
+    (with-current-buffer dsh-e2e--chat
+      (dsh-e2e--check
+       "running-status-restored-after-snapshot"
+       (and dsh-emacs--ml-busy
+            (string-match-p "Deep diving" (dsh-emacs--ml-busy-indicator))))
+      (when (featurep 'motion-line)
+        (dsh-e2e--check
+         "running-status-motion-line-slot"
+         (eq (motion-line-playing-p 'dsh-running) t)))
+      (dsh-e2e--rpc
+       "session/cancel"
+       `((request . ((sessionId . ,session)))))
+      (dsh-e2e--check
+       "running-status-clears-on-cancel"
+       (dsh-e2e--wait-until
+        (lambda ()
+          (and (not dsh-emacs--ml-busy)
+               (string-empty-p (dsh-emacs--ml-busy-indicator))))
+        30))
+      (when (featurep 'motion-line)
+        (dsh-e2e--check
+         "running-status-motion-line-released"
+         (not (motion-line-playing-p 'dsh-running)))))))
+
 (defun dsh-emacs-e2e-run (&optional questions)
   "Run real-server E2E checks and return (NAME PASSED DETAIL) results.
 With QUESTIONS (interactively, a prefix argument), include timed questions.
@@ -736,6 +819,10 @@ DSH_E2E_PRESET selects the preset; existing chats and connections are preserved.
                              60)
                       (error "Model did not finish after the late answer"))
                     (dsh-e2e--question-history call-id question-id)))
+
+                (if (equal (getenv "DSH_E2E_RUNNING") "1")
+                    (dsh-e2e--running-status)
+                  (princ "SKIP: running status (DSH_E2E_RUNNING=1)\n"))
 
                 (dsh-emacs-list-sessions-display)
                 (dsh-e2e--check
