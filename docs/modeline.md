@@ -295,3 +295,23 @@ descendants can also have its own child-count indicator.
 The completion annotations' cumulative token projection includes uncached
 input, output, cache read and cache write; it is independent of this mode line's message-based
 usage accumulator and does not estimate cost.
+
+## Testing the optional animation integration
+
+`scripts/verify.sh` works without Motion Line: the suite checks loading and
+running-state cleanup in a fresh Emacs process with no animation library, and
+the animation playback tests report skips. When an engine is available the
+gate runs the suite against it as well, preferring the sibling
+`../motion-line` checkout — engine development lives there — over an installed
+package; `DSH_MOTION_LINE_DIR` overrides both. To run one configuration by
+hand:
+
+```sh
+emacs -Q --batch -L /path/to/motion-line -l test/dsh-test.el
+```
+
+Those tests need an engine that exposes the deterministic seams
+`motion-line-current-time-function` and `motion-line-visible-p-function`
+(that repository's postmortem/002). An older install fails loudly instead of
+silently skipping, so a stale package cannot leave the animated path
+unverified.

@@ -15,7 +15,8 @@
 #      discipline.  Intentional cross-module references are silenced with
 #      defvar/declare-function declarations.  .elc artifacts are redirected
 #      to a temp directory and never land in the repo tree)
-#   4. main test suite (test/dsh-test.el)
+#   4. main test suite (test/dsh-test.el), then the same suite against an
+#      installed Motion Line so its optional animation path is covered too
 #   5. clean load: emacs -Q --batch -L . -l dsh-emacs.el must print nothing and exit 0
 #   6. git diff HEAD --check (whitespace errors; tracked files only)
 #   7. junk scan in the tree (*.elc / backups / autosaves / lock files / .DS_Store)
@@ -73,6 +74,31 @@ fi
 
 printf '\n== full unit suite ==\n'
 run 'dsh-test'        dsh       emacs -Q --batch -l test/dsh-test.el
+
+# The suite skips its Motion Line integration tests when the library is absent
+# (postmortem/096: the gate must not require an animation package).  When one is
+# available, run them too, so the animated path is not silently uncovered.
+# Engine development happens in the sibling `../motion-line' checkout, so that
+# working tree wins over an installed package; DSH_MOTION_LINE_DIR overrides.
+motion_line_dir=${DSH_MOTION_LINE_DIR:-}
+if [ -z "$motion_line_dir" ] && [ -f ../motion-line/motion-line.el ]; then
+  motion_line_dir=../motion-line
+fi
+if [ -z "$motion_line_dir" ]; then
+  motion_line_dir=$(emacs -Q --batch --eval \
+    '(ignore-errors
+       (require (quote package))
+       (package-initialize)
+       (let ((lib (locate-library "motion-line")))
+         (when lib (princ (file-name-directory lib)))))' 2>/dev/null)
+fi
+if [ -n "$motion_line_dir" ]; then
+  printf '\n== unit suite with Motion Line (%s) ==\n' "$motion_line_dir"
+  run 'dsh-test-motion-line' dsh-ml \
+      emacs -Q --batch -L "$motion_line_dir" -l test/dsh-test.el
+else
+  printf '\nskip dsh-test-motion-line (Motion Line not installed)\n'
+fi
 
 printf '\n== clean load (must be silent, exit 0) ==\n'
 if out=$(emacs -Q --batch -L . -l dsh-emacs.el 2>&1); then
