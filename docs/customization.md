@@ -212,7 +212,8 @@ available. This is independent of `dsh-emacs-new-session-auto-project`,
 which controls new-session creation only.
 
 Opening the list from a chat (`M-x dsh-emacs`, `C-c C-l`) puts the cursor on
-the current session's row and scrolls it into view; for a subagent, its
+that chat's session row, even after switching back from a more recently
+opened chat, and scrolls it into view; for a subagent, its
 ancestors and workspace are expanded. When a session sits in a folded group, the group
 is unfolded to show it, and a `w` workspace filter that
 would hide the row is cleared. Refreshing the list in place (`g`, events,

@@ -32,6 +32,11 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Locate the invoking chat in the session list**: `C-c C-l` now selects
+  the chat you are viewing after switching between open chats, instead of
+  jumping to the last opened session. Delayed list data and subagent
+  ancestor expansion use the same target.
+
 - **Make the whale tail easier to see**: running and idle tails now use a
   centered 18×18 display box, enlarged from 16×16.
 

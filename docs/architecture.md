@@ -1024,6 +1024,8 @@ reasoning-driven buffer invalidation. See [027](../postmortem/027-thinking-refre
 ## Real-server E2E testing
 
 `emacs -Q --batch -L . -l test/dsh-e2e.el` runs the transport smoke suite.
+It also opens a second real chat, switches back to the earlier chat and
+presses `C-c C-l`, checking the selected session row by ID for both chats.
 `DSH_E2E_URL` selects the server and `DSH_E2E_PRESET` selects the test session's
 preset. `DSH_E2E_PLAN_REVIEW=1` additionally exercises model-generated review.
 `DSH_E2E_RUNNING=1` starts a real sleeping turn and then proves that a cold
@@ -1046,7 +1048,7 @@ In the running Emacs, evaluate:
   (dsh-emacs-e2e-run t))
 ```
 
-The suite creates and archives its own session. It uses existing authentication
+The suite creates and archives its own sessions. It uses existing authentication
 and the real minibuffer frontend, automatically entering option 2. An answer
 is deliberately held past the host deadline and its actual HTTP request is
 delayed another second; assertions require a live claim until acknowledgement

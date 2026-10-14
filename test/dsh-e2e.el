@@ -13,9 +13,9 @@
 ;;   emacs -Q --batch -L . -l test/dsh-e2e.el
 ;;
 ;; DSH_E2E_URL may override the default server URL.  A URL containing a
-;; launch token is accepted.  The test creates one session, exercises the
-;; real event stream, and archives the session during cleanup because dsh
-;; does not expose a session deletion RPC.
+;; launch token is accepted.  The test creates two sessions, exercises the
+;; real event stream and C-c C-l navigation between chats, and archives both
+;; sessions during cleanup because dsh does not expose a session deletion RPC.
 ;; Set DSH_E2E_PLAN_REVIEW=1 to exercise model-generated plan review,
 ;; requesting changes, and approval (requires a working model provider).
 ;; Set DSH_E2E_SUBAGENTS=1 for real delegation, paging, follow-up and stop.
@@ -604,6 +604,59 @@ in flight across the reopen."
          "running-status-motion-line-released"
          (not (motion-line-playing-p 'dsh-running)))))))
 
+(defun dsh-e2e--session-list-navigation ()
+  "Locate each of two real chats through C-c C-l after switching buffers."
+  (let (other-session other-chat)
+    (unwind-protect
+        (save-window-excursion
+          (setq other-session
+                (dsh-protocol-session-session-id
+                 (dsh-protocol-session--from-alist
+                  (dsh-e2e--rpc
+                   "session/create"
+                   `((request . ((cwd . ,(expand-file-name
+                                          default-directory)))))))))
+          (unless other-session
+            (error "Second session/create returned no session id"))
+          (dsh-emacs--cache-new-session other-session nil nil)
+          (dsh-emacs-open-session other-session)
+          (setq other-chat dsh-emacs--current-buffer)
+          (dsh-e2e--check
+           "list-navigation-second-chat-ready"
+           (dsh-e2e--wait-until
+            (lambda () (buffer-local-value 'dsh-emacs--event-ready other-chat))
+            10))
+          (dsh-e2e--check
+           "list-navigation-distinct-last-opened-session"
+           (and (not (equal other-session dsh-e2e--session-id))
+                (equal dsh-emacs--current-session other-session)))
+          ;; Switching buffers deliberately does not reopen the session: the
+          ;; last-opened global must remain B while the user returns to A.
+          (dolist (target (list (cons dsh-e2e--chat dsh-e2e--session-id)
+                                (cons other-chat other-session)))
+            (switch-to-buffer (car target))
+            (execute-kbd-macro (kbd "C-c C-l"))
+            (dsh-e2e--check
+             (if (eq (car target) dsh-e2e--chat)
+                 "list-navigation-returns-to-earlier-chat"
+               "list-navigation-returns-to-latest-chat")
+             (and (eq (window-buffer) (get-buffer dsh-emacs-sessions-buffer))
+                  (with-current-buffer dsh-emacs-sessions-buffer
+                    (equal (dsh-emacs-session-id-at-point) (cdr target)))))))
+      (when (buffer-live-p other-chat)
+        (dsh-emacs-events-disconnect other-chat)
+        (kill-buffer other-chat))
+      (when other-session
+        (condition-case error-data
+            (progn
+              (dsh-e2e--rpc
+               "workspace/archiveSession"
+               `((request . ((sessionId . ,other-session)))))
+              (dsh-e2e--pass "archive-navigation-session"))
+          (error
+           (dsh-e2e--fail "archive-navigation-session"
+                          (error-message-string error-data))))))))
+
 (defun dsh-emacs-e2e-run (&optional questions)
   "Run real-server E2E checks and return (NAME PASSED DETAIL) results.
 With QUESTIONS (interactively, a prefix argument), include timed questions.
@@ -833,7 +886,8 @@ DSH_E2E_PRESET selects the preset; existing chats and connections are preserved.
                   (dsh-e2e--check "session-list-mode"
                                   (eq major-mode 'dsh-emacs-session-mode))
                   (dsh-e2e--check "session-list-rendered"
-                                  (string-match-p "Sessions" (buffer-string)))))
+                                  (string-match-p "Sessions" (buffer-string))))
+                (dsh-e2e--session-list-navigation))
             (error
              (dsh-e2e--fail "unexpected-error"
                             (error-message-string error-data))))

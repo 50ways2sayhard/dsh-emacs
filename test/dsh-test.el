@@ -8430,6 +8430,48 @@ Lets a test drive a malformed content value through the result path."
     (when (get-buffer dsh-emacs-sessions-buffer)
       (kill-buffer dsh-emacs-sessions-buffer))))
 
+;; C-c C-l belongs to the invoking chat even when another chat was opened
+;; more recently.  Exercise the keymap and real window switch, including a
+;; cold cache whose rows arrive after the command returns.
+(dolist (cold '(nil t))
+  (let* ((dsh-emacs-sessions-buffer
+          (generate-new-buffer-name " *dsh-chat-list-jump*"))
+         (dsh-emacs--current-session "last-opened")
+         (dsh-emacs--workspaces nil)
+         (dsh-emacs--archived-sessions nil)
+         (sessions
+          (dsh-emacs-test--session-items
+           '(((sessionId . "last-opened") (updatedAt . 20)
+              (projections (values (title . "Last opened"))))
+             ((sessionId . "invoking-chat") (updatedAt . 10)
+              (projections (values (title . "Invoking chat")))))))
+         (dsh-emacs--sessions (unless cold sessions)))
+    (unwind-protect
+        (save-window-excursion
+          (cl-letf (((symbol-function 'dsh-emacs-events-host-connect) #'ignore)
+                    ((symbol-function 'dsh-emacs-events-host-disconnect) #'ignore)
+                    ((symbol-function 'dsh-emacs-list-sessions) #'ignore))
+            (with-temp-buffer
+              (dsh-emacs-mode)
+              (setq-local dsh-emacs--buffer-session "invoking-chat")
+              (switch-to-buffer (current-buffer))
+              (execute-kbd-macro (kbd "C-c C-l"))
+              (with-current-buffer dsh-emacs-sessions-buffer
+                (when cold
+                  (dsh-test-assert "chat-list-cold-jump-keeps-caller-target"
+                    (equal dsh-emacs-session--auto-jump-session "invoking-chat"))
+                  (setq dsh-emacs--sessions sessions)
+                  (dsh-emacs-session--render))
+                (dsh-test-assert (format "chat-list-jumps-to-caller-cold-%s" cold)
+                  (eq (window-buffer) (current-buffer))
+                  (equal (dsh-emacs-session-id-at-point) "invoking-chat")
+                  (null dsh-emacs-session--auto-jump-session))
+                (dsh-emacs-session--render)
+                (dsh-test-assert (format "chat-list-refresh-keeps-caller-cold-%s" cold)
+                  (equal (dsh-emacs-session-id-at-point) "invoking-chat"))))))
+      (when (get-buffer dsh-emacs-sessions-buffer)
+        (kill-buffer dsh-emacs-sessions-buffer)))))
+
 ;; Project entry captures the caller's directory before displaying the list.
 (let ((seen nil)
       (detected nil)
@@ -25481,7 +25523,7 @@ messages (e.g. `command/done')."
        (buffer (get-buffer-create dsh-emacs-sessions-buffer))
        (dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
        (dsh-emacs--chat-buffers (make-hash-table :test #'equal))
-       (dsh-emacs--current-session "child")
+       (dsh-emacs--current-session "another-chat")
        (dsh-emacs--workspaces nil)
        (dsh-emacs--archived-sessions nil)
        (dsh-emacs--sessions
@@ -25496,7 +25538,9 @@ messages (e.g. `command/done')."
                 ((symbol-function 'dsh-emacs--rpc-async)
                  (lambda (method args cb)
                    (setq request (cons method args) callback cb))))
-        (dsh-emacs-list-sessions-display)
+        (with-temp-buffer
+          (setq-local dsh-emacs--buffer-session "child")
+          (dsh-emacs-list-sessions-display))
         (with-current-buffer buffer
           (dsh-test-assert "session-child-open-fetches-missing-ancestor-catalog"
                            (equal request '("session/projections"

@@ -4714,8 +4714,9 @@ permits, only while the list's window is selected.
 Matching waits for the workspace cache when necessary; no workspace is
 created.  Without a match, retain the active-session navigation below.
 
-The cursor lands on the last active session's row, not on whatever row
-the buffer happened to be showing: opening the list is an explicit
+The cursor lands on the invoking chat's session row (the last opened
+session outside a chat), not on whatever row the buffer was showing:
+opening the list is an explicit
 \"where am I\" request, whereas a plain refresh (`g', events,
 auto-refresh) keeps the row you are on.  The list is populated
 asynchronously, so when that session is not in the cache yet the jump
@@ -4731,7 +4732,8 @@ current and re-opening it needs no session-list round trip or
 and fetches any missing catalogs.  A cold session cache is fetched as before;
 `g' and `dsh-emacs-list-sessions' remain the explicit refresh."
   (interactive)
-  (let ((buf (get-buffer-create dsh-emacs-sessions-buffer)))
+  (let ((session-id (dsh-emacs--active-session-id))
+        (buf (get-buffer-create dsh-emacs-sessions-buffer)))
     ;; Re-opening a live list must not re-run the major mode: that runs
     ;; `kill-all-local-variables', which wipes the buffer's fold overrides
     ;; (so groups the user folded with TAB come back expanded), its workspace
@@ -4753,7 +4755,7 @@ and fetches any missing catalogs.  A cold session cache is fetched as before;
     (with-current-buffer buf
       ;; Arm the target after the mode/connect step: entering a major mode
       ;; would erase a buffer-local target armed earlier.
-      (setq dsh-emacs-session--auto-jump-session dsh-emacs--current-session
+      (setq dsh-emacs-session--auto-jump-session session-id
             dsh-emacs-session--auto-jump-project project-root)
       ;; Repaint now: a warm cache already holds the target row and the list
       ;; may be on screen, so the jump must not wait for the snapshot's own
@@ -4762,7 +4764,7 @@ and fetches any missing catalogs.  A cold session cache is fetched as before;
       (dsh-emacs-session--render)
       ;; A child opened elsewhere may have only summary lineage cached.
       ;; Fetch its ancestors' catalogs here; rendering itself stays read-only.
-      (dolist (parent (dsh-emacs-session--ancestors dsh-emacs--current-session))
+      (dolist (parent (dsh-emacs-session--ancestors session-id))
         (let ((cell (dsh-emacs-subagent--cell parent 'subagentCatalog)))
           (unless (and cell (dsh-protocol-subagent-cell-present cell))
             (dsh-emacs-subagent-refresh parent)))))
