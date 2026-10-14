@@ -1064,6 +1064,15 @@ canonical `@[label](dsh-session:...)' prompt text the client inserts."
 ;; null.  Phase 1 renders only objective/phase (display chrome); the rest is
 ;; carried so the row can grow without re-wiring callers.
 
+(defun dsh-protocol--goal-blocked-message (value)
+  "Human message of a wire `blockedReason' VALUE, or nil.
+The record is `{code, message}'; a bare string is accepted for legacy
+fixtures.  The code is machine-routable and has no client consumer, so only
+the message is carried."
+  (cond ((stringp value) value)
+        ((and (listp value) (stringp (alist-get 'message value)))
+         (alist-get 'message value))))
+
 (cl-defstruct (dsh-protocol-goal
                (:constructor dsh-protocol-goal--from-alist
                              (value &aux
@@ -1071,10 +1080,33 @@ canonical `@[label](dsh-session:...)' prompt text the client inserts."
                                     (revision (alist-get 'revision value))
                                     (objective (alist-get 'objective value))
                                     (phase (alist-get 'phase value))
-                                    (blocked-reason (alist-get 'blockedReason value))
+                                    (blocked-reason
+                                     (dsh-protocol--goal-blocked-message
+                                      (alist-get 'blockedReason value)))
                                     (max-goal-rounds (alist-get 'maxGoalRounds value)))))
-  "A goal core from a projection or mutation response."
-  id revision objective phase blocked-reason max-goal-rounds rounds-started)
+  "A goal core from a projection or mutation response.
+BLOCKED-REASON is the human message of the wire `{code, message}' record
+\(see `dsh-protocol--goal-blocked-message'); ACTIVATION is the process-local
+continuation state a goal-tool result carries beside the goal, and is nil in
+the session projection (activation is never persisted)."
+  id revision objective phase blocked-reason max-goal-rounds rounds-started
+  activation)
+
+(defun dsh-protocol-goal-tool--from-alist (value)
+  "Decode a goal tool result VALUE into a `dsh-protocol-goal', or nil.
+`create_goal' / `get_goal' / `update_goal' answer with the GoalView core in
+`goal' — `{id, revision, objective, phase, roundsStarted, maxGoalRounds,
+blockedReason?}' — plus the process-local `activation' beside it (see
+dsh-tool-goal).  A document without a usable `goal' object (an absent or
+malformed cell, or the cleared `{goal: null}' answer) yields nil."
+  (when-let* ((core (and (listp value) (alist-get 'goal value)))
+              ((listp core))
+              (goal (dsh-protocol-goal--from-alist core)))
+    (setf (dsh-protocol-goal-rounds-started goal)
+          (alist-get 'roundsStarted core)
+          (dsh-protocol-goal-activation goal)
+          (alist-get 'activation value))
+    goal))
 
 (defun dsh-protocol-goal-projection--from-alist (value)
   "Decode goal projection VALUE, including its progress, or nil."

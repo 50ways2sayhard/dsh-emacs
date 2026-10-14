@@ -578,10 +578,13 @@ Muted like dsh web's `label-tertiary'."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-composer-goal-face
-  `((((background light)) :foreground ,dsh-emacs-color-accent)
-    (((background dark))  :foreground ,dsh-emacs-color-accent-dark)
+  `((((background light)) :foreground ,dsh-emacs-color-tool-icon)
+    (((background dark))  :foreground ,dsh-emacs-color-tool-icon-dark)
     (t :inherit shadow))
-  "Goal Row leading dartboard icon tint (SVG `currentColor'; text fallback)."
+  "Goal dartboard icon tint (SVG `currentColor'; text fallback).
+Shared by the Composer Goal Row, the transcript goal round notice and the
+goal tool cards, so a goal icon matches the tool purple
+\(`dsh-emacs-tool-icon-face') wherever it appears."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-composer-goal-label-face

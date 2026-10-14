@@ -327,7 +327,7 @@ not a working grouping surface.
 | `dsh-emacs-running-face` | Generating status |
 | `dsh-emacs-input-box-face` | Input box background |
 | `dsh-emacs-input-prompt-face` | Input prompt "❯" |
-| `dsh-emacs-composer-goal-face` | Goal Row leading icon tint (dartboard SVG, `currentColor`) |
+| `dsh-emacs-composer-goal-face` | Goal dartboard icon tint (Goal Row, round notice, goal tool cards; dartboard SVG, `currentColor`; tool purple) |
 | `dsh-emacs-composer-goal-label-face` | Goal Row leading status label (semi-bold) |
 | `dsh-emacs-composer-goal-body-face` | Goal Row objective (muted, upright) |
 | `dsh-emacs-composer-goal-action-face` | Goal Row muted action SVG tint (dsh-web pause/resume/edit/clear) |

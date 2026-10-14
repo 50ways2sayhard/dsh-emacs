@@ -549,9 +549,11 @@ Local actions use property boundaries rather than searching by identity."
             (text (dsh-emacs-ui--render-fragment
                    state (map-elt state :collapsed))))
         (atomic-change-group
-          (delete-region (car block) (cdr block))
+          ;; Insert first so markers at the old end stay after the replacement,
+          ;; including a following live reply's non-advancing start marker.
           (goto-char (car block))
-          (insert text))
+          (insert text)
+          (delete-region (point) (+ (cdr block) (length text))))
         (dsh-emacs-ui--remember-block
          (cons (car block) (+ (car block) (length text))))))))
 

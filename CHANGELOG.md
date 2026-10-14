@@ -25,6 +25,21 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **See what each goal tool did**: `create_goal`, `get_goal` and `update_goal`
+  rows now show dsh web's goal card — the goal icon, a `Create goal` /
+  `View goal` / `Update goal` title and the objective as the summary, with
+  Status, Rounds and (while blocked) the blocker text in the expanded body,
+  instead of a raw IN/OUT JSON dump. A cleared `get_goal` reads `No goal`; a
+  failed call keeps the generic card with its status line.
+  (rationale: postmortem/100)
+
+- **See goal rounds in the transcript**: when a goal continues on its own, the
+  chat now shows dsh web's **Continuing goal** notice — goal icon, label and
+  event time, folded by default — instead of staying silent. RET or a click on
+  the notice expands the injected `<goal_round>` prompt. Other host-injected
+  messages stay hidden and are still never offered to `M-p` recall.
+  (rationale: postmortem/099)
+
 - **Show running status in the mode line**: with the optional
   `motion-line` package, native and Doom mode lines show a 60-frame,
   three-second whale-tail loop beside `Deep diving` and a seconds/minutes
@@ -199,6 +214,10 @@ minor) and stay undated until the release is cut.
   objective. Action icons stay at the right edge on the input-box background;
   narrow windows hide actions first and keep status visible.
 
+- **Tint every goal dartboard with the tool purple**: the Goal Row icon, the
+  transcript **Continuing goal** notice and the goal tool cards now share the
+  tool icons' purple accent instead of the teal accent color.
+
 - **Attachment icon**: use the SVG Repo `attachment` file-and-paperclip icon
   in the staged-attachments row, retaining its theme tint and size.
 
@@ -223,6 +242,15 @@ minor) and stay undated until the release is cut.
 - **Keep short goals on one line when text is enlarged**: flexible Goal Row
   spacing no longer wraps the row or pushes action icons onto a second line,
   including when inline actions are hidden.
+
+- **Show a blocked goal's message, not its wire record**: the Goal Row
+  tooltip, `C-c C-g ?` and the goal tool card now print the blocker's human
+  `message`; previously the composer surfaces rendered the raw
+  `{code, message}` record.
+
+- **Keep goal notices when replies finish**: expanding or collapsing a notice
+  while the following reply streams no longer lets the final reply replacement
+  erase the notice and its prompt.
 
 - **Locate the invoking chat in the session list**: `C-c C-l` now selects
   the chat you are viewing after switching between open chats, instead of

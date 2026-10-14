@@ -170,7 +170,8 @@ the kill ring. Forward kills also preserve the structural separator newline.
 
 The Goal Row shows the session's current goal as one read-only line (a leading
 dartboard goal SVG icon mirroring dsh web — the `◎ ` text is a fallback when
-Emacs lacks SVG support), followed by a prominent
+Emacs lacks SVG support — tinted with the tool purple shared by the
+transcript goal round notice and the goal tool cards), followed by a prominent
 status label (`Ongoing Goal`, `Paused Goal` or `Blocked Goal`), a muted,
 upright objective and right-aligned dsh-web pause/resume/edit/clear **SVG**
 action icons (unicode fallback). The row shares the input-box background and
@@ -683,11 +684,11 @@ for a chat — when it drops, the health-check / watchdog / reconnect
 machinery below restores it, and until then replies appear only via manual
 refresh (`C-c C-r`):
 
-1. **user/message** → `dsh-emacs-render-user-message`: rendered as a card background
+1. **user/message** → `dsh-emacs-render-user-message`: rendered as a card background. A host-injected goal round continuation (`source.kind = "goal"`, appended by dsh-goal-round-driver) draws dsh web's collapsed **Continuing goal** trigger notice, expandable to the injected `<goal_round>` prompt; every other host injection stays hidden (`dsh-emacs-render--user-authored-p`).
 2. **assistant/chunk** → `dsh-emacs-render-assistant-chunk`: the first text chunk appears immediately; subsequent insertion, Markdown and viewport following coalesce on a 50ms one-shot timer. Event boundaries, finalization, stream changes and disconnect flush pending text.
 3. **assistant/message** → `dsh-emacs-render-assistant-message`: the final snapshot is used to correct the streamed body, avoiding duplicate display
 4. **tool/call** → `dsh-emacs-render-tool-call`: rendered as a rounded box (pending state)
-5. **tool/result** → `dsh-emacs-render-tool-result`: updates the existing tool card (success/error state)
+5. **tool/result** → `dsh-emacs-render-tool-result`: updates the existing tool card (success/error state). `create_goal` / `get_goal` / `update_goal` settle into dsh web's goal card (`dsh-emacs-render--goal-card-body`): objective summary, State / Rounds, and the blocker message while blocked.
 6. **turn/start** / **turn/end** → `dsh-emacs-render-turn-start/end`: rendered as a divider
 
 Retry and compaction events also feed execution status beside the mode-line

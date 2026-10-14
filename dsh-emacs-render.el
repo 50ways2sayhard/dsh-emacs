@@ -54,6 +54,11 @@
 (declare-function dsh-emacs-command-decorate-skill-gesture "dsh-emacs-command"
                   (beg end name))
 
+;; Defined in dsh-emacs-composer.el, which loads via dsh-emacs.el after this
+;; module.  The goal round trigger reuses the Goal Row's dsh-web dartboard so
+;; one goal keeps one icon across the composer and the transcript.
+(declare-function dsh-emacs-composer--goal-icon "dsh-emacs-composer" ())
+
 ;; Defined in dsh-emacs-modeline.el, which loads via dsh-emacs.el after this
 ;; module.  Called at runtime from turn/end handling and event dispatch.
 (declare-function dsh-emacs--ml-busy-set "dsh-emacs-modeline" (flag))
@@ -247,12 +252,17 @@ collapsible checklist."
     ("edit"       . "edit")
     ("run_code"   . "code")
     ("ask_user_question" . "question")
+    ("create_goal" . "goal")
+    ("get_goal"   . "goal")
+    ("update_goal" . "goal")
     ("cordis_package_inspect" . "read")
     ("cordis_runtime_inspect" . "read")
     ("cordis_run" . "others")
     ("cordis_stop" . "others")
     ("cordis_undefine" . "others"))
-  "Tool name -> variant mapping.")
+  "Tool name -> variant mapping.
+The `goal' variant has no icon-table entry: `dsh-emacs-render--tool-variant'
+draws it with the Composer Goal Row's dartboard instead.")
 
 (defconst dsh-emacs--tool-name-icon-keys
   '(("web_search" . "web"))
@@ -319,6 +329,9 @@ template with a \"__C__\" fill placeholder.  Graphical Emacs renders it via
   '(("pwsh" . "PowerShell")
     ("present" . "Present files")
     ("ask_user_question" . "Ask question")
+    ("create_goal" . "Create goal")
+    ("get_goal" . "View goal")
+    ("update_goal" . "Update goal")
     ("job_output" . "Job Output")
     ("job_list" . "Jobs")
     ("job_kill" . "Kill Job"))
@@ -491,12 +504,24 @@ glyph carrying that same face."
                  "▤")))
     (propertize glyph 'face 'dsh-emacs-tool-icon-face)))
 
+(defun dsh-emacs-render--goal-trigger-icon ()
+  "Return the goal dartboard as a display string.
+Reuses the Composer Goal Row's dsh-web goal SVG
+\(`dsh-emacs-composer--goal-icon') so a goal keeps one icon across the
+composer, the transcript trigger notice and the goal tool cards; terminal
+Emacs without SVG shows the row's `◎ ' text fallback."
+  (or (dsh-emacs-composer--goal-icon)
+      (propertize "◎ " 'face 'dsh-emacs-composer-goal-face)))
+
 (defun dsh-emacs-render--tool-variant (tool-name)
   "Return (VARIANT . ICON) for TOOL-NAME.
 ICON is a display string: the real dsh-web SVG image in graphical Emacs, or
-the emoji fallback otherwise."
+the emoji fallback otherwise.  A goal tool takes the dartboard dsh web's
+`DetailsRow' keys off the `_goal' suffix instead of a variant icon."
   (let* ((variant (or (cdr (assoc tool-name dsh-emacs--tool-variants)) "others"))
-         (icon (dsh-emacs-render--tool-icon variant tool-name)))
+         (icon (if (equal variant "goal")
+                   (dsh-emacs-render--goal-trigger-icon)
+                 (dsh-emacs-render--tool-icon variant tool-name))))
     (cons variant icon)))
 
 (defun dsh-emacs-render--humanize-name (name)
@@ -580,26 +605,31 @@ carries them instead of the generic ioCard's argument dump."
 
 (defun dsh-emacs-render--tool-summary (name variant args-raw)
   "Extract a single-line summary from NAME's ARGS-RAW JSON string.
-Prefer NAME's summary keys, falling back to those for VARIANT; a `present'
-call instead names the files it declared."
-  (when (and args-raw (not (string-empty-p args-raw)) (not (string= args-raw "{}")))
-    (let* ((parsed (condition-case nil (json-read-from-string args-raw) (error nil)))
-           (keys (cdr (or (assoc name dsh-emacs--summary-keys)
-                          (assoc variant dsh-emacs--summary-keys)))))
-      (when (and parsed (listp parsed))
-        (or
-         (and (equal name "present")
-              (dsh-emacs-render--present-paths parsed))
-         (catch 'found
-           (dolist (key keys)
-             (let ((val (dsh-emacs-render--aget key parsed)))
-               (when (and (stringp val) (not (string-empty-p val)))
-                 (throw 'found (dsh-emacs-render--first-line val))))))
-         (catch 'found
-           (dolist (pair parsed)
-             (let ((v (cdr pair)))
-               (when (and (stringp v) (not (string-empty-p v)))
-                 (throw 'found (dsh-emacs-render--first-line v)))))))))))
+A goal call names its objective, or its update action when it replaces none
+\(see `dsh-emacs-render--goal-call-summary'); otherwise prefer NAME's summary
+keys, falling back to those for VARIANT, and a `present' call instead names
+the files it declared."
+  (or (dsh-emacs-render--goal-call-summary name args-raw)
+      (when (and args-raw (not (string-empty-p args-raw))
+                 (not (string= args-raw "{}")))
+        (let* ((parsed (condition-case nil (json-read-from-string args-raw)
+                         (error nil)))
+               (keys (cdr (or (assoc name dsh-emacs--summary-keys)
+                              (assoc variant dsh-emacs--summary-keys)))))
+          (when (and parsed (listp parsed))
+            (or
+             (and (equal name "present")
+                  (dsh-emacs-render--present-paths parsed))
+             (catch 'found
+               (dolist (key keys)
+                 (let ((val (dsh-emacs-render--aget key parsed)))
+                   (when (and (stringp val) (not (string-empty-p val)))
+                     (throw 'found (dsh-emacs-render--first-line val))))))
+             (catch 'found
+               (dolist (pair parsed)
+                 (let ((v (cdr pair)))
+                   (when (and (stringp v) (not (string-empty-p v)))
+                     (throw 'found (dsh-emacs-render--first-line v))))))))))))
 
 (defun dsh-emacs-render--tool-body-text (_variant args-raw)
   "Format the args section of a tool card body."
@@ -1944,11 +1974,14 @@ line is display-only (unlike an image, which has `session/attachment')."
 The host appends its own model-facing copies to the same surface and names
 their origin in `data.source.kind': workspace instructions
 \(`agent-instructions'), runtime-context snapshots, compaction checkpoints
-and other plugin notices (`plugin'), goal, agent and subagent traffic
-\(`goal', `agent-message', `subagent-settled', `subagent-report'), and
-recall context (`session-reference').  Only `user' — or a source-less
-fixture or the optimistic echo — is conversation the user typed: the
-transcript hides the rest, and `M-p' recall must not offer it back."
+and other plugin notices (`plugin'), agent and subagent traffic
+\(`agent-message', `subagent-settled', `subagent-report'), and recall
+context (`session-reference').  Only `user' — or a source-less fixture or
+the optimistic echo — is conversation the user typed: the transcript hides
+the rest, and `M-p' recall must not offer it back.  A goal round
+continuation is the one exception: it is not author text either, but it
+opens a turn the user should see, so it renders as a trigger notice
+\(`dsh-emacs-render--goal-trigger-block')."
   (let ((kind (dsh-emacs-render--aget-nested
                '("source" "kind") (dsh-emacs-render--event-data event))))
     (or (null kind) (equal kind "user"))))
@@ -2044,6 +2077,50 @@ was already rewritten."
   (when-let* ((region (dsh-emacs-render--last-user-message-region)))
     (dsh-emacs-command-decorate-skill-gesture (car region) (cdr region) name)))
 
+(defconst dsh-emacs-render--goal-trigger-label "Continuing goal"
+  "Transcript label of a goal round trigger (dsh web `message.trigger.goal').")
+
+(defun dsh-emacs-render--goal-continuation-p (event)
+  "Whether EVENT is the host's goal round continuation.
+The goal round driver appends one `user/message' per automatic round to the
+conversation surface, naming `data.source = {kind: \"goal\", goalId,
+revision, round}' (see dsh-goal-round-driver).  dsh web paints such a message
+as a turn-trigger notice (`TurnTriggerNodeView') instead of author text; the
+transcript shows the same notice."
+  (equal "goal"
+         (dsh-emacs-render--aget
+          "kind" (dsh-emacs-render--aget
+                  "source" (dsh-emacs-render--event-data event)))))
+
+(defun dsh-emacs-render--goal-trigger-block (event)
+  "Insert EVENT's goal round continuation as a collapsed trigger notice.
+Mirrors dsh web's `TurnTriggerNodeView': the goal dartboard, `Continuing
+goal' and the event clock over the injected round prompt, folded by default
+so the model-facing `<goal_round>' instruction stays out of the way until
+inspected.  An empty body leaves the row unfoldable."
+  (let* ((body (dsh-emacs-render--text-from-content
+                (dsh-emacs-render--aget "content"
+                                        (dsh-emacs-render--event-data event))))
+         (body (and (stringp body) (not (string-empty-p body)) body))
+         (time (dsh-emacs-render--event-time event)))
+    (dsh-emacs-ui-update-fragment
+     (dsh-emacs-ui-make-fragment
+      :namespace-id (dsh-emacs-render--make-namespace)
+      :block-id (format "goal-%s" (dsh-emacs-render--make-block-id event))
+      :label-left (concat
+                   (dsh-emacs-render--goal-trigger-icon)
+                   (propertize dsh-emacs-render--goal-trigger-label
+                               'face 'dsh-emacs-meta-face))
+      :label-right (and time
+                        (propertize time 'face 'dsh-emacs-timestamp-face))
+      :body body
+      :style 'minimal
+      :status 'goal-trigger
+      :non-foldable (null body)
+      :padding t)
+     :create-new t :expanded nil
+     :insert-before (dsh-emacs-render--input-insert-point))))
+
 (defun dsh-emacs-render-user-message (event &optional references)
   "Render a `user/message' event with a prompt and the user block face.
 The block gets one blank line before and after (see
@@ -2054,11 +2131,15 @@ fill in when `session/attachment' settles (see
 `dsh-emacs-render--show-attachment').  File content blocks render as
 display-only `[file: name · size]' lines (see
 `dsh-emacs-render--file-placeholder').
-Optional REFERENCES (list of (LABEL . SESSION-ID)) from the immediately
-following `session-reference' recall event lets the readable `@label'
-session tokens the server persisted (canonical id stripped) render as real
-session chips; see `dsh-emacs-reference-fontify'.  Returns the event seq."
-  (dsh-emacs-render--insert-user-block event references)
+A host-injected goal round continuation renders its trigger notice instead
+\(see `dsh-emacs-render--goal-trigger-block').  Optional REFERENCES (list of
+\(LABEL . SESSION-ID)) from the immediately following `session-reference'
+recall event lets the readable `@label' session tokens the server persisted
+\(canonical id stripped) render as real session chips; see
+`dsh-emacs-reference-fontify'.  Returns the event seq."
+  (if (dsh-emacs-render--goal-continuation-p event)
+      (dsh-emacs-render--goal-trigger-block event)
+    (dsh-emacs-render--insert-user-block event references))
   (dsh-emacs-render--event-seq event))
 
 ;;; ---------------------------------------------------------------------------
@@ -3371,16 +3452,35 @@ everything else `success'."
                  ;; not read as an answered or failed set.
                  (ask-pending (and ask-questions
                                    (dsh-emacs-render--ask-pending-p full-text)))
+                 ;; The three goal tools carry dsh web's structured card: the
+                 ;; objective is the summary and the body is State / Rounds
+                 ;; (+ Blocker).  A cleared `{goal: null}' answer is that
+                 ;; card's empty state, not an unrecognized payload; a failed
+                 ;; or malformed result keeps the generic ioCard.
+                 (goal-card (and (equal variant "goal")
+                                 (eq state 'success)
+                                 (dsh-emacs-render--goal-card-value full-text)))
+                 (goal-value (car-safe goal-card))
+                 (goal-cleared (cdr-safe goal-card))
+                 (goal-body (cond ((null goal-card) nil)
+                                  (goal-value
+                                   (dsh-emacs-render--goal-card-body goal-value))
+                                  (t "")))
                  ;; An ask row's header states the outcome of its question
                  ;; set (`2/3 answered', `pending', `interrupted',
                  ;; `cancelled'); a settled set the card cannot describe falls
                  ;; back to the result preview like any other row.
-                 (row-summary (if ask-questions
-                                  (or (dsh-emacs-render--ask-summary
-                                       ask-answers error-code t ask-pending)
-                                      (dsh-emacs-render--tool-result-preview
-                                       full-text))
-                                summary))
+                 (row-summary (cond
+                               (ask-questions
+                                (or (dsh-emacs-render--ask-summary
+                                     ask-answers error-code t ask-pending)
+                                    (dsh-emacs-render--tool-result-preview
+                                     full-text)))
+                               (goal-card
+                                (or (and goal-value
+                                         (dsh-protocol-goal-objective goal-value))
+                                    "No goal"))
+                               (t summary)))
                  (face (pcase state
                          ('success 'dsh-emacs-tool-success-face)
                          ('error 'dsh-emacs-tool-error-face)
@@ -3409,7 +3509,8 @@ everything else `success'."
                  ;; the card models cannot describe (or a failed one) keeps the
                  ;; generic ioCard (IN/OUT).  The variant gate keeps the other
                  ;; variants from re-parsing their arguments.
-                 (body (or (and ask-questions
+                 (body (or goal-body
+                           (and ask-questions
                                 (dsh-emacs-render--ask-body
                                  ask-questions ask-answers
                                  (or pending-text ask-verdict status-text)))
@@ -3440,6 +3541,8 @@ everything else `success'."
                              row-summary)
               :body body
               :style 'minimal
+              ;; A cleared goal has no fields to unfold.
+              :non-foldable goal-cleared
               ;; State tint on the header row only: the ioCard body keeps its
               ;; own neutral faces instead of inheriting the status accent.
               :header-face face
@@ -3496,6 +3599,108 @@ buffer still tracks CALL-ID's row and that row is showing the pending result."
                                                                      (cons "text"
                                                                            answers-json)))))))))))))
           (setq dsh-emacs--current-group-completed completed))))))
+
+;;; ---------------------------------------------------------------------------
+;;; Renderer: goal card (`create_goal' / `get_goal' / `update_goal')
+;;; ---------------------------------------------------------------------------
+;; dsh web hands the three goal tools to one compact details card
+;; (`detailsCardModel' -> `goalDetail'): the objective becomes the row summary
+;; and the expanded heading, followed by State / Rounds and, while blocked,
+;; the blocker message.  The generic ioCard's IN/OUT JSON is dropped once the
+;; call settles — the structured card is the whole body.
+
+(defconst dsh-emacs--goal-tools '("create_goal" "get_goal" "update_goal")
+  "Tool names whose result renders as the goal card.")
+
+(defconst dsh-emacs-render--goal-field-label-width 8
+  "Width of the goal card's field-label column.
+`Status' is the longest label and still leaves a separating space.")
+
+(defun dsh-emacs-render--goal-tool-p (name)
+  "Whether NAME is one of the goal tools."
+  (and (stringp name) (member name dsh-emacs--goal-tools)))
+
+(defun dsh-emacs-render--goal-call-summary (name args-raw)
+  "Pending summary of a goal call NAME from ARGS-RAW, or nil.
+dsh web shows `create_goal's objective while the call runs; `update_goal'
+carries none for its phase-only verbs, so name the action there rather than
+let the generic fallback print the opaque goal id, and `get_goal' takes no
+arguments."
+  (when (dsh-emacs-render--goal-tool-p name)
+    (let ((parsed (and (stringp args-raw)
+                       (not (string-empty-p args-raw))
+                       (condition-case nil
+                           (json-read-from-string args-raw)
+                         (error nil)))))
+      (when (listp parsed)
+        (let ((objective (dsh-emacs-render--aget "objective" parsed))
+              (action (dsh-emacs-render--aget "action" parsed)))
+          (cond
+           ((and (stringp objective) (not (string-empty-p objective)))
+            (dsh-emacs-render--first-line objective))
+           ((and (stringp action) (not (string-empty-p action)))
+            (capitalize action))))))))
+
+(defun dsh-emacs-render--goal-card-value (text)
+  "Decode goal tool result TEXT into (GOAL . CLEARED-P), or nil.
+The three tools answer with the GoalView in `goal' plus the process-local
+`activation' beside it (see dsh-tool-goal), or `{goal: null}' after a clear.
+GOAL is a `dsh-protocol-goal' decoded by the protocol module, CLEARED-P marks
+the empty answer, and an unrecognized document yields nil so the caller keeps
+the generic ioCard."
+  (when (and (stringp text) (not (string-empty-p (string-trim text))))
+    (let ((parsed (condition-case nil
+                      (json-read-from-string (string-trim text))
+                    (error nil))))
+      (when-let* ((cell (and (listp parsed) (assoc 'goal parsed))))
+        (if (null (cdr cell))
+            (cons nil t)
+          (when-let* ((goal (dsh-protocol-goal-tool--from-alist parsed)))
+            (cons goal nil)))))))
+
+(defun dsh-emacs-render--goal-state-text (goal)
+  "Human state of GOAL, mirroring dsh web's `detail.goal.*' copy."
+  (pcase (dsh-protocol-goal-phase goal)
+    ("active" (if (equal (dsh-protocol-goal-activation goal) "disarmed")
+                  "Awaiting continuation"
+                "Active"))
+    ("paused" "Paused")
+    ("blocked" "Blocked")
+    ("complete" "Completed")
+    (_ "")))
+
+(defun dsh-emacs-render--goal-field-row (label value)
+  "Return one `LABEL  VALUE' goal card row in the shared label column."
+  (concat "  "
+          (propertize label 'face 'dsh-emacs-tool-io-face)
+          (make-string (max 1 (- dsh-emacs-render--goal-field-label-width
+                                 (string-width label)))
+                       ?\s)
+          value))
+
+(defun dsh-emacs-render--goal-card-body (goal)
+  "Compose the expanded body of GOAL's card, or nil.
+The objective heads the body, then State and Rounds, and the blocker message
+only while the goal is blocked.  Faces are baked onto the rows, so fold and
+unfold preserve the styling."
+  (let* ((objective (dsh-protocol-goal-objective goal))
+         (reason (dsh-protocol-goal-blocked-reason goal))
+         (rounds (format "%s / %s"
+                         (or (dsh-protocol-goal-rounds-started goal) 0)
+                         (or (dsh-protocol-goal-max-goal-rounds goal) 0))))
+    (mapconcat
+     #'identity
+     (append
+      (and (stringp objective) (not (string-empty-p objective))
+           (list (concat "  "
+                         (propertize objective
+                                     'face 'dsh-emacs-tool-title-face))))
+      (list (dsh-emacs-render--goal-field-row
+             "Status" (dsh-emacs-render--goal-state-text goal)))
+      (list (dsh-emacs-render--goal-field-row "Rounds" rounds))
+      (and (stringp reason) (not (string-empty-p reason))
+           (list (dsh-emacs-render--goal-field-row "Blocker" reason))))
+     "\n")))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Reply footer: actions and per-turn statistics

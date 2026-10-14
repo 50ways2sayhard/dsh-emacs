@@ -4803,6 +4803,116 @@ Lets a test drive a malformed content value through the result path."
         (and (search-backward "─" nil t)
              (not (memq 'italic (dsh-test--faces-at (match-beginning 0)))))))))
 
+;; --- Test 31g: the goal tools render dsh web's structured goal card ---
+;; `create_goal' / `get_goal' / `update_goal' answer with the GoalView plus
+;; its process-local activation; the card shows the objective as the row
+;; summary and, expanded, State / Rounds and the blocker message — never the
+;; raw JSON envelope or a cleared tombstone (postmortem/100).
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (dsh-emacs-modeline-setup)
+  (setq-local dsh-emacs-tool-expand-by-default t)
+  (dsh-emacs-render-tool-call
+   (dsh-emacs-test--tool-call-event 1 "gc" "create_goal"
+                                   "{\"objective\":\"ship the release\"}"))
+  (dsh-emacs-render-tool-result
+   (dsh-emacs-test--tool-result-event
+    2 "gc" nil 0
+    "{\"goal\":{\"id\":\"g1\",\"revision\":2,\"objective\":\"ship the release\",\"phase\":\"active\",\"roundsStarted\":3,\"maxGoalRounds\":8},\"activation\":\"armed\"}"))
+  (let* ((ns (dsh-emacs-render--make-namespace))
+         (block (dsh-emacs-test--tool-block-text ns "tool-gc")))
+    (dsh-test-assert "goal-card-create-settled"
+      (and block
+           (string-match-p (regexp-quote "Create goal · ship the release") block)
+           (string-match-p "^  ship the release$" block)
+           (string-match-p "^  Status  Active$" block)
+           (string-match-p "^  Rounds  3 / 8$" block)
+           (not (string-match-p "maxGoalRounds" block))
+           (not (string-match-p "^  IN " block)))))
+  ;; A phase-only update names its verb while the call runs, then the
+  ;; settled card states the objective and the new state.
+  (dsh-emacs-render-tool-call
+   (dsh-emacs-test--tool-call-event
+    3 "gu" "update_goal"
+    "{\"goal_id\":\"g1\",\"revision\":2,\"action\":\"pause\"}"))
+  (let* ((ns (dsh-emacs-render--make-namespace))
+         (block (dsh-emacs-test--tool-block-text ns "tool-gu")))
+    (dsh-test-assert "goal-card-update-pending-names-action"
+      (and block (string-match-p (regexp-quote "Update goal · Pause") block))))
+  (dsh-emacs-render-tool-result
+   (dsh-emacs-test--tool-result-event
+    4 "gu" nil 0
+    "{\"goal\":{\"id\":\"g1\",\"revision\":3,\"objective\":\"ship the release\",\"phase\":\"paused\",\"roundsStarted\":3,\"maxGoalRounds\":8},\"activation\":\"armed\"}"))
+  (let* ((ns (dsh-emacs-render--make-namespace))
+         (block (dsh-emacs-test--tool-block-text ns "tool-gu")))
+    (dsh-test-assert "goal-card-update-settled"
+      (and block
+           (string-match-p (regexp-quote "Update goal · ship the release") block)
+           (string-match-p "^  Status  Paused$" block)))))
+
+;; A blocked goal's wire `{code, message}' record reaches the card as its
+;; human message only; a disarmed active goal reads "Awaiting continuation".
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (dsh-emacs-modeline-setup)
+  (setq-local dsh-emacs-tool-expand-by-default t)
+  (dsh-emacs-render-tool-call
+   (dsh-emacs-test--tool-call-event
+    1 "gb" "update_goal"
+    "{\"goal_id\":\"g1\",\"revision\":9,\"action\":\"blocked\",\"blocked_reason\":\"waiting on review\"}"))
+  (dsh-emacs-render-tool-result
+   (dsh-emacs-test--tool-result-event
+    2 "gb" nil 0
+    "{\"goal\":{\"id\":\"g1\",\"revision\":10,\"objective\":\"ship the release\",\"phase\":\"blocked\",\"roundsStarted\":4,\"maxGoalRounds\":8,\"blockedReason\":{\"code\":\"model-reported\",\"message\":\"waiting on review\"}},\"activation\":\"armed\"}"))
+  (let* ((ns (dsh-emacs-render--make-namespace))
+         (block (dsh-emacs-test--tool-block-text ns "tool-gb")))
+    (dsh-test-assert "goal-card-blocked-shows-the-message"
+      (and block
+           (string-match-p "^  Status  Blocked$" block)
+           (string-match-p "^  Blocker waiting on review$" block)
+           (not (string-match-p "model-reported" block)))))
+  (dsh-emacs-render-tool-call
+   (dsh-emacs-test--tool-call-event 3 "gd" "get_goal" "{}"))
+  (dsh-emacs-render-tool-result
+   (dsh-emacs-test--tool-result-event
+    4 "gd" nil 0
+    "{\"goal\":{\"id\":\"g2\",\"revision\":1,\"objective\":\"survive the fork\",\"phase\":\"active\",\"roundsStarted\":0,\"maxGoalRounds\":5},\"activation\":\"disarmed\"}"))
+  (let* ((ns (dsh-emacs-render--make-namespace))
+         (block (dsh-emacs-test--tool-block-text ns "tool-gd")))
+    (dsh-test-assert "goal-card-disarmed-state"
+      (and block (string-match-p "^  Status  Awaiting continuation$" block)))))
+
+;; A cleared goal is the card's empty state, not a raw tombstone; a failed
+;; call keeps the generic ioCard with its status line.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (dsh-emacs-modeline-setup)
+  (setq-local dsh-emacs-tool-expand-by-default t)
+  (dsh-emacs-render-tool-call
+   (dsh-emacs-test--tool-call-event 1 "gg" "get_goal" "{}"))
+  (dsh-emacs-render-tool-result
+   (dsh-emacs-test--tool-result-event 2 "gg" nil 0 "{\"goal\":null}"))
+  (let* ((ns (dsh-emacs-render--make-namespace))
+         (block (dsh-emacs-test--tool-block-text ns "tool-gg")))
+    (dsh-test-assert "goal-card-cleared-has-no-fields"
+      (and block
+           (string-match-p (regexp-quote "View goal · No goal") block)
+           (not (string-match-p "Status" block))
+           (not (string-match-p "null" block)))))
+  (dsh-emacs-render-tool-call
+   (dsh-emacs-test--tool-call-event
+    3 "ge" "update_goal"
+    "{\"goal_id\":\"g1\",\"revision\":1,\"action\":\"blocked\",\"blocked_reason\":\"nope\"}"))
+  (dsh-emacs-render-tool-result
+   (dsh-emacs-test--tool-result-event
+    4 "ge" t 1 "blocked requires at least 3 consecutive goal rounds"))
+  (let* ((ns (dsh-emacs-render--make-namespace))
+         (block (dsh-emacs-test--tool-block-text ns "tool-ge")))
+    (dsh-test-assert "goal-card-failed-call-keeps-the-ioCard"
+      (and block
+           (string-match-p "Update goal" block)
+           (string-match-p "^  IN " block)))))
+
 ;; --- Test 32: tool name decoupled from icon — same icon, different name ---
 (with-temp-buffer
   (dsh-emacs-mode)
@@ -17082,6 +17192,84 @@ input-area draft (which carries no such property) is not counted."
           dsh-emacs--skill-catalogs old-skills)
     (kill-buffer buf)))
 
+;; A goal round continuation is host-injected like the skill evidence, but it
+;; opens a turn the user should see: the transcript paints dsh web's trigger
+;; notice (`TurnTriggerNodeView') instead of hiding it (postmortem/099).
+(let ((buf (generate-new-buffer " *dsh-goal-trigger*")))
+  (unwind-protect
+      (with-current-buffer buf
+        (dsh-emacs-mode)
+        (dsh-emacs-modeline-setup)
+        (setq-local dsh-emacs--buffer-session "sess-goal-trigger")
+        (dsh-emacs-render-event
+         '((type . "user/message") (seq . 1) (time . 1700000000000)
+           (data . ((content . [((type . "text")
+                                 (text . "<goal_round>\nObjective: \"ship it\"\nRound: 3/8\n</goal_round>"))])
+                    (source . ((kind . "goal") (goalId . "g1")
+                               (revision . 2) (round . 3)))))))
+        (dsh-test-assert "goal-trigger-renders-collapsed-notice"
+          (string-match-p "Continuing goal"
+                          (buffer-substring-no-properties
+                           (point-min) dsh-emacs--input-marker))
+          (null (string-match-p "goal_round" (buffer-string))))
+        ;; RET / mouse on the notice's labels shows the injected round prompt,
+        ;; matching web's expandable trigger body.
+        (goto-char (point-min))
+        (search-forward "Continuing goal")
+        (dsh-emacs-ui-toggle-fragment)
+        (dsh-test-assert "goal-trigger-expands-the-round-prompt"
+          (string-match-p "Objective: \"ship it\"" (buffer-string))
+          (string-match-p "Round: 3/8" (buffer-string)))
+        ;; Opening the goal trigger does not open the other host injections.
+        (dsh-emacs-render-event
+         '((type . "user/message") (seq . 2)
+           (data . ((content . [((type . "text") (text . "plugin notice body"))])
+                    (source . ((kind . "plugin")))))))
+        (dsh-test-assert "goal-trigger-keeps-other-injections-hidden"
+          (null (string-match-p "plugin notice body" (buffer-string)))))
+    (kill-buffer buf)))
+
+;; Folding a goal notice must leave the following live reply's markers on
+;; its own text, even when the final snapshot corrects the streamed content.
+(dolist (initially-expanded '(nil t))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (dsh-emacs-render-event
+     '((type . "user/message") (seq . 1)
+       (data . ((content . [((type . "text") (text . "round prompt"))])
+                (source . ((kind . "goal")))))))
+    (when initially-expanded
+      (goto-char (point-min))
+      (search-forward "Continuing goal")
+      (dsh-emacs-ui-toggle-fragment))
+    (dsh-emacs-render-event
+     '((type . "assistant/chunk") (seq . 2)
+       (data . ((turn . 1) (step . 1)
+                (chunk . ((type . "text-delta") (index . 0)
+                          (text . "Hello")))))))
+    (goto-char (point-min))
+    (search-forward "Continuing goal")
+    (dsh-emacs-ui-toggle-fragment)
+    (dsh-test-assert
+     (format "goal-trigger-fold-preserves-stream-boundary-%s" initially-expanded)
+     (equal (buffer-substring-no-properties
+             (plist-get dsh-emacs--streaming-assistant :start)
+             (plist-get dsh-emacs--streaming-assistant :end))
+            "Hello"))
+    (dsh-emacs-render-event
+     '((type . "assistant/message") (seq . 3)
+       (data . ((turn . 1) (step . 1)
+                (message . ((content . [((type . "text")
+                                        (text . "Hello world"))])))))))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (dsh-test-assert
+       (format "goal-trigger-fold-survives-reply-repair-%s" initially-expanded)
+       (string-match-p "Continuing goal" text)
+       (string-match-p "Hello world" text)
+       (if initially-expanded
+           (not (string-match-p "round prompt" text))
+         (string-match-p "round prompt" text))))))
+
 ;; Host skill evidence wins over a same-named command, with or without a
 ;; cached skill catalog.  Digit-leading names follow both render paths too.
 (dolist (name '("plan" "3d-review"))
@@ -21848,6 +22036,30 @@ ID is the message id, TEXT its single text block, KIND its source kind
   (dsh-test-assert "composer-goal-nil-projection-is-nil"
     (null (dsh-emacs-composer-goal-from-projection nil))
     (null (dsh-emacs-composer-goal-from-projection '((nope . 1))))))
+
+;; A blocked goal's wire record is `{code, message}': the protocol carries the
+;; human message (the code has no client consumer), and a goal-tool result
+;; adds the progress counter and the process-local activation beside it.
+(let* ((blocked (dsh-protocol-goal--from-alist
+                 '((id . "g1") (revision . 4) (objective . "Ship it")
+                   (phase . "blocked") (maxGoalRounds . 8)
+                   (blockedReason . ((code . "model-reported")
+                                     (message . "waiting on review"))))))
+       (view (dsh-protocol-goal-tool--from-alist
+              '((goal . ((id . "g1") (revision . 4) (objective . "Ship it")
+                         (phase . "active") (roundsStarted . 3)
+                         (maxGoalRounds . 8)))
+                (activation . "disarmed")))))
+  (dsh-test-assert "protocol-goal-blocked-reason-is-its-message"
+    (equal (dsh-protocol-goal-blocked-reason blocked) "waiting on review"))
+  (dsh-test-assert "protocol-goal-tool-parses-view"
+    (equal (dsh-protocol-goal-objective view) "Ship it")
+    (equal (dsh-protocol-goal-rounds-started view) 3)
+    (equal (dsh-protocol-goal-activation view) "disarmed"))
+  (dsh-test-assert "protocol-goal-tool-rejects-cleared-and-malformed"
+    (null (dsh-protocol-goal-tool--from-alist '((goal . nil))))
+    (null (dsh-protocol-goal-tool--from-alist '((goal . "nope"))))
+    (null (dsh-protocol-goal-tool--from-alist nil))))
 
 ;; --- Composer Goal Row: render read-only chrome above the input ---
 (with-temp-buffer
