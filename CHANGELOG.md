@@ -10,13 +10,6 @@ minor) and stay undated until the release is cut.
 
 ### Breaking Changes
 
-- **Extract the animation engine as Motion Line**: the unreleased
-  `mode-line-animate` API becomes `motion-line-*`, including `motion-line-demo`.
-  dsh-emacs uses an independently installed Motion Line when available and
-  otherwise shows a static running caption. Existing prototype
-  configuration, including the provisional `kineline-*` names, must use the
-  new names. (rationale: postmortem/096)
-
 - **Stage files before sending**: `C-c C-a` now adds one file to the existing
   attachment list; repeat to add more. Drag-and-drop keeps its confirmation
   and stages valid files in order. Neither sends immediately or prompts for
@@ -30,79 +23,20 @@ minor) and stay undated until the release is cut.
   `dsh-emacs-jobs-modeline-face` and `dsh-emacs-jobs-map`. Use `C-c C-j` to
   view output or stop background jobs. (rationale: postmortem/088)
 
-### Fixed
-
-- **Keep short goals on one line when text is enlarged**: flexible Goal Row
-  spacing no longer wraps the row or pushes action icons onto a second line,
-  including when inline actions are hidden.
-
-- **Locate the invoking chat in the session list**: `C-c C-l` now selects
-  the chat you are viewing after switching between open chats, instead of
-  jumping to the last opened session. Delayed list data and subagent
-  ancestor expansion use the same target.
-
-- **Make the whale tail easier to see**: running and idle tails now use a
-  centered 18×18 display box, enlarged from 16×16.
-
-- **Keep the whale animation self-contained**: its GIF data is embedded in
-  Elisp and decoded lazily, so installing the client needs no separate image
-  file. Frame timing and colors stay unchanged. (rationale: postmortem/098)
-
-- **Keep completed sessions idle on reconnect**: a delayed running cache no
-  longer restarts the indicator after the chat has received `turn/end`.
-
-- **Preserve status in custom Doom Modeline layouts**: layouts with the standard
-  anchors receive the whale and DSH status segments, including layouts added
-  after another chat was opened, without duplicate segments.
-
-- **Restore running status after restarting Emacs**: opening an already-running
-  session starts its whale animation (or static caption) from the cached session
-  status, even when the initial history window no longer contains `turn/start`.
-
-- **Run without Motion Line installed**: dsh-emacs loads normally and shows
-  static `Deep diving` text while working. It clears on completion or
-  disconnect and creates no animation timer. Installing Motion Line enables
-  the whale animation, caption sweep and elapsed clock. No bundled animation
-  library is required. (rationale: postmortem/096)
-
-- **Keep running animations moving across sessions**: starting, pausing or
-  clearing another buffer's animation no longer postpones the shared timer,
-  which could freeze the whale tail until those operations stopped.
-
-- **Place the DSH whale before the buffer name in Doom Modeline**: the larger
-  whale appears on the left, and the DSH Web running-status whale tail fills the
-  right-side major-mode slot with its standard menu.
-
-- **Open chat sessions with Doom Modeline enabled**: file-icon refresh now
-  skips fileless DSH chat buffers, avoiding the mode-change hook error.
-
-- **Use the DSH whale in the buffer-switch minibuffer**: Consult candidates for
-  DSH chat buffers show the whale when `nerd-icons-completion` is active,
-  instead of the generic Emacs icon. Without SVG support, the label is `DSH`.
-
-### Changed
-
-- **Show goal status before the objective**: a prominent `Ongoing Goal`,
-  `Paused Goal` or `Blocked Goal` label now precedes the upright, muted
-  objective. Action icons stay at the right edge on the input-box background;
-  narrow windows hide actions first and keep status visible.
-
 ### Added
 
-- **Show Deep diving beside the running whale**: the English caption has a
-  gentle foreground sweep and a seconds/minutes elapsed clock in both native
-  and Doom mode lines. It disappears when the turn stops or disconnects and
-  shares the existing animation timer. (rationale: postmortem/095)
-
-- **Use the web whale-tail running animation**: native and Doom mode lines
-  replace the progress bar with the web whale's 60-frame, three-second loop,
-  driven by the optional `motion-line` package. Doom animates its existing
-  tail without duplicating it; terminals use cycling `DSH...` text. Completed
-  turns, disconnects and buffer cleanup release each chat's playback slot.
-  The tail uses the logo color and a centered 18px display box
-  in both running and idle states. GIF frames clear correctly between
-  poses, preventing trails.
-  (rationale: postmortem/095)
+- **Show running status in the mode line**: with the optional
+  `motion-line` package, native and Doom mode lines show a 60-frame,
+  three-second whale-tail loop beside `Deep diving` and a seconds/minutes
+  elapsed clock. Graphical displays add a gentle foreground sweep to the
+  caption. The tail follows the logo color in a centered 18×18 display box;
+  GIF frames clear between poses without trails. Doom animates its existing
+  tail without duplicating it. Terminals and displays without GIF support
+  use cycling `DSH...` text in place of the animated tail.
+  Without Motion Line, the client shows static `Deep diving` text and creates
+  no animation timer. Completion, disconnects and buffer cleanup clear the
+  running status and release playback. (rationale: postmortem/095,
+  postmortem/096)
 
 - **Attach any file to a prompt**: `C-c C-a` (`dsh-emacs-attach-file`) and a
   drag-and-drop onto a chat buffer now take any readable file, not only images.
@@ -153,11 +87,11 @@ minor) and stay undated until the release is cut.
   during the Emacs session; a prefix argument chooses again.
   (rationale: postmortem/079)
 
-- **Whale mode label**: graphical Emacs with SVG support shows the
-  DeepSeek Harness whale in place of `DSH`, blue on dark themes and black
-  on light themes, with its visible height matching the permission shield.
-  Colors follow theme changes. The
-  standard major-mode menu stays available; terminals keep the `DSH` label.
+- **Theme-aware whale icons**: graphical Emacs with SVG support shows a
+  whale in the native mode label. Doom Modeline places the full whale before
+  the buffer name and a whale tail in the major-mode slot, retaining its
+  standard menu. Icons are blue on dark themes and black on light themes,
+  and follow theme changes. Displays without SVG support use `DSH` text.
 
 - **Browse and continue subagent conversations**: `M-x dsh-emacs-list-subagents`
   selects direct children through minibuffer completion, while `TAB` in the
@@ -260,6 +194,11 @@ minor) and stay undated until the release is cut.
 
 ### Changed
 
+- **Show goal status before the objective**: a prominent `Ongoing Goal`,
+  `Paused Goal` or `Blocked Goal` label now precedes the upright, muted
+  objective. Action icons stay at the right edge on the input-box background;
+  narrow windows hide actions first and keep status visible.
+
 - **Attachment icon**: use the SVG Repo `attachment` file-and-paperclip icon
   in the staged-attachments row, retaining its theme tint and size.
 
@@ -280,6 +219,37 @@ minor) and stay undated until the release is cut.
   (rationale: postmortem/085)
 
 ### Fixed
+
+- **Keep short goals on one line when text is enlarged**: flexible Goal Row
+  spacing no longer wraps the row or pushes action icons onto a second line,
+  including when inline actions are hidden.
+
+- **Locate the invoking chat in the session list**: `C-c C-l` now selects
+  the chat you are viewing after switching between open chats, instead of
+  jumping to the last opened session. Delayed list data and subagent
+  ancestor expansion use the same target.
+
+- **Keep the whale animation self-contained**: its GIF data is embedded in
+  Elisp and decoded lazily, so installing the client needs no separate image
+  file. Frame timing and colors stay unchanged. (rationale: postmortem/098)
+
+- **Keep completed sessions idle on reconnect**: a delayed running cache no
+  longer restarts the indicator after the chat has received `turn/end`.
+
+- **Preserve status in custom Doom Modeline layouts**: layouts with the standard
+  anchors receive the whale and DSH status segments, including layouts added
+  after another chat was opened, without duplicate segments.
+
+- **Restore running status after restarting Emacs**: opening an already-running
+  session starts its whale animation (or static caption) from the cached session
+  status, even when the initial history window no longer contains `turn/start`.
+
+- **Open chat sessions with Doom Modeline enabled**: file-icon refresh now
+  skips fileless DSH chat buffers, avoiding the mode-change hook error.
+
+- **Use the DSH whale in the buffer-switch minibuffer**: Consult candidates for
+  DSH chat buffers show the whale when `nerd-icons-completion` is active,
+  instead of the generic Emacs icon. Without SVG support, the label is `DSH`.
 
 - **Keep drafts written during file uploads**: completing an upload no longer
   clears text or attachments staged for the next message, including queued,
