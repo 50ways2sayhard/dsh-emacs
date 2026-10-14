@@ -32,6 +32,10 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep short goals on one line when text is enlarged**: flexible Goal Row
+  spacing no longer wraps the row or pushes action icons onto a second line,
+  including when inline actions are hidden.
+
 - **Locate the invoking chat in the session list**: `C-c C-l` now selects
   the chat you are viewing after switching between open chats, instead of
   jumping to the last opened session. Delayed list data and subagent
@@ -75,6 +79,13 @@ minor) and stay undated until the release is cut.
 - **Use the DSH whale in the buffer-switch minibuffer**: Consult candidates for
   DSH chat buffers show the whale when `nerd-icons-completion` is active,
   instead of the generic Emacs icon. Without SVG support, the label is `DSH`.
+
+### Changed
+
+- **Show goal status before the objective**: a prominent `Ongoing Goal`,
+  `Paused Goal` or `Blocked Goal` label now precedes the upright, muted
+  objective. Action icons stay at the right edge on the input-box background;
+  narrow windows hide actions first and keep status visible.
 
 ### Added
 

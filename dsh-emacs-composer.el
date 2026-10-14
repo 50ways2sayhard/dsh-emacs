@@ -114,9 +114,9 @@ cleared goal hides the row."
 ;;; ---------------------------------------------------------------------------
 ;;; Goal Row rendering (one read-only line above the `❯ ' input)
 ;;; ---------------------------------------------------------------------------
-;; Match dsh web's GoalBar: a dartboard SVG tinted from the goal face, followed
-;; by the objective and a muted phase suffix.  Without SVG support, fall back
-;; to a text glyph using the same convention as the queue clock icon.
+;; Match dsh web's GoalBar: a dartboard SVG, a prominent status label,
+;; a muted objective, and fixed actions at the right edge of the input dock.
+;; Without SVG support, fall back to text glyphs as the queue clock does.
 
 (defconst dsh-emacs-composer--goal-icon-svg
   (concat "<svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" "
@@ -275,11 +275,14 @@ Colored via `currentColor' mapped to the action face's foreground."
     ("edit" "Updating…")
     ("clear" "Clearing…")))
 
-(defun dsh-emacs-composer--phase-suffix-text (goal)
-  "Return the phase suffix text for GOAL (empty string when no phase)."
-  (let ((phase (or (dsh-emacs-composer--pending-text)
-                   (dsh-emacs-composer--phase-text goal))))
-    (if (string-empty-p phase) "" (format "  ·  %s" phase))))
+(defun dsh-emacs-composer--goal-label (goal)
+  "Return GOAL's Web-style status label or pending operation."
+  (or (dsh-emacs-composer--pending-text)
+      (pcase (dsh-protocol-goal-phase goal)
+        ("active" "Ongoing Goal")
+        ("paused" "Paused Goal")
+        ("blocked" "Blocked Goal")
+        (_ "Goal"))))
 
 (defun dsh-emacs-composer--sig (goal next attachments)
   "Return the content and layout inputs of GOAL, NEXT and ATTACHMENTS.
@@ -310,17 +313,6 @@ yet (mid setup / batch)."
     (max 1 (if windows
                (apply #'min (mapcar #'window-text-width windows))
              dsh-emacs-composer--default-row-width))))
-
-(defun dsh-emacs-composer--fit-objective (objective available)
-  "Truncate OBJECTIVE so the whole Goal Row fits in AVAILABLE columns.
-Returns OBJECTIVE unchanged when it already fits; otherwise a leading slice
-with an ellipsis suffix (`…') so the row stays on one visual line (web-style
-`nowrap' objective).  AVAILABLE already accounts for the icon and phase suffix."
-  (let ((budget (max 1 (- available 1))))      ; room for the ellipsis itself
-    (if (<= (string-width objective) budget)
-        objective
-      (concat (truncate-string-to-width objective budget nil nil "")
-              "…"))))
 
 (defun dsh-emacs-composer--goal-action-cell (glyph svg cmd)
   "Return a clickable goal action cell running CMD.
@@ -388,49 +380,51 @@ complete)."
     (and strip (cons strip (string-width strip)))))
 
 (defun dsh-emacs-composer--render-row (goal)
-  "Return the propertized Goal Row string for GOAL (single-line chrome).
-Leads with the dartboard SVG icon (text `◎ ' fallback when SVG is unavailable),
-then a truncated objective in the body face, then a muted phase suffix, then a
-trailing clickable action strip (pause/resume · edit · clear) when one applies.
-All fitted to the current window width so the row never wraps (dsh web style).
-Callers add the chrome tag and read-only over the whole span."
+  "Return GOAL's single-line dock above the input, matching dsh web.
+Show the dartboard, a status label, the truncated objective and right-aligned
+pause/resume, edit and clear actions.  Narrow windows drop actions first,
+then the dartboard to keep status visible.  Callers add read-only chrome."
   (let* ((icon (or (dsh-emacs-composer--goal-icon)
                    (propertize "◎ " 'face 'dsh-emacs-composer-goal-face)))
          (objective (dsh-emacs-composer--objective-text goal))
-         (suffix-text (dsh-emacs-composer--phase-suffix-text goal))
-         (available (dsh-emacs-composer--row-width))
-         ;; SVGs reserve two columns; fallback glyphs use their text width.
-         (base-cols (+ (string-width icon) 1 (string-width suffix-text)))
+         (help (concat (or (dsh-protocol-goal-objective goal) "")
+                       (when-let* ((reason
+                                    (dsh-protocol-goal-blocked-reason goal)))
+                         (format "\nBlocked: %s" reason))
+                       "\nC-c C-g ? for full details"))
+         (label (propertize (dsh-emacs-composer--goal-label goal)
+                            'face 'dsh-emacs-composer-goal-label-face
+                            'help-echo help))
+         ;; Leave the final column free so a full dock does not visually wrap.
+         (available (max 1 (1- (dsh-emacs-composer--row-width))))
+         (prefix (concat icon " " label "  "))
+         (base-cols (string-width prefix))
          (strip (dsh-emacs-composer--goal-action-strip goal))
          ;; Keep at least eight objective columns before offering click cells.
          (action (and strip (<= (+ base-cols 2 (cdr strip) 8) available)
-                      strip))
-         (fixed (+ base-cols (if action (+ 2 (cdr action)) 0)))
-         (objective-budget (max 1 (- available fixed)))
-         (shown (dsh-emacs-composer--fit-objective objective objective-budget))
-         (body (propertize shown
-                           'face 'dsh-emacs-composer-goal-body-face
-                           'help-echo
-                           (concat (or (dsh-protocol-goal-objective goal) "")
-                                   (when-let* ((reason
-                                                (dsh-protocol-goal-blocked-reason
-                                                 goal)))
-                                     (format "\nBlocked: %s" reason))
-                                   "\nC-c C-g ? for full details")))
-         (suffix (if (string-empty-p suffix-text)
-                     ""
-                   (propertize suffix-text
-                               'face 'dsh-emacs-composer-goal-body-face)))
-         (actions (if action
-                      (concat "  " (car action))
-                    ""))
-         (row (if (> (+ fixed 1) available)
-                  (concat (string-trim-left suffix-text) " " body)
-                (concat icon " " body suffix actions))))
-    ;; Fixed chrome can itself exceed an unusually narrow split.  This final
-    ;; clamp is the safety boundary that preserves the one-visual-line contract
-    ;; while retaining text properties on whatever cells remain visible.
-    (truncate-string-to-width row available nil nil "…")))
+                      (concat
+                       (propertize
+                        "  " 'display
+                        `(space :align-to (- right ,(1+ (cdr strip)))))
+                       (car strip))))
+         (body (propertize
+                (truncate-string-to-width
+                 objective (max 1 (- available base-cols
+                                     (if action (string-width action) 0)))
+                 nil nil "…")
+                'face 'dsh-emacs-composer-goal-body-face 'help-echo help))
+         (row (if (>= base-cols available)
+                  (concat label " " body)
+                (concat prefix body)))
+         ;; Stretch the background instead of filling canonical columns with
+         ;; spaces, whose displayed width grows under `text-scale-mode'.
+         (padding (and (not action) (< (string-width row) available)
+                       (propertize
+                        " " 'display '(space :align-to (- right 1)))))
+         (dock (truncate-string-to-width
+                (concat row padding action) available nil nil "…")))
+    (add-face-text-property 0 (length dock) 'dsh-emacs-input-box-face t dock)
+    dock))
 
 (defconst dsh-emacs-composer--next-icon-svg
   "<svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M7.00049 0.199829C3.24488 0.199829 0.199952 3.24408 0.199707 6.99963C0.199707 8.0414 0.434087 9.03061 0.854004 9.91467L1.11279 10.4576L2.19775 9.94202L1.94092 9.39905L1.81787 9.12268C1.5498 8.46885 1.40186 7.75171 1.40186 6.99963C1.4021 3.90808 3.90888 1.40198 7.00049 1.40198C10.0919 1.40219 12.5979 3.90821 12.5981 6.99963C12.5981 10.0913 10.0921 12.5983 7.00049 12.5983C6.36734 12.5983 5.90348 12.5535 5.49268 12.4401C5.08803 12.3283 4.7041 12.1414 4.24463 11.8209C3.57111 11.3511 2.60588 11.1855 1.81006 11.6881L1.79736 11.6959L1.78467 11.7047L1.25537 12.0778L1.65381 13.2672L2.46045 12.6989C2.75029 12.5214 3.18004 12.5442 3.55615 12.8063C4.10063 13.1861 4.60863 13.4423 5.17334 13.5983C5.73194 13.7525 6.31665 13.8004 7.00049 13.8004C10.7561 13.8002 13.8003 10.7553 13.8003 6.99963C13.8 3.24421 10.7559 0.200041 7.00049 0.199829ZM3.81201 7.47327V8.67542H7.11572V7.47327H3.81201ZM3.81201 6.34924H10.2173V5.14709H3.81201V6.34924Z\" fill=\"currentColor\"></path></svg>"

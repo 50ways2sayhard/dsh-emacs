@@ -21859,7 +21859,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
   (let ((txt (buffer-substring-no-properties (point-min) (point-max))))
     (dsh-test-assert "composer-goal-row-rendered-above-input"
       (string-match-p "Ship the refactor" txt)
-      (string-match-p "active" txt)
+      (string-match-p "Ongoing Goal" txt)
       (markerp dsh-emacs--composer-top-marker)
       ;; The goal row must precede the `❯' input.
       (let ((g (string-match "Ship the refactor" txt))
@@ -22041,7 +22041,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
       (dsh-test-assert "composer-goal-update-replaces-row"
         (null (string-match-p "v1" txt))
         (string-match-p "v2 now" txt)
-        (string-match-p "paused" txt)
+        (string-match-p "Paused Goal" txt)
         (markerp dsh-emacs--composer-top-marker)))))
 
 ;; --- Composer Goal Row: route event projections to the live chat buffer ---
@@ -22280,7 +22280,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
         (equal (cdr (assq 'id (cdr (assq 'ref (nth 1 call))))) "goal-1")))
     ;; A successful callback optimistically updates the row to paused.
     (dsh-test-assert "goal-pause-optimistic-view"
-      (string-match-p "paused"
+      (string-match-p "Paused Goal"
                       (buffer-substring-no-properties (point-min) (point-max))))))
 
 ;; --- Goal actions: pause is gated to the active phase ---
@@ -22338,7 +22338,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
       (dsh-emacs-goal-resume))
     (dsh-test-assert "goal-resume-payload"
       (equal (car sent) "goals/resume")
-      (string-match-p "active"
+      (string-match-p "Ongoing Goal"
                       (buffer-substring-no-properties (point-min) (point-max))))))
 
 ;; --- Goal actions: edit reads and sends request.objective ---
@@ -22695,7 +22695,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
   (cl-letf (((symbol-function 'dsh-emacs-composer--row-width) (lambda () 24)))
     (let ((row (dsh-emacs-composer--render-row goal)))
       (dsh-test-assert "goal-compact-row-prioritizes-status"
-        (string-match-p "blocked" row)
+        (string-match-p "Blocked Goal" row)
         (<= (string-width row) 24)
         (not (dsh-test-goal-strip-binds row 'dsh-emacs-goal-edit))))))
 

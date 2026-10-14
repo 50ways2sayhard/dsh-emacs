@@ -170,12 +170,15 @@ the kill ring. Forward kills also preserve the structural separator newline.
 
 The Goal Row shows the session's current goal as one read-only line (a leading
 dartboard goal SVG icon mirroring dsh web — the `◎ ` text is a fallback when
-Emacs lacks SVG support — followed by objective + phase, and trailing
-dsh-web pause/resume/edit/clear **SVG** action icons, unicode glyphs when SVG
-is unavailable) only when a goal exists, fed **passively** from the server
-`goal` session projection (`rpc.md §9`): `session/control` projection frames
-and the `session/follow` snapshot route to the session's live chat buffer. It
-is composer chrome, never a `user/message` and never sent to the model.
+Emacs lacks SVG support), followed by a prominent
+status label (`Ongoing Goal`, `Paused Goal` or `Blocked Goal`), a muted,
+upright objective and right-aligned dsh-web pause/resume/edit/clear **SVG**
+action icons (unicode fallback). The row shares the input-box background and
+appears only when an unfinished goal exists, fed
+**passively** from the server `goal` session projection (`rpc.md §9`):
+`session/control` projection frames and the `session/follow` snapshot route to
+the session's live chat buffer. It is composer chrome, never a `user/message`
+and never sent to the model.
 
 The goal **actions** (pause/resume/edit/clear) are `goals.*` RPCs
 (`rpc.md §4.10`) issued on the current goal's CAS `ref` `{id, revision}`:
@@ -191,10 +194,13 @@ surface via `message` and leave the row unchanged (see postmortem/018).
 the full objective, phase and blocked reason. The objective's tooltip also
 exposes the full text and reason. Editing starts from the original objective,
 preserving embedded line breaks; display folding is confined to the row.
-While an action is pending, its progress label replaces the phase and inline
-actions are hidden. Narrow windows drop actions before sacrificing objective
-space, then prioritize status when even the fixed chrome cannot fit. SVGs
-reserve two columns and are capped to fit the narrowest viewing frame's cells.
+While an action is pending, its progress label replaces the status label and
+inline actions are hidden. Narrow windows drop actions before sacrificing
+objective space, then prioritize status when even the fixed chrome cannot fit.
+The dock reserves the final window column to prevent a filled row from wrapping.
+Flexible background gaps use display alignment rather than literal spaces, so
+text scaling does not enlarge the padding beyond the window.
+SVGs reserve two columns and are capped to fit the narrowest viewing frame's cells.
 Goal projection and RPC response decoding both belong to the protocol module;
 Composer's mutation callback compares parsed goal identities and revisions.
 
@@ -1020,6 +1026,30 @@ follows the viewport once. Per-event follow calls skip a pending burst.
 Non-reasoning events, step changes and stream teardown flush pending text
 before continuing. This keeps transport delivery immediate while limiting
 reasoning-driven buffer invalidation. See [027](../postmortem/027-thinking-refresh.md).
+
+## GUI display regression tests
+
+Run the optional display suite from the repository root in a separate graphical
+Emacs; it needs no dsh server or model provider:
+
+```sh
+DSH_GUI_TEST_LOG=/tmp/dsh-gui.log \
+  emacs -Q -l "$PWD/test/dsh-gui.el" -f dsh-emacs-gui-test-start
+```
+
+Use an absolute load path as above: macOS GUI Emacs can change its working
+directory during startup. The runner waits until the first frame is idle, runs
+ERT, writes diagnostics to `DSH_GUI_TEST_LOG`, and exits 0 on success or 1 on
+failure. Without the environment variable the log is `dsh-emacs-gui-test.log`
+in Emacs's temporary directory. Batch or terminal Emacs is rejected rather
+than counted as a display pass.
+
+The Goal Row regression displays a short active goal in an 80-column window at
+text scales 0 and 1, with inline actions both enabled and disabled. After real
+redisplay, `vertical-motion` must reach the following buffer line in one screen
+row. This catches padding that expands and wraps under text scaling even when
+`string-width` still fits the canonical column budget. The ordinary verification
+gate checks this file's Lisp syntax; the GUI suite itself remains optional.
 
 ## Real-server E2E testing
 

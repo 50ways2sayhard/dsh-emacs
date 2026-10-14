@@ -584,16 +584,19 @@ Muted like dsh web's `label-tertiary'."
   "Goal Row leading dartboard icon tint (SVG `currentColor'; text fallback)."
   :group 'dsh-emacs-faces)
 
+(defface dsh-emacs-composer-goal-label-face
+  '((t :weight semi-bold :slant normal))
+  "Goal Row status label, before the objective (dsh web GoalBar)."
+  :group 'dsh-emacs-faces)
+
 (defface dsh-emacs-composer-goal-body-face
-  '((t :inherit shadow :slant italic))
-  "Goal Row objective / phase text (the read-only chrome above the input)."
+  '((t :inherit shadow :slant normal))
+  "Goal Row objective text on the input-box background."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-composer-goal-action-face
-  `((((background light)) :foreground ,dsh-emacs-color-accent)
-    (((background dark))  :foreground ,dsh-emacs-color-accent-dark)
-    (t :inherit shadow))
-  "Goal Row inline action glyphs (pause/resume/edit/clear buttons)."
+  '((t :inherit shadow))
+  "Goal Row muted action glyphs (pause/resume/edit/clear buttons)."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-composer-attachment-face

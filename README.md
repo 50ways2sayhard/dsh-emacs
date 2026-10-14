@@ -428,6 +428,9 @@ first to align the scope. Run `scripts/verify.sh` before pushing. It checks
 syntax, checker self-tests, byte compilation, the full unit suite, silent
 loading, diff whitespace, and generated-file cleanup.
 
+Optional [GUI display tests](docs/architecture.md#gui-display-regression-tests)
+check actual visual wrapping in a graphical Emacs without a dsh server.
+
 Real-server tests are separate. See [E2E testing](docs/architecture.md#real-server-e2e-testing)
 for the batch smoke suite and timed-question tests in a running Emacs.
 
