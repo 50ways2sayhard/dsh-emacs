@@ -300,6 +300,9 @@ minor) and stay undated until the release is cut.
   now measured in screen rows so a long wrapped line no longer pulls a
   scrolled-up reader down. (rationale: postmortem/107)
 
+- **Show every level of nested blockquotes**: `>> text` now draws two bars
+  (and `>>> text` three) instead of merging adjacent `>` into a single bar.
+
 - **Open angle-bracketed file links**: Markdown links such as
   `[source](</path/to/file.el#L10>)` now open the file at the requested line.
   Spaces and parentheses inside the bracketed destination are preserved,

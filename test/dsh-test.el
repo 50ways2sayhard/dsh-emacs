@@ -11098,6 +11098,16 @@ Lets a test drive a malformed content value through the result path."
                      (ensure-list (get-text-property 1 'face second))))))
     (advice-remove 'emacs-lisp-mode count)))
 
+;; Emacs draws adjacent characters whose `display' values are `eq' once, so
+;; nested `>>' would collapse into a single bar if both shared one object.
+(let* ((rendered (dsh-emacs-markdown-render ">> nested\n"))
+       (first (get-text-property 0 'display rendered))
+       (second (get-text-property 1 'display rendered)))
+  (dsh-test-assert "markdown-nested-blockquote-bars-stay-distinct"
+    (stringp first)
+    (equal first second)
+    (not (eq first second))))
+
 ;; Extensions are deliberately prefix-distinct: `regexp-opt' factors a common
 ;; prefix ("aaaimg" "bbimg" compile to \(?:aaa\|bb\)img), so a literal
 ;; extension must survive in the compiled regexp for the checks below.
