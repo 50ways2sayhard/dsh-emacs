@@ -205,11 +205,31 @@ SVGs reserve two columns and are capped to fit the narrowest viewing frame's cel
 Goal projection and RPC response decoding both belong to the protocol module;
 Composer's mutation callback compares parsed goal identities and revisions.
 
-Next Message displays an SVG clock followed by the preview, or `Next: …` as
-a text fallback, folding line breaks and truncating to the window width. Hover
-for the full text and use `C-c C-q` to manage the queue. Either row may appear
-independently; clearing a goal leaves pending input visible, and clearing the
-queue leaves the goal.
+Next Message mirrors the Goal Row's anatomy: dsh web's queue glyph (a chat
+bubble with two text lines, tinted with `dsh-emacs-composer-next-face` from the
+queue amber that the mode-line `[Q2 S1]` indicator shares) followed by the
+folded preview in the muted `dsh-emacs-composer-next-body-face`, or `≡ …` as a
+text fallback when Emacs lacks SVG. It carries no `dsh-emacs-input-box-face`
+band: that face is painted only by the Goal Row, since the editable `❯` line
+deliberately holds no face of its own. One
+space after the preview text carries a compact action cluster, one space apart,
+whose text-region keymaps run the queue's own item verbs on the previewed
+message: the up arrow (`IconSendOutlineRegular`) → `dsh-emacs-queue--send-now`
+\(steer into the running turn, or re-submit text-only items while idle), `IconEditOutline16` →
+`dsh-emacs-queue--edit` after a `read-string` (present only while
+`dsh-protocol-queue-item-text-only`, since the edit RPC answers with text
+blocks), and `IconTrashOutline16` → `dsh-emacs-queue--delete`. The queue owner
+rejects idle send-now for non-text items before any removal RPC. Composer
+withholds every action for the optimistic submit object, whose local ID is
+not a host queue ID, and includes placement in its signature so replacement
+queue structs cannot leave buttons referring to the previous placement.
+So the read-only
+row can act on the queue without leaving Composer; a window that cannot keep
+eight preview columns drops cells from the tail — delete, then edit, then the
+arrow. The row truncates to the narrowest window displaying the chat; hover for
+the full text and use `C-c C-q` to manage the whole queue. Either row may
+appear independently; clearing a goal leaves pending input visible, and
+clearing the queue leaves the goal.
 
 The Attachments row appears while `dsh-emacs--pending-attachments` is non-nil:
 the SVG Repo `attachment' icon (tinted from the attachment face; a text glyph

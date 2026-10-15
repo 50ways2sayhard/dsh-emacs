@@ -979,15 +979,24 @@ renderer; the wire field names stay in this module."
                                 ""))
                               (kind
                                (let ((s (cdr (assq 'source message))))
-                                 (and s (cdr (assq 'kind s))))))))
+                                 (and s (cdr (assq 'kind s)))))
+                              (text-only
+                               (cl-every
+                                (lambda (block)
+                                  (equal "text" (cdr (assq 'type block))))
+                                (dsh-protocol--list
+                                 (cdr (assq 'content message))))))))
   "One pending-inbox item: PLACEMENT is `queued' (next turn), `steering'
 (next-step user input) or `context' (host-injected next-step content);
 TEXT the message's text blocks concatenated, KIND the message's source
-kind (`user' for real user input)."
+kind (`user' for real user input); TEXT-ONLY whether every content block is
+text, so a client edit (which sends text blocks back) cannot flatten an
+image or file attachment."
   id
   placement
   text
-  kind)
+  kind
+  text-only)
 
 (defun dsh-protocol-queue-items-from-inbox (value)
   "Normalize an `inbox' projection VALUE into queue item structs.

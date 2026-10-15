@@ -331,9 +331,14 @@ not a working grouping surface.
 | `dsh-emacs-composer-goal-label-face` | Goal Row leading status label (semi-bold) |
 | `dsh-emacs-composer-goal-body-face` | Goal Row objective (muted, upright) |
 | `dsh-emacs-composer-goal-action-face` | Goal Row muted action SVG tint (dsh-web pause/resume/edit/clear) |
+| `dsh-emacs-composer-next-face` | Next Message row queue glyph tint (dsh-web `IconQueueOutlineRegular`; queue amber) |
+| `dsh-emacs-composer-next-body-face` | Next Message row preview (muted, upright) |
+| `dsh-emacs-composer-next-action-face` | Next Message row up-arrow steer cell (muted like the Goal Row actions) |
 | `dsh-emacs-accent-face` | Accent color (badges, headings) |
 
-The Composer Goal Row uses the input-box background across the row. It places
+The Composer Goal Row uses the input-box background across the row (the only
+place that face is painted: the editable `❯` line deliberately carries no face,
+so nothing else supplies an "input box"). It places
 the status before the objective and holds action icons at the right edge;
 short objectives leave a flexible gap before the actions. The gap and the
 background after a goal with hidden actions stretch without text padding that
@@ -345,12 +350,33 @@ remain available. Action tooltips show readable labels and keyboard shortcuts.
 Use `C-c C-g ?` for the full objective and blocked reason, also available in
 the objective tooltip. SVG icons occupy at most two columns of pixel space.
 
-The Next Message row sits below the Goal Row and above `❯`, using
-`dsh-emacs-input-prompt-face` for its text and clock icon, matching the
-historical next-preview prefix; `Next:` is the non-SVG fallback. It folds line
-breaks and fits the narrowest window displaying the chat. Its full text is available
-in the tooltip; queue management remains under `C-c C-q`. Hiding or completing
-a goal does not hide Next Message. Both rows share Composer's read-only region.
+The Next Message row sits below the Goal Row and above `❯`, built like that
+row: dsh web's queue glyph (a chat bubble with two text lines,
+`IconQueueOutlineRegular`) tinted with `dsh-emacs-composer-next-face` — the
+queue amber `dsh-emacs-color-queue` that the mode line's `[Q2 S1]` indicator
+also uses — then the folded preview in `dsh-emacs-composer-next-body-face`,
+the muted upright tier the goal objective uses. The row carries **no**
+input-box band: `dsh-emacs-input-box-face` is only ever painted by the Goal Row
+(the editable `❯` line has no background of its own), so a band here would
+float above nothing — the row's identity is the tinted glyph and muted text.
+One space after the preview text sits a compact action cluster, one
+space apart, all tinted with `dsh-emacs-composer-next-action-face` (unicode
+fallbacks when Emacs lacks SVG): the up arrow `IconSendOutlineRegular` (RET or
+a click sends the previewed message now — steering the running turn, or
+re-submitting text-only items while idle, the verb RET runs in `C-c C-q`), then `✎` edit
+(`IconEditOutline16`, offered only for a message whose content is all text,
+because the edit RPC answers with text blocks) and `🗑` delete
+\(`IconTrashOutline16`), which run the manager's `e`/`d` verbs. Local previews
+show no cells until their server queue ID arrives. Send-now refuses attachments
+while idle, preserving the original queued item. Each cell names
+itself in a tooltip and carries a hover highlight. The preview truncates to
+leave the cluster its columns, and a window that runs out of room drops cells
+from the tail — delete, then edit, then the arrow, always keeping eight preview
+columns. The row fits the narrowest window displaying the chat, and its full
+text is available in the tooltip; the whole queue stays under `C-c C-q`.
+Without SVG support the leading glyph falls back to `≡ `; hiding or completing
+a goal does not hide Next Message. Both rows share Composer's read-only
+region.
 
 ## Markdown rendering
 

@@ -25,6 +25,11 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Customize the pending-input queue color**: `dsh-emacs-color-queue` and
+  `dsh-emacs-color-queue-dark` now own the amber shared by the mode-line
+  `[Q2 S1]` indicator and the Next Message row's queue glyph, so one queue
+  keeps one hue. (rationale: postmortem/101)
+
 - **See what each goal tool did**: `create_goal`, `get_goal` and `update_goal`
   rows now show dsh web's goal card — the goal icon, a `Create goal` /
   `View goal` / `Update goal` title and the objective as the summary, with
@@ -209,6 +214,25 @@ minor) and stay undated until the release is cut.
 
 ### Changed
 
+- **Act on the next message from its own row**: the pending-input preview is
+  followed by a compact cluster — dsh web's up arrow, edit and trash, one space
+  apart. RET or a click sends that message now (steering it into the running
+  turn, or re-submitting text-only items while idle), rewrites its text in the minibuffer,
+  or deletes it; each cell runs the same queue verb `C-c C-q` binds to
+  `s`/`e`/`d`. Edit appears only for a message whose content is all text, since
+  the edit RPC answers with text blocks and would otherwise flatten an
+  attachment. The cells are muted like the Goal Row's actions, name themselves
+  in tooltips, and a window that runs out of room drops them from the tail
+  (delete, then edit, then the arrow). (rationale: postmortem/101)
+
+- **Next Message matches the Goal Row's anatomy**: the pending-input preview no
+  longer paints its whole line in the `❯` prompt accent. It leads with dsh
+  web's queue glyph in the queue amber and folds the preview into the same muted
+  tier as the goal objective, without the Goal Row's input-box band (that face
+  is painted nowhere else, so a band would float above the uncoloured `❯`
+  line); without SVG support a `≡` glyph replaces the old `Next:` prefix.
+  (rationale: postmortem/101)
+
 - **Show goal status before the objective**: a prominent `Ongoing Goal`,
   `Paused Goal` or `Blocked Goal` label now precedes the upright, muted
   objective. Action icons stay at the right edge on the input-box background;
@@ -238,6 +262,13 @@ minor) and stay undated until the release is cut.
   (rationale: postmortem/085)
 
 ### Fixed
+
+- **Keep inline queue actions tied to confirmed state**: local pending previews
+  offer no actions until the server supplies their queue ID; placement changes
+  refresh the buttons even when the preview text stays the same. Sending an
+  attachment-bearing item while idle now leaves it queued and reports an error
+  instead of deleting its attachments, in both Composer and the queue manager.
+  (rationale: postmortem/102)
 
 - **Keep short goals on one line when text is enlarged**: flexible Goal Row
   spacing no longer wraps the row or pushes action icons onto a second line,

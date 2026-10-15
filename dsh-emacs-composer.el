@@ -49,9 +49,13 @@
 ;; dsh-emacs.el; this module only reads the shared variable.
 (declare-function dsh-emacs-render--input-insert-point "dsh-emacs-render" ())
 (declare-function dsh-emacs-queue-next-item "dsh-emacs-queue" ())
+(declare-function dsh-emacs-queue--send-now "dsh-emacs-queue" (item))
+(declare-function dsh-emacs-queue--edit "dsh-emacs-queue" (item new-text))
+(declare-function dsh-emacs-queue--delete "dsh-emacs-queue" (item))
 (declare-function dsh-emacs-pending-attachments "dsh-emacs" ())
 (declare-function dsh-emacs--remove-attachment "dsh-emacs" (attachment))
 (defvar dsh-emacs--input-marker)
+(defvar dsh-emacs-queue--optimistic-submit)
 (defvar-local dsh-emacs--composer-goal-pending nil
   "Identity token of this buffer's in-flight `goals.*' mutation, or nil.")
 (declare-function dsh-emacs--active-session-id "dsh-emacs" ())
@@ -241,15 +245,17 @@ composer goal face, so the row's chrome tag / read-only stay one run."
           "1.80476 8.53597 1.80476H7.46399Z\" fill=\"currentColor\"/></svg>")
   "SVG data of the Goal Bar clear action (dsh web `IconTrashOutline16').")
 
-(defun dsh-emacs-composer--action-image (svg)
-  "Return an image display spec for goal action SVG, or nil.
-Colored via `currentColor' mapped to the action face's foreground."
+(defun dsh-emacs-composer--action-image (svg &optional face)
+  "Return an image display spec for action SVG, or nil.
+SVG is colored through `currentColor' mapped to FACE's foreground, defaulting
+to `dsh-emacs-composer-goal-action-face'."
   (and (image-type-available-p 'svg)
-       (let ((fg (face-foreground 'dsh-emacs-composer-goal-action-face nil t)))
+       (let* ((face (or face 'dsh-emacs-composer-goal-action-face))
+              (color (or (face-foreground face nil t) "gray50")))
          (create-image svg 'svg t
                        :ascent 'center :scale 1.0
                        :width (dsh-emacs-composer--icon-width)
-                       :foreground (or fg "gray50")))))
+                       :foreground color))))
 
 (defun dsh-emacs-composer--phase-text (goal)
   "Return the phase label text for GOAL (empty string when absent)."
@@ -287,11 +293,17 @@ Colored via `currentColor' mapped to the action face's foreground."
 (defun dsh-emacs-composer--sig (goal next attachments)
   "Return the content and layout inputs of GOAL, NEXT and ATTACHMENTS.
 Only each staged attachment's name is presentation state: the image bytes,
-and a staged file's path and size, never enter the signature."
+and a staged file's path and size, never enter the signature.  NEXT carries
+its id, placement, text and text-only flag so the row's action cells cannot keep
+acting on the item — or offering the edit verb — they were rendered for after
+the preview moves to another one."
   (list (and goal (list (dsh-protocol-goal-objective goal)
                         (dsh-protocol-goal-phase goal)
                         (dsh-protocol-goal-blocked-reason goal)))
-        (and next (list (dsh-protocol-queue-item-text next)))
+        (and next (list (dsh-protocol-queue-item-id next)
+                        (dsh-protocol-queue-item-placement next)
+                        (dsh-protocol-queue-item-text next)
+                        (dsh-protocol-queue-item-text-only next)))
         (mapcar (lambda (attachment) (cdr (assq 'name attachment)))
                 attachments)
         dsh-emacs-composer-goal-actions
@@ -314,28 +326,22 @@ yet (mid setup / batch)."
                (apply #'min (mapcar #'window-text-width windows))
              dsh-emacs-composer--default-row-width))))
 
-(defun dsh-emacs-composer--goal-action-cell (glyph svg cmd)
-  "Return a clickable goal action cell running CMD.
-When SVG is available the visible glyph is the dsh web action icon (SVG
-`display' image tinted with the action face's `currentColor'); otherwise GLYPH
-(a unicode fallback) is shown.  Binds mouse-1 and RET on a text-region keymap,
-adds `mouse-face' highlight and a `help-echo', so the read-only Goal Row can
-host real click targets."
+(defun dsh-emacs-composer--action-cell (glyph svg face help cmd)
+  "Return one clickable action cell running CMD.
+When SVG is available the visible glyph is that dsh web action icon (an SVG
+`display' image tinted from FACE); otherwise GLYPH (a unicode fallback) is
+shown.  Binds mouse-1 and RET on a text-region keymap, adds `mouse-face'
+highlight and HELP, so a read-only Composer row hosts real click targets."
   (let ((map (make-sparse-keymap))
-        (img (dsh-emacs-composer--action-image svg)))
+        (img (dsh-emacs-composer--action-image svg face)))
     (define-key map (kbd "RET") cmd)
     (define-key map [mouse-1] cmd)
     (propertize (if img "  " glyph)
-                'face 'dsh-emacs-composer-goal-action-face
+                'face face
                 'keymap map
                 'mouse-face 'highlight
                 'display img
-                'help-echo
-                (pcase cmd
-                  ('dsh-emacs-goal-pause "Pause goal · C-c C-g p")
-                  ('dsh-emacs-goal-resume "Resume goal · C-c C-g r")
-                  ('dsh-emacs-goal-edit "Edit goal · C-c C-g e")
-                  ('dsh-emacs-goal-clear "Clear goal · C-c C-g d")))))
+                'help-echo help)))
 
 (defun dsh-emacs-composer--goal-action-spec (key)
   "Return (GLYPH . SVG) of the dsh web goal action KEY, or nil.
@@ -367,14 +373,20 @@ complete)."
          (strip (and keys
                      (mapconcat
                       (lambda (key)
-                        (let ((spec (dsh-emacs-composer--goal-action-spec key))
-                              (cmd (pcase key
-                                     ('pause 'dsh-emacs-goal-pause)
-                                     ('resume 'dsh-emacs-goal-resume)
-                                     ('edit 'dsh-emacs-goal-edit)
-                                     ('clear 'dsh-emacs-goal-clear))))
-                          (dsh-emacs-composer--goal-action-cell
-                           (car spec) (cdr spec) cmd)))
+                        (let* ((spec (dsh-emacs-composer--goal-action-spec key))
+                               (verb (pcase key
+                                       ('pause (cons 'dsh-emacs-goal-pause
+                                                     "Pause goal · C-c C-g p"))
+                                       ('resume (cons 'dsh-emacs-goal-resume
+                                                      "Resume goal · C-c C-g r"))
+                                       ('edit (cons 'dsh-emacs-goal-edit
+                                                    "Edit goal · C-c C-g e"))
+                                       ('clear (cons 'dsh-emacs-goal-clear
+                                                     "Clear goal · C-c C-g d")))))
+                          (dsh-emacs-composer--action-cell
+                           (car spec) (cdr spec)
+                           'dsh-emacs-composer-goal-action-face
+                           (cdr verb) (car verb))))
                       keys
                       " "))))
     (and strip (cons strip (string-width strip)))))
@@ -428,26 +440,125 @@ then the dartboard to keep status visible.  Callers add read-only chrome."
 
 (defconst dsh-emacs-composer--next-icon-svg
   "<svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M7.00049 0.199829C3.24488 0.199829 0.199952 3.24408 0.199707 6.99963C0.199707 8.0414 0.434087 9.03061 0.854004 9.91467L1.11279 10.4576L2.19775 9.94202L1.94092 9.39905L1.81787 9.12268C1.5498 8.46885 1.40186 7.75171 1.40186 6.99963C1.4021 3.90808 3.90888 1.40198 7.00049 1.40198C10.0919 1.40219 12.5979 3.90821 12.5981 6.99963C12.5981 10.0913 10.0921 12.5983 7.00049 12.5983C6.36734 12.5983 5.90348 12.5535 5.49268 12.4401C5.08803 12.3283 4.7041 12.1414 4.24463 11.8209C3.57111 11.3511 2.60588 11.1855 1.81006 11.6881L1.79736 11.6959L1.78467 11.7047L1.25537 12.0778L1.65381 13.2672L2.46045 12.6989C2.75029 12.5214 3.18004 12.5442 3.55615 12.8063C4.10063 13.1861 4.60863 13.4423 5.17334 13.5983C5.73194 13.7525 6.31665 13.8004 7.00049 13.8004C10.7561 13.8002 13.8003 10.7553 13.8003 6.99963C13.8 3.24421 10.7559 0.200041 7.00049 0.199829ZM3.81201 7.47327V8.67542H7.11572V7.47327H3.81201ZM3.81201 6.34924H10.2173V5.14709H3.81201V6.34924Z\" fill=\"currentColor\"></path></svg>"
-  "SVG clock for the Composer Next Message row.")
+  "dsh web's queue glyph in the Composer Next Message row.
+The chat bubble carrying two text lines
+\(`IconQueueOutlineRegular' / `ChatLinesOutlineArtwork'), filled here so
+the tint can be substituted like the Goal Row's dartboard.")
+
+(defun dsh-emacs-composer--next-icon ()
+  "Return the Next Message row's leading queue glyph as a display string.
+Graphical Emacs renders dsh web's queue glyph tinted from
+`dsh-emacs-composer-next-face' and reserves the same two columns the Goal
+Row's dartboard takes; terminal Emacs falls back to that face's one-column
+`≡' plus a space, so both paths keep the row's column budget.  Callers add
+the separating space."
+  (if (image-type-available-p 'svg)
+      (propertize
+       "  " 'face 'dsh-emacs-composer-next-face 'display
+       (create-image dsh-emacs-composer--next-icon-svg 'svg t
+                     :ascent 'center :scale 1.0
+                     :width (dsh-emacs-composer--icon-width)
+                     :foreground
+                     (or (face-foreground 'dsh-emacs-composer-next-face nil t)
+                         "gray50")))
+    (propertize "≡ " 'face 'dsh-emacs-composer-next-face)))
+
+(defconst dsh-emacs-composer--send-svg
+  (concat "<svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" "
+          "stroke-width=\"1\" xmlns=\"http://www.w3.org/2000/svg\">"
+          "<path d=\"M6.97211 1.94476C7.55785 1.35914 8.50767 1.35919 9.09343 "
+          "1.94476L13.921 6.77228L13.2138 7.47939L8.38632 2.65187C8.19108 "
+          "2.45682 7.87443 2.45677 7.67922 2.65187L2.74397 7.58711L2.03687 "
+          "6.88L6.97211 1.94476Z\" fill=\"currentColor\"/>"
+          "<path d=\"M7.97571 14.5732L8.02421 2.34139\" stroke=\"currentColor\"/>"
+          "</svg>")
+  "dsh web's up arrow (`IconSendOutlineRegular') of the queue steer cell.
+Both the head and the shaft carry `currentColor', so the tint comes from the
+image `:foreground' the action faces supply — an explicit fill would have to
+name a color librsvg accepts, and the muted shadow tier resolves to an X11
+name (`grey70') that is no CSS color.")
+
+(defun dsh-emacs-composer--next-cell (item kind)
+  "Return ITEM's KIND action cell, or nil.
+KIND is `steer' (send the item now — dsh web's `IconSendOutlineRegular'),
+`edit' (rewrite its text; absent for a non-text item, whose content the edit
+RPC would flatten) or `delete'.  The cell carries the item itself, so RET or a
+click runs the same queue verb the `C-c C-q' manager binds to `s', `e' or `d'."
+  (pcase kind
+    ('steer
+     (dsh-emacs-composer--action-cell
+      "↑" dsh-emacs-composer--send-svg 'dsh-emacs-composer-next-action-face
+      "Send the next message now · steers into the running turn"
+      (lambda () (interactive) (dsh-emacs-queue--send-now item))))
+    ('edit
+     (and (dsh-protocol-queue-item-text-only item)
+          (dsh-emacs-composer--action-cell
+           "✎" dsh-emacs-composer--edit-svg 'dsh-emacs-composer-next-action-face
+           "Edit queued message · C-c C-q e"
+           (lambda ()
+             (interactive)
+             (let ((text (read-string "Edit queued message: "
+                                      (dsh-protocol-queue-item-text item))))
+               (unless (string-empty-p (string-trim text))
+                 (dsh-emacs-queue--edit item text)))))))
+    ('delete
+     (dsh-emacs-composer--action-cell
+      "🗑" dsh-emacs-composer--clear-svg 'dsh-emacs-composer-next-action-face
+      "Delete queued message · C-c C-q d"
+      (lambda () (interactive) (dsh-emacs-queue--delete item))))))
+
+(defconst dsh-emacs-composer--next-cell-kinds '(steer edit delete)
+  "Next Message action cells in the order they are offered.
+The steer arrow comes first and so hugs the preview text; a window that runs
+out of room drops cells from the end of this list (delete, then edit) before
+the arrow.")
+
+(defun dsh-emacs-composer--next-cells (item prefix-cols available)
+  "Return the action cells of ITEM that fit AVAILABLE columns, or nil.
+Cells come from `dsh-emacs-composer--next-cell-kinds' in order and join only
+while the preview keeps eight columns before them, so the compact cluster
+grows left to right and the steer arrow outlives the secondary actions."
+  (let ((kept nil)
+        (used 0))
+    (dolist (kind dsh-emacs-composer--next-cell-kinds)
+      (when-let* ((cell (dsh-emacs-composer--next-cell item kind))
+                  (width (+ used (if kept 1 0) (string-width cell)))
+                  ((<= (+ prefix-cols 1 width 8) available)))
+        (setq kept (append kept (list cell))
+              used width)))
+    kept))
 
 (defun dsh-emacs-composer--render-next-row (item)
-  "Return ITEM's single-line preview fitted to the viewing windows."
+  "Return ITEM's single-line preview fitted to the viewing windows.
+The row mirrors the Goal Row's anatomy without its dock background: the queue
+glyph in its own tint slot, the folded preview in the muted
+`dsh-emacs-composer-next-body-face', and the compact action cluster — steer,
+edit, delete, one space apart — right after the preview text.  Line breaks
+collapse, the preview truncates to the narrowest viewing window, narrow windows
+drop the cluster's tail before the steer arrow, and the full text stays in the
+tooltip.
+No `dsh-emacs-input-box-face' band: the editable `❯' line carries no such
+background (typed text must not inherit faces), so a band here would float
+above nothing; the row's identity is its tinted glyph and muted text instead."
   (let* ((text (or (dsh-protocol-queue-item-text item) ""))
          (preview (replace-regexp-in-string "[\t\n\r]+" " " text))
-         (icon (when (image-type-available-p 'svg)
-                 (propertize
-                  "  " 'display
-                  (create-image dsh-emacs-composer--next-icon-svg 'svg t
-                                :ascent 'center :scale 1.0
-                                :width (dsh-emacs-composer--icon-width)
-                                :foreground
-                                (or (face-foreground 'dsh-emacs-input-prompt-face nil t)
-                                    "gray50")))))
-         (row (concat (if icon (concat icon " ") "Next: ") preview)))
-    (propertize
-     (truncate-string-to-width row (dsh-emacs-composer--row-width) nil nil "…")
-     'face 'dsh-emacs-input-prompt-face
-     'help-echo (concat text "\nC-c C-q to manage pending messages"))))
+         ;; Leave the final column free so a full row does not visually wrap.
+         (available (max 1 (1- (dsh-emacs-composer--row-width))))
+         (prefix (concat (dsh-emacs-composer--next-icon) " "))
+         (prefix-cols (string-width prefix))
+         ;; The local preview has no host item ID yet.  Keep it visible, but
+         ;; wait for the inbox projection before offering queue mutations.
+         (cells (unless (eq item dsh-emacs-queue--optimistic-submit)
+                  (dsh-emacs-composer--next-cells item prefix-cols available)))
+         (cluster (and cells (concat " " (mapconcat #'identity cells " "))))
+         (body (propertize
+                (truncate-string-to-width
+                 preview (max 1 (- available prefix-cols
+                                   (if cluster (string-width cluster) 0)))
+                 nil nil "…")
+                'face 'dsh-emacs-composer-next-body-face
+                'help-echo (concat text "\nC-c C-q to manage pending messages"))))
+    (truncate-string-to-width (concat prefix body cluster) available nil nil "…")))
 
 (defconst dsh-emacs-composer--attachment-icon-svg-template
   (concat "<svg width=\"16\" height=\"16\" viewBox=\"0 0 15 15\" "

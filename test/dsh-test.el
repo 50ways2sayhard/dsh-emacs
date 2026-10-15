@@ -19176,15 +19176,17 @@ input-area draft (which carries no such property) is not counted."
 ;;; management helpers
 ;;; ---------------------------------------------------------------------------
 
-(defun dsh-emacs-test--queue-item (id placement text &optional kind)
+(defun dsh-emacs-test--queue-item (id placement text &optional kind with-attachment)
   "Build one `dsh-protocol-queue-item' struct for tests.
 PLACEMENT is the wire string (\"queued\"/\"steering\"/\"context\") or nil;
-KIND defaults to \"user\"."
+KIND defaults to \"user\"; WITH-ATTACHMENT marks a content list that carries a
+non-text block, so the client withholds its edit cell for the item."
   (make-dsh-protocol-queue-item
    :id id
    :placement (and placement (intern placement))
    :text (or text "")
-   :kind (or kind "user")))
+   :kind (or kind "user")
+   :text-only (not with-attachment)))
 
 (defun dsh-emacs-test--inbox-message (id text &optional kind)
   "Build one wire `inbox' `UserMessage' alist for tests.
@@ -19223,6 +19225,27 @@ ID is the message id, TEXT its single text block, KIND its source kind
     ;; An empty cell — the ordinary reconnect baseline — is an empty list.
     (null (dsh-protocol-queue-items-from-inbox
            (list (cons 'next-turn []) (cons 'next-step []))))))
+
+;; A queue item knows whether its content is all text: the row offers its edit
+;; cell only then, because the edit RPC answers with text blocks and would
+;; otherwise flatten an image or file attachment (postmortem/101).
+(let ((items (dsh-protocol-queue-items-from-inbox
+              (list (cons 'next-turn
+                          (vector (dsh-emacs-test--inbox-message "a" "text only")
+                                  (list (cons 'id "b")
+                                        (cons 'content
+                                              (vector
+                                               (list (cons 'type "text")
+                                                     (cons 'text "look at this"))
+                                               (list (cons 'type "image")
+                                                     (cons 'attachment
+                                                           (list (cons 'attachmentId
+                                                                       "att-1"))))))
+                                        (cons 'source (list (cons 'kind "user"))))))))))
+  (dsh-test-assert "queue-item-text-only-tracks-its-blocks"
+    (eq t (dsh-protocol-queue-item-text-only (nth 0 items)))
+    (equal "look at this" (dsh-protocol-queue-item-text (nth 1 items)))
+    (null (dsh-protocol-queue-item-text-only (nth 1 items)))))
 
 ;; Counts: context placement does not enter the Q/S tally (aligned with
 ;; dsh web QueueDock)
@@ -19376,7 +19399,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
                           beg 'dsh-emacs-composer-next-row nil (point-max)))))
 
 ;; Preview gating: while the self-submit transient lives (mirror holds only
-;; our own message, suppress armed) the `Next: …' row must not paint —
+;; our own message, suppress armed) the Next Message row must not paint —
 ;; a preview would flash the input line on every submit (the literal
 ;; "flash next message" symptom); once disarmed it paints from the mirror
 ;; normally.  The mode-line Q/S counts are not gated and still reflect
@@ -19399,7 +19422,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
     (when (buffer-live-p buf) (kill-buffer buf))))
 
 ;; Disarming triggers a repaint: when the timeout lifts the flag while the
-;; message is STILL queued (a long busy turn), the `Next: …' preview must
+;; message is STILL queued (a long busy turn), the Next Message preview must
 ;; come back — frames are the only repaint trigger, the flag change alone
 ;; is not, so without this the row would stay gone until the next frame
 ;; arrives.
@@ -19427,7 +19450,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
 
 ;; The parked case is revealed by STATE, not by a timer: a submit made while
 ;; a turn is already running can only be claimed at the turn end, so its
-;; `Next: …' preview must show even though the submit-suppression is still
+;; Next Message preview must show even though the submit-suppression is still
 ;; armed — the old timer-only reveal is what made a queued message appear
 ;; ~2s late.  The discriminator is the submit-time busy state captured by
 ;; `dsh-emacs-queue--mark-submit-suppress', not the live spinner.
@@ -19878,21 +19901,255 @@ ID is the message id, TEXT its single text block, KIND its source kind
     (dsh-test-assert "queue-next-item-empty-nil"
       (null (dsh-emacs-queue-next-item)))))
 
-;; Next Message uses the same prompt color as the historical next-preview prefix.
+;; The Next Message row mirrors the Goal Row's anatomy: its own queue-glyph
+;; tint slot and the muted body tier the goal objective uses --- never the input
+;; prompt's accent, and no input-box band (the editable `❯' line has none,
+;; postmortem/101).
 (let ((item (dsh-emacs-test--queue-item "a" "queued" "Alpha")))
   (cl-letf (((symbol-function 'image-type-available-p) (lambda (_type) t))
             ((symbol-function 'create-image)
              (lambda (_data _type _data-p &rest props) (cons 'image props))))
-    (let ((row (dsh-emacs-composer--render-next-row item)))
+    (let* ((row (dsh-emacs-composer--render-next-row item))
+           (icon-faces (ensure-list (get-text-property 0 'face row)))
+           (body-faces (ensure-list (get-text-property 3 'face row))))
       (dsh-test-assert "composer-next-icon-is-chrome"
-        (equal "   Alpha" (substring-no-properties row))
+        (string-prefix-p "   Alpha" (substring-no-properties row))
         (eq 'image (car (get-text-property 0 'display row)))
-        (eq 'dsh-emacs-input-prompt-face (get-text-property 0 'face row)))))
+        ;; The glyph carries its tint face; the line carries no band face.
+        (equal '(dsh-emacs-composer-next-face) icon-faces)
+        (equal '(dsh-emacs-composer-next-body-face) body-faces)
+        ;; Both glyph paths reserve the dartboard's two columns.
+        (= 2 (string-width (dsh-emacs-composer--next-icon)))
+        (null (cl-find-if (lambda (i) (memq 'dsh-emacs-input-box-face
+                                            (ensure-list (get-text-property i 'face row))))
+                          (number-sequence 0 (1- (length row)))))
+        (null (memq 'dsh-emacs-input-prompt-face body-faces)))))
   (cl-letf (((symbol-function 'image-type-available-p) (lambda (_type) nil)))
-    (let ((row (dsh-emacs-composer--render-next-row item)))
+    (let* ((row (dsh-emacs-composer--render-next-row item))
+           (icon-faces (ensure-list (get-text-property 0 'face row))))
       (dsh-test-assert "composer-next-text-fallback-is-chrome"
-        (equal "Next: Alpha" (substring-no-properties row))
-        (eq 'dsh-emacs-input-prompt-face (get-text-property 0 'face row))))))
+        (string-prefix-p "≡  Alpha" (substring-no-properties row))
+        (= 2 (string-width (dsh-emacs-composer--next-icon)))
+        (equal '(dsh-emacs-composer-next-face) icon-faces)))))
+
+;; The row carries a compact action cluster right after the text --- dsh web's
+;; up arrow, edit and trash (`IconSendOutlineRegular'/`Edit'/`TrashOutline16'),
+;; each cell holding its item so RET or a click runs the same queue verb the
+;; `C-c C-q' manager binds to `s'/`e'/`d' (postmortem/101).
+(let ((item (dsh-emacs-test--queue-item "q1" "queued" "Alpha"))
+      (sent nil)
+      (edited nil)
+      (deleted nil)
+      (answer "Alpha fixed"))
+  (cl-letf (((symbol-function 'image-type-available-p) (lambda (_type) t))
+            ((symbol-function 'create-image)
+             (lambda (_data _type _data-p &rest props) (cons 'image props)))
+            ((symbol-function 'read-string) (lambda (&rest _args) answer))
+            ((symbol-function 'dsh-emacs-queue--send-now)
+             (lambda (it) (setq sent it)))
+            ((symbol-function 'dsh-emacs-queue--edit)
+             (lambda (it text) (setq edited (list it text))))
+            ((symbol-function 'dsh-emacs-queue--delete)
+             (lambda (it) (setq deleted it))))
+    (let* ((row (dsh-emacs-composer--render-next-row item))
+           ;; One entry per cell: a cell's two columns share one keymap object.
+           (cells nil)
+           (prev nil))
+      (cl-loop for i from 0 below (length row)
+               for map = (get-text-property i 'keymap row)
+               when map do
+               (unless (and prev (= i (1+ (car prev))) (eq map (cdr prev)))
+                 (push (cons i map) cells))
+               (setq prev (cons i map)))
+      (setq cells (nreverse cells))
+      (let ((arrow (car cells))
+            (edit (nth 1 cells))
+            (delete (nth 2 cells)))
+        (dsh-test-assert "composer-next-cells-are-chrome"
+        ;; Three two-column cells, one space apart, right after the preview.
+        (= 3 (length cells))
+        (= 3 (- (car edit) (car arrow)))
+        (= 3 (- (car delete) (car edit)))
+        (equal " " (substring-no-properties row (1- (car arrow)) (car arrow)))
+        (equal "a" (substring-no-properties row (- (car arrow) 2)
+                                            (1- (car arrow))))
+        (equal (list "Send the next message now · steers into the running turn"
+                     "Edit queued message · C-c C-q e"
+                     "Delete queued message · C-c C-q d")
+               (mapcar (lambda (cell) (get-text-property (car cell) 'help-echo row))
+                       cells))
+        (cl-every (lambda (cell)
+                    (and (eq 'dsh-emacs-composer-next-action-face
+                             (car (ensure-list
+                                   (get-text-property (car cell) 'face row))))
+                         (eq 'highlight
+                             (get-text-property (car cell) 'mouse-face row))))
+                  cells)
+        ;; Each cell runs its own queue verb on this row's item.
+        (progn (call-interactively
+                (lookup-key (cdr arrow) (kbd "RET")))
+               (eq sent item))
+        (progn (call-interactively
+                (lookup-key (cdr edit) [mouse-1]))
+               (equal (list item "Alpha fixed") edited))
+        (progn (call-interactively
+                (lookup-key (cdr delete) (kbd "RET")))
+               (eq deleted item)))))
+    ;; A blank answer leaves the queued text alone.
+    (setq answer "   " edited nil)
+    (let* ((row (dsh-emacs-composer--render-next-row item))
+           (edit-pos (cl-loop for i from 0 below (length row)
+                              when (equal "Edit queued message · C-c C-q e"
+                                          (get-text-property i 'help-echo row))
+                              return i)))
+      (call-interactively (lookup-key (get-text-property edit-pos 'keymap row)
+                                      (kbd "RET")))
+      (dsh-test-assert "composer-next-edit-ignores-blank-text"
+        (null edited)))
+    ;; A message with a non-text block keeps the arrow and trash, not edit:
+    ;; the edit RPC would replace its content with text.
+    (let* ((row (dsh-emacs-composer--render-next-row
+                 (dsh-emacs-test--queue-item "q1" "queued" "Alpha" nil t)))
+           (helps (cl-loop for i from 0 below (length row)
+                           for h = (get-text-property i 'help-echo row)
+                           when (and h (string-match-p "queued message" h))
+                           collect h)))
+      (dsh-test-assert "composer-next-edit-cell-needs-text-only-content"
+        (equal '("Delete queued message · C-c C-q d") (delete-dups helps))))
+    ;; Too narrow for the whole cluster: the tail yields first (delete, then
+    ;; edit) while the arrow stays; narrower still drops every cell, leaving the
+    ;; bare preview on the buffer background.
+    (cl-letf (((symbol-function 'dsh-emacs-composer--row-width) (lambda () 18)))
+      (let* ((row (dsh-emacs-composer--render-next-row item))
+             (helps (cl-loop for i from 0 below (length row)
+                             for h = (get-text-property i 'help-echo row)
+                             when (and h (string-match-p "queued message" h))
+                             collect h)))
+        (dsh-test-assert "composer-next-cluster-drops-from-the-tail"
+          (equal '("Edit queued message · C-c C-q e") (delete-dups helps))
+          (equal "Send the next message now · steers into the running turn"
+                 (cl-loop for i from 0 below (length row)
+                          when (get-text-property i 'keymap row)
+                          return (get-text-property i 'help-echo row))))))
+    (cl-letf (((symbol-function 'dsh-emacs-composer--row-width) (lambda () 14)))
+      (let ((row (dsh-emacs-composer--render-next-row item)))
+        (dsh-test-assert "composer-next-cells-yield-to-a-narrow-window"
+          (null (cl-find-if (lambda (i) (get-text-property i 'keymap row))
+                            (number-sequence 0 (1- (length row)))))
+          (equal "   Alpha" (substring-no-properties row)))))))
+
+;; Inline send must not turn an attachment-bearing item into plain text while
+;; idle.  Exercise the actual queue verb, mocking only the RPC/submit seams.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (setq-local dsh-emacs--buffer-session "inline-send")
+  (let ((item (dsh-emacs-test--queue-item "image-q" "queued" "Look" nil t))
+        (busy nil)
+        calls submitted rejected)
+    (cl-letf (((symbol-function 'dsh-emacs--busy-p) (lambda () busy))
+              ((symbol-function 'dsh-emacs--rpc-async)
+               (lambda (method args callback)
+                 (push (list method args) calls)
+                 (funcall callback t nil)))
+              ((symbol-function 'dsh-emacs--submit-prompt)
+               (lambda (&rest args) (setq submitted args))))
+      (setq dsh-emacs--queue-items (list item))
+      (condition-case nil
+          (call-interactively
+           (lookup-key
+            (get-text-property 0 'keymap
+                               (dsh-emacs-composer--next-cell item 'steer))
+            (kbd "RET")))
+        (user-error (setq rejected t)))
+      (dsh-test-assert "inline-idle-send-preserves-queued-attachments"
+        rejected (null calls) (null submitted)
+        (equal (list item) dsh-emacs--queue-items)
+        (null dsh-emacs--queue-deleted))
+      (setq busy t calls nil submitted nil)
+      (dsh-emacs-queue--send-now item)
+      (dsh-test-assert "inline-busy-send-steers-attachments-by-id"
+        (equal calls
+               '(("session/updateQueue"
+                  ((request (sessionId . "inline-send") (itemId . "image-q")
+                            (action (kind . "steer")))))))
+        (null submitted))
+      (setq busy nil calls nil submitted nil
+            item (dsh-emacs-test--queue-item "text-q" "queued" "Plain")
+            dsh-emacs--queue-items (list item))
+      (dsh-emacs-queue--send-now item)
+      (dsh-test-assert "inline-idle-send-still-resubmits-text"
+        (equal submitted '("Plain"))
+        (equal calls
+               '(("session/updateQueue"
+                  ((request (sessionId . "inline-send") (itemId . "text-q")
+                            (action (kind . "remove")))))))))))
+
+;; A projection replaces structs even when only placement changes.  The row's
+;; arrow must run against the new placement in both directions.
+(dolist (placement '("queued" "steering"))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs--buffer-session "placement-chat")
+    (let (calls)
+      (cl-letf (((symbol-function 'dsh-emacs--busy-p) (lambda () t))
+                ((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (_method args _callback) (push args calls))))
+        (setq dsh-emacs--queue-items
+              (list (dsh-emacs-test--queue-item
+                     "same-id" (if (equal placement "queued") "steering" "queued")
+                     "Same text")))
+        (dsh-emacs-composer-render)
+        (setq dsh-emacs--queue-items
+              (list (dsh-emacs-test--queue-item "same-id" placement "Same text")))
+        (dsh-emacs-queue--refresh-ui)
+        (let* ((row (dsh-test-composer-next-row))
+               (pos (text-property-not-all 0 (length row) 'keymap nil row)))
+          (call-interactively (lookup-key (get-text-property pos 'keymap row)
+                                          (kbd "RET"))))
+        (dsh-test-assert (format "inline-arrow-uses-current-placement-%s" placement)
+          (equal calls
+                 (when (equal placement "queued")
+                   '(((request (sessionId . "placement-chat")
+                               (itemId . "same-id")
+                               (action (kind . "steer"))))))))))))
+
+;; Optimistic previews have a local identity, not an actionable host item.
+;; The host acknowledgement must restore the controls even for identical text.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (setq-local dsh-emacs--buffer-session "optimistic-chat")
+  (dsh-emacs-queue--optimistic-submit-show "Pending text")
+  (let ((row (dsh-test-composer-next-row)))
+    (dsh-test-assert "inline-optimistic-preview-has-no-actions"
+      (string-match-p "Pending text" row)
+      (null (text-property-not-all 0 (length row) 'keymap nil row))))
+  (dsh-emacs-queue-apply
+   (current-buffer) 'test-process
+   (list (dsh-emacs-test--queue-item "host-id" "queued" "Pending text")))
+  (dsh-emacs-queue--refresh-ui)
+  (let* ((row (dsh-test-composer-next-row))
+         (pos (text-property-not-all 0 (length row) 'keymap nil row))
+         calls)
+    (cl-letf (((symbol-function 'dsh-emacs--busy-p) (lambda () t))
+              ((symbol-function 'dsh-emacs--rpc-async)
+               (lambda (_method args _callback) (push args calls))))
+      (when pos
+        (call-interactively (lookup-key (get-text-property pos 'keymap row)
+                                        (kbd "RET"))))
+      (dsh-test-assert "inline-confirmed-preview-acts-on-host-id"
+        (equal calls
+               '(((request (sessionId . "optimistic-chat")
+                           (itemId . "host-id") (action (kind . "steer"))))))))))
+
+;; The two Composer rows keep one queue color and one muted tier: the glyph
+;; tint resolves the mode-line queue amber, and both body faces inherit shadow
+;; so nothing borrows the `❯' prompt accent.
+(dsh-test-assert "composer-next-shares-the-queue-color"
+  (equal (face-foreground 'dsh-emacs-composer-next-face nil t)
+         (face-foreground 'dsh-emacs-modeline-queue-face nil t)))
+(dsh-test-assert "composer-next-body-matches-the-goal-body-tier"
+  (eq (face-attribute 'dsh-emacs-composer-next-body-face :inherit)
+      (face-attribute 'dsh-emacs-composer-goal-body-face :inherit)))
 
 ;; Integration regression: after steering one item, the server first
 ;; pushes a remove frame (mirror cleared), then a next-step frame (the
@@ -19931,7 +20188,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
                         ;; otherwise fall back to the text form
                         (if (image-type-available-p 'svg)
                             (string-prefix-p " " plain)
-                          (string-search "Next:" plain))))))
+                          (string-search "≡" plain))))))
           ;; Burst 2: remove frame (mirror cleared immediately, preview line not
           ;; redrawn yet) + steering regression frame
           (dsh-emacs-queue-apply buf 'proc nil)
@@ -22139,7 +22396,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
   (cl-letf (((symbol-function 'dsh-emacs-composer--row-width) (lambda () 8))
             ((symbol-function 'dsh-emacs-composer--goal-icon) (lambda () nil))
             ((symbol-function 'dsh-emacs-composer--action-image)
-             (lambda (_svg) nil)))
+             (lambda (&rest _args) nil)))
     (dsh-test-assert "composer-goal-narrow-fallback-fits-width"
       (<= (string-width (dsh-emacs-composer--render-row goal)) 8))))
 
@@ -22918,8 +23175,10 @@ ID is the message id, TEXT its single text block, KIND its source kind
           ((symbol-function 'create-image)
            (lambda (_data _type _data-p &rest props) (cons 'image props))))
   (let* ((icon (dsh-emacs-composer--goal-icon))
-         (action (dsh-emacs-composer--goal-action-cell
-                  "⏸" dsh-emacs-composer--pause-svg #'dsh-emacs-goal-pause)))
+         (action (dsh-emacs-composer--action-cell
+                  "⏸" dsh-emacs-composer--pause-svg
+                  'dsh-emacs-composer-goal-action-face
+                  "Pause goal · C-c C-g p" #'dsh-emacs-goal-pause)))
     (dsh-test-assert "goal-svg-fits-reserved-columns"
       (= (plist-get (cdr (get-text-property 0 'display icon)) :width) 10)
       (= (plist-get (cdr (get-text-property 0 'display action)) :width) 10)

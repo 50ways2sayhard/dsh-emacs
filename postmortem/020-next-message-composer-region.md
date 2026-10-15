@@ -1,5 +1,10 @@
 # 020 — Next Message shares the Composer region
 
+_Superseded in part by [101](101-next-message-goal-dock.md): the leading glyph
+is dsh web's queue bubble, not a clock, and the row is docked like the Goal Row
+(queue amber tint, muted preview, input-box background, `≡` fallback) instead
+of borrowing the `❯` prompt accent. Region ownership below still holds._
+
 ## Background
 
 The queue preview from 003 modified the input prompt, locating its face run

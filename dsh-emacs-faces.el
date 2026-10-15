@@ -198,6 +198,18 @@
   :type 'string
   :group 'dsh-emacs-faces)
 
+(defcustom dsh-emacs-color-queue "#b45f06"
+  "Pending-input queue color (light).
+One owner for the mode-line queue indicator and the Composer Next Message
+glyph, so pending input keeps one hue."
+  :type 'string
+  :group 'dsh-emacs-faces)
+
+(defcustom dsh-emacs-color-queue-dark "#f0a63c"
+  "Pending-input queue color for dark themes."
+  :type 'string
+  :group 'dsh-emacs-faces)
+
 ;;; ---------------------------------------------------------------------------
 ;;; Brand / accent
 ;;; ---------------------------------------------------------------------------
@@ -602,6 +614,30 @@ goal tool cards, so a goal icon matches the tool purple
   "Goal Row muted action glyphs (pause/resume/edit/clear buttons)."
   :group 'dsh-emacs-faces)
 
+(defface dsh-emacs-composer-next-face
+  `((((background light)) :foreground ,dsh-emacs-color-queue)
+    (((background dark))  :foreground ,dsh-emacs-color-queue-dark)
+    (t :inherit warning))
+  "Next Message row leading queue glyph tint.
+The row owns its icon slot exactly as the Goal Row owns its dartboard; the
+amber is the pending-input hue the mode line already shows
+\(`dsh-emacs-modeline-queue-face'), so one queue keeps one color."
+  :group 'dsh-emacs-faces)
+
+(defface dsh-emacs-composer-next-body-face
+  '((t :inherit shadow :slant normal))
+  "Next Message row preview on the input-box background.
+The muted upright tier the Goal Row gives its objective; the row no longer
+borrows the input prompt's accent."
+  :group 'dsh-emacs-faces)
+
+(defface dsh-emacs-composer-next-action-face
+  '((t :inherit shadow))
+  "Next Message row up-arrow cell that sends the previewed item now.
+Muted like the Goal Row's action glyphs (dsh web tints its queue actions
+`label-tertiary'); the hover highlight and tooltip carry the affordance."
+  :group 'dsh-emacs-faces)
+
 (defface dsh-emacs-composer-attachment-face
   `((((background light)) :foreground ,dsh-emacs-color-accent)
     (((background dark))  :foreground ,dsh-emacs-color-accent-dark)
@@ -678,10 +714,11 @@ goal tool cards, so a goal icon matches the tool purple
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-modeline-queue-face
-  `((((background light)) :foreground "#b45f06")
-    (((background dark))  :foreground "#f0a63c")
+  `((((background light)) :foreground ,dsh-emacs-color-queue)
+    (((background dark))  :foreground ,dsh-emacs-color-queue-dark)
     (t :inherit warning))
-  "Pending-input queue indicator (`[Q2 S1]') in the mode line."
+  "Pending-input queue indicator (`[Q2 S1]') in the mode line.
+Shares `dsh-emacs-color-queue' with the Composer Next Message glyph."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-modeline-permission-face

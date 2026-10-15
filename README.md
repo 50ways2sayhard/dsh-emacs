@@ -178,7 +178,10 @@ Refresh existing chats after changing the option. See
 message for the next turn. `C-u C-c C-c` steers the running turn instead;
 `C-c C-c` with blank input and no staged attachments interrupts it. Configure
 this with `dsh-emacs-busy-enter-behavior`. The `C-c C-q` queue menu acts on the
-highlighted item; `x` deletes all pending items.
+highlighted item; `x` deletes all pending items. Next Message offers inline
+actions after the server confirms the queued item. Send-now can steer an
+attachment-bearing item into a running turn, but refuses it while idle and
+leaves it queued; idle resubmission supports text-only items.
 
 Type **`@`** to choose file, directory or session references: `@src/` drills
 into a directory and `@session-title` mentions another session. See

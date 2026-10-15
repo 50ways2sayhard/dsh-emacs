@@ -528,39 +528,44 @@ While a turn is running this steers it into the running turn (jump the
 queue).  While idle there is no wake-only RPC: the item is deleted and
 re-submitted as an ordinary prompt, which wakes the driver — the parked
 queue drains in order and the re-submitted copy re-joins at the tail
-with its text preserved."
-  (if (eq (dsh-protocol-queue-item-placement item) 'steering)
-      (message "Already steering")
-    (if (dsh-emacs--busy-p)
-        (dsh-emacs-queue--steer item)
-      (let* ((text (dsh-protocol-queue-item-text item))
-             (id (dsh-protocol-queue-item-id item))
-             (session-id (dsh-emacs-queue--session-id))
-             (buf (current-buffer)))
-        (push id dsh-emacs--queue-deleted) ; delete on send, not a consumption
-        (dsh-emacs--rpc-async
-         "session/updateQueue"
-         `((request . ((sessionId . ,session-id)
-                       (itemId . ,id)
-                       (action . ((kind . "remove"))))))
-         (lambda (ok value)
-           (when (buffer-live-p buf)
-             (with-current-buffer buf
-               (if ok
-                   (progn
-                     ;; Optimistic removal + input-line flash, then resubmit
-                     ;; (a failure is never resent).
-                     (setq dsh-emacs--queue-items
-                           (cl-remove-if
-                            (lambda (it)
-                              (equal id (dsh-protocol-queue-item-id it)))
-                            dsh-emacs--queue-items))
-                     (dsh-emacs-queue--refresh-ui)
-                     (dsh-emacs--submit-prompt text))
+with its text preserved.  Reject non-text items while idle, before removing
+anything: the text-only resubmit cannot preserve their attachments."
+  (cond
+   ((eq (dsh-protocol-queue-item-placement item) 'steering)
+    (message "Already steering"))
+   ((dsh-emacs--busy-p)
+    (dsh-emacs-queue--steer item))
+   ((not (dsh-protocol-queue-item-text-only item))
+    (user-error "Cannot send queued attachments while idle"))
+   (t
+    (let* ((text (dsh-protocol-queue-item-text item))
+           (id (dsh-protocol-queue-item-id item))
+           (session-id (dsh-emacs-queue--session-id))
+           (buf (current-buffer)))
+      (push id dsh-emacs--queue-deleted) ; delete on send, not a consumption
+      (dsh-emacs--rpc-async
+       "session/updateQueue"
+       `((request . ((sessionId . ,session-id)
+                     (itemId . ,id)
+                     (action . ((kind . "remove"))))))
+       (lambda (ok value)
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (if ok
                  (progn
-                   (setq dsh-emacs--queue-deleted
-                         (delete id dsh-emacs--queue-deleted))
-                   (message "Queue update failed: %S" value)))))))))))
+                   ;; Optimistic removal + input-line flash, then resubmit
+                   ;; (a failure is never resent).
+                   (setq dsh-emacs--queue-items
+                         (cl-remove-if
+                          (lambda (it)
+                            (equal id (dsh-protocol-queue-item-id it)))
+                          dsh-emacs--queue-items))
+                   (dsh-emacs-queue--refresh-ui)
+                   (dsh-emacs--submit-prompt text))
+               (progn
+                 (setq dsh-emacs--queue-deleted
+                       (delete id dsh-emacs--queue-deleted))
+                 (message "Queue update failed: %S" value)))))))))))
 
 (defun dsh-emacs-queue--label (item)
   "Return the queue-menu label for ITEM, e.g. \"[Q] fix the bug\"."
