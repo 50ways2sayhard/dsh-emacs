@@ -2,3 +2,4 @@
 *~
 *.el.bak
 IMPLEMENTATION.md
+.playwright-mcp/
