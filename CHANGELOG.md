@@ -290,6 +290,11 @@ minor) and stay undated until the release is cut.
   as positions at the time of each setter call, so later edits or marker cleanup
   cannot change the reported ranges or their summed span.
 
+- **Keep running status through failed reconnects**: a failed connection attempt
+  no longer loses the active turn flag. After reconnection and automatic
+  compaction, a bounded history snapshot without `turn/start` still restores
+  the running caption; `turn/end` clears it normally.
+
 - **Open a session mention as the session, not as its opaque URI**: RET or a
   click on a `@label` chip or a rendered `@[label](dsh-session:…)` mention now
   decodes the URI payload into the session id before opening the chat.

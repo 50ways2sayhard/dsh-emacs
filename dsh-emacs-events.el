@@ -1098,6 +1098,13 @@ reconnect is re-armed and another connect scheduled."
                                 (dsh-protocol-session-running session))))
              (process nil))
         (dsh-emacs-events-disconnect chat)
+        ;; Teardown clears busy, but a failed connection is not a turn end.
+        ;; Restore before opening the socket so every retry retains liveness;
+        ;; a bounded snapshot after compaction may omit the original start.
+        ;; Only fresh transcripts seed from the host cache (above): an old
+        ;; cached running flag must never undo an already consumed turn/end.
+        (when (and was-busy (fboundp 'dsh-emacs--ml-busy-set))
+          (dsh-emacs--ml-busy-set t))
         (condition-case err
             (let* ((url (url-generic-parse-url dsh-emacs-base-url))
                    (host (url-host url))
@@ -1161,16 +1168,7 @@ reconnect is re-armed and another connect scheduled."
               ;; slash command is still running, re-arm its spinner (a no-op
               ;; for fresh buffers and already-settled rows).
               (when (fboundp 'dsh-emacs--command-spinner-revive)
-                (dsh-emacs--command-spinner-revive))
-              ;; Disconnect clears the local busy flag.  Restore a running
-              ;; turn from the previous connection; only a fresh transcript
-              ;; may seed from cached host status, since its bounded follow
-              ;; window may omit turn/start.  An existing transcript may have
-              ;; consumed turn/end before the host cache caught up: that end
-              ;; is deduplicated on replay and must not be undone by the cache.
-              ;; Seed before replay so a new turn/end can still clear it.
-              (when (and was-busy (fboundp 'dsh-emacs--ml-busy-set))
-                (dsh-emacs--ml-busy-set t)))
+                (dsh-emacs--command-spinner-revive)))
           (error
            (when (and (processp process) (process-live-p process))
              (delete-process process))

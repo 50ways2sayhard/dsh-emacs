@@ -16027,6 +16027,49 @@ received, RESULT is FN's return value."
         (dsh-emacs--ml-busy-clear))
     (kill-buffer buf)))
 
+;; A failed reconnect must retain liveness for the next attempt.  After a
+;; long turn's compaction, the bounded snapshot need not include turn/start.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (setq-local dsh-emacs--buffer-session "reconnect-compaction")
+  (setq-local dsh-emacs--anchor-seq 100)
+  (dsh-emacs--ml-busy-set t)
+  (let ((attempts 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'open-network-stream)
+                   (lambda (&rest _)
+                     (if (= (cl-incf attempts) 1)
+                         (error "Test connection failure")
+                       :fake-proc)))
+                  ((symbol-function 'set-process-query-on-exit-flag) #'ignore)
+                  ((symbol-function 'set-process-coding-system) #'ignore)
+                  ((symbol-function 'process-put) #'ignore)
+                  ((symbol-function 'set-process-filter) #'ignore)
+                  ((symbol-function 'set-process-sentinel) #'ignore)
+                  ((symbol-function 'dsh-emacs-events--schedule-reconnect)
+                   #'ignore))
+          (dsh-emacs-events-connect (current-buffer))
+          (dsh-emacs-events-connect (current-buffer))
+          (dsh-emacs-events--follow-snapshot
+           (current-buffer)
+           '((cursor . 102)
+             (records . [((type . "event")
+                          (event . ((type . "compaction/start") (seq . 101)
+                                    (data . ((compactionId . "c") (turn . 1))))))
+                         ((type . "event")
+                          (event . ((type . "compaction/end") (seq . 102)
+                                    (data . ((compactionId . "c") (turn . 1))))))])))
+          (dsh-test-assert "failed-reconnect-retains-running-after-compaction"
+            dsh-emacs--ml-busy
+            (string-match-p "Deep diving" (dsh-emacs--ml-busy-indicator)))
+          (dsh-emacs-events--dispatch-event
+           (current-buffer)
+           '((type . "turn/end") (seq . 103) (data . ((turn . 1)))))
+          (dsh-test-assert "recovered-connection-still-obeys-turn-end"
+            (null dsh-emacs--ml-busy)
+            (string-empty-p (dsh-emacs--ml-busy-indicator))))
+      (dsh-emacs-events-disconnect (current-buffer)))))
+
 ;; --- Test 98h: reconnect while idle/settled does not light busy --- no ghost
 ;; spinner may appear ---
 (let ((buf (generate-new-buffer " *dsh-ml-reconnect-idle*")))
