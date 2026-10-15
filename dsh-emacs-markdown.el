@@ -938,7 +938,10 @@ left untouched."
             (goto-char line-start)
             (skip-chars-forward " \t" line-end)
             (while (eq (char-after) ?>)
-              (put-text-property (point) (1+ (point)) 'display bar)
+              ;; A fresh copy per `>': adjacent `eq' display strings are
+              ;; drawn once, which would merge `>>' into a single bar.
+              (put-text-property (point) (1+ (point)) 'display
+                                 (copy-sequence bar))
               (forward-char 1)
               (skip-chars-forward " \t" line-end)))
           (add-face-text-property line-start (1- line-end)

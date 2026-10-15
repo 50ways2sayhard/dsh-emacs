@@ -232,6 +232,13 @@ minor) and stay undated until the release is cut.
 
 ### Changed
 
+- **Faster Markdown rendering with less garbage collection**: code blocks
+  set up each language's major mode once and reuse it, table rows are
+  assembled without repeated string copies, and streamed flushes no longer
+  rebuild the image-path regexp. Rendered text and faces are unchanged; in a
+  GUI test with default GC settings, a 10 KB reply rendered about 22% faster
+  and a streamed 3 KB reply took 40–50% less time. (rationale: postmortem/108)
+
 - **Reuse unchanged session row layouts**: repeated list refreshes reuse title
   padding and styling while keeping status, relative time, child activity and
   navigation targets current. Hidden and removed rows leave the cache.

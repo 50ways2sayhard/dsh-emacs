@@ -11098,6 +11098,43 @@ Lets a test drive a malformed content value through the result path."
                      (ensure-list (get-text-property 1 'face second))))))
     (advice-remove 'emacs-lisp-mode count)))
 
+;; Extensions are deliberately prefix-distinct: `regexp-opt' factors a common
+;; prefix ("aaaimg" "bbimg" compile to \(?:aaa\|bb\)img), so a literal
+;; extension must survive in the compiled regexp for the checks below.
+(let ((dsh-emacs-markdown--image-path-regexp nil)
+      (image-file-name-extensions (list "zzimg")))
+  (with-temp-buffer
+    (dsh-emacs-markdown--replace-image-file-paths)
+    (let ((cached dsh-emacs-markdown--image-path-regexp))
+      (dsh-emacs-markdown--replace-image-file-paths)
+      (let ((reused (eq cached dsh-emacs-markdown--image-path-regexp)))
+        (setq image-file-name-extensions (list "yyimg"))
+        (dsh-emacs-markdown--replace-image-file-paths)
+        (dsh-test-assert "markdown-image-path-regexp-cache"
+          reused
+        (string-match-p "zzimg" (cdr cached))
+        (string-match-p "yyimg" (cdr dsh-emacs-markdown--image-path-regexp))
+          (not (string-match-p
+                "zzimg" (cdr dsh-emacs-markdown--image-path-regexp))))))))
+
+(let ((dsh-emacs-markdown--image-path-regexp nil)
+      (image-file-name-extensions (list "qqimg" "wwimg")))
+  (dsh-emacs-markdown--replace-image-file-paths)   ; warm the cache
+  (let ((first (cdr dsh-emacs-markdown--image-path-regexp)))
+    ;; Ordinary configuration: a new list object with the same contents.
+    (setq image-file-name-extensions (list "qqimg" "wwimg"))
+    (dsh-emacs-markdown--replace-image-file-paths)
+    ;; In-place mutation of the very list the cache was built from: the
+    ;; variable still reads `qqimg', so keying the cache on identity would
+    ;; serve the regexp above and never learn about `eeimg'.
+    (setcar (cdr image-file-name-extensions) "eeimg")
+    (dsh-emacs-markdown--replace-image-file-paths)
+    (let ((rebuilt (cdr dsh-emacs-markdown--image-path-regexp)))
+      (dsh-test-assert "markdown-image-path-regexp-cache-tracks-edits"
+        (and (string-match-p rebuilt "/tmp/pic.qqimg") t)
+        (not (string-match-p rebuilt "/tmp/pic.wwimg"))
+        (and (string-match-p rebuilt "/tmp/pic.eeimg") t)))))
+
 ;; --- Test 72: markdown parsing layer pure-function reinforcement (coverage
 ;; report class A blind spots) ---
 ;; Target: deconstruct / highlight-code / table-min-widths / shorten-cwd /
