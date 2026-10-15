@@ -20796,6 +20796,18 @@ ID is the message id, TEXT its single text block, KIND its source kind
               dsh-emacs--reference-sessions nil
               dsh-emacs--reference-pop-token nil))
 
+(defun dsh-test-reference--session-uri (session-id)
+  "Return the canonical `dsh-session:' URI for SESSION-ID.
+Mirrors the host's `encodeSessionReferenceUri': base64url of the JSON string
+literal, padding stripped — the test-only inverse of
+`dsh-emacs-reference--decode-session-uri'."
+  (let* ((b64 (base64-encode-string
+               (encode-coding-string (json-encode session-id) 'utf-8) t))
+         (plain (replace-regexp-in-string "=" "" b64 t t))
+         (dash (replace-regexp-in-string "+" "-" plain t t))
+         (url (replace-regexp-in-string "/" "_" dash t t)))
+    (concat "dsh-session:" url)))
+
 ;; A short @ token must not copy the entire preceding draft on each keypress.
 (with-temp-buffer
   (dsh-emacs-mode)
@@ -21244,12 +21256,21 @@ ID is the message id, TEXT its single text block, KIND its source kind
 
 ;; --- rendering: a completed @ reference → colored clickable link (session
 ;; collapsed to @label) ---
-(let ((spans (dsh-emacs-reference--link-spans
-              "see @src/a.ts and @[My Talk](dsh-session:ab1_-2) done")))
+(let* ((sid "session-ab1-2")
+       (spans (dsh-emacs-reference--link-spans
+               (concat "see @src/a.ts and @[My Talk]("
+                       (dsh-test-reference--session-uri sid) ") done"))))
   (dsh-test-assert "link-spans-file-and-session"
     (equal (mapcar (lambda (s) (list (nth 2 s) (nth 3 s)))
                    spans)
-           '((file "src/a.ts") (session "ab1_-2"))))
+           `((file "src/a.ts") (session ,sid))))
+  ;; The URI payload is base64url: it stays a session span (so the file matcher
+  ;; cannot eat its `@[label' prefix) even when no id decodes.
+  (dsh-test-assert "link-spans-base64url-charset-claimed"
+    (equal (mapcar (lambda (s) (list (nth 2 s) (nth 3 s)))
+                   (dsh-emacs-reference--link-spans
+                    "@[T](dsh-session:ab1_-2)"))
+           '((session nil))))
   (dsh-test-assert "link-spans-not-email"
     (null (dsh-emacs-reference--link-spans "contact mail@example.com now")))
   ;; A bare @word (including extensionless files such as @LICENSE) is always a file
@@ -21262,15 +21283,67 @@ ID is the message id, TEXT its single text block, KIND its source kind
   (dsh-test-assert "link-spans-lone-at-not-file"
     (null (dsh-emacs-reference--link-spans "an @ alone and @ here"))))
 
-(let ((out (dsh-emacs-reference-fontify
-            "see @src/ui/button.tsx then @[My Talk](dsh-session:ab1_-2), mail@example ok")))
+;; Regression: opening a rendered session mention sent the URI payload itself as
+;; the session id, so the host answered `session/not-found' — the id must be the
+;; JSON string the payload encodes.
+(dsh-test-assert "decode-session-uri-restores-session-id"
+  (equal (dsh-emacs-reference--decode-session-uri
+          "InNlc3Npb24tZTMyYTE1MGUtMTk1Ny00MDU3LTg2ZjMtNmM0YTNmOTM1YTYxIg")
+         "session-e32a150e-1957-4057-86f3-6c4a3f935a61")
+  ;; A non-canonical payload (legacy `{"id":…}' object, junk) carries no id.
+  (null (dsh-emacs-reference--decode-session-uri "cyJpZCI6InMxIn0")))
+
+;; JSON numbers and Unicode escapes alter match data, including before a parse
+;; error.  Decoding must not rewind the scanner to the same mention forever.
+(dolist (case `(("number" "MTIz" nil)
+                ("unicode-escape" "InNlc3Npb24tXHUwMDAxIg"
+                 ,(concat "session-" (string 1)))
+                ("parse-error" "WzEs" nil)))
+  (pcase-let* ((`(,name ,payload ,id) case)
+               (prefix "a sufficiently long prefix ")
+               (decode (symbol-function
+                        'dsh-emacs-reference--decode-session-uri))
+               (calls 0)
+               (out
+                (catch 'repeated-mention
+                  (cl-letf (((symbol-function
+                              'dsh-emacs-reference--decode-session-uri)
+                             (lambda (value)
+                               ;; Bound the repro so a regression fails instead
+                               ;; of hanging the entire test suite.
+                               (when (> (cl-incf calls) 2)
+                                 (throw 'repeated-mention nil))
+                               (funcall decode value))))
+                    (dsh-emacs-reference-fontify
+                     (concat prefix "@[T](dsh-session:" payload ")"
+                             " then @[Next](dsh-session:InMyIg) @tail.md"))))))
+    (dsh-test-assert (concat "fontify-session-scan-progress-" name)
+      (= calls 2)
+      (and (stringp out)
+           (string= (substring-no-properties out)
+                    (concat prefix "@T then @Next @tail.md"))
+           (equal (get-text-property (length prefix)
+                                     'dsh-emacs-reference-ref out)
+                  (cons 'session id))
+           (equal (get-text-property (string-match "@Next" out)
+                                     'dsh-emacs-reference-ref out)
+                  '(session . "s2"))
+           (equal (get-text-property (string-match "@tail.md" out)
+                                     'dsh-emacs-reference-ref out)
+                  '(file . "tail.md"))))))
+
+(let* ((sid "session-ab1-2")
+       (out (dsh-emacs-reference-fontify
+             (concat "see @src/ui/button.tsx then @[My Talk]("
+                     (dsh-test-reference--session-uri sid)
+                     "), mail@example ok"))))
   (dsh-test-assert "fontify-session-collapses-to-label"
     (string= (substring-no-properties out)
              "see @src/ui/button.tsx then @My Talk, mail@example ok"))
   (dsh-test-assert "fontify-spans-carry-session-id"
     (equal (get-text-property (string-match "@My Talk" out)
                               'dsh-emacs-reference-ref out)
-           '(session . "ab1_-2"))))
+           `(session . ,sid))))
 
 (let ((out (dsh-emacs-reference-fontify "note @\"my dir/a.ts\" here")))
   (dsh-test-assert "fontify-quoted-file-path-linked"
@@ -21285,17 +21358,18 @@ ID is the message id, TEXT its single text block, KIND its source kind
     (string= (substring-no-properties out) "@T @Q")))
 
 ;; RET/mouse open: a session reference jumps via `dsh-emacs-open-session'
-(let ((opened nil) (buf (generate-new-buffer " *t-ref-open*")))
+(let* ((sid "session-target-1")
+       (opened nil) (buf (generate-new-buffer " *t-ref-open*")))
   (unwind-protect
       (with-current-buffer buf
         (insert (dsh-emacs-reference-fontify
-                 "@[Sess](dsh-session:target1)"))
+                 (concat "@[Sess](" (dsh-test-reference--session-uri sid) ")")))
         (goto-char (point-min))
         (cl-letf (((symbol-function 'dsh-emacs-open-session)
                    (lambda (id) (setq opened id))))
           (dsh-emacs-reference-open-at-point))
         (dsh-test-assert "open-at-point-jumps-to-session"
-          (equal opened "target1")))
+          (equal opened sid)))
     (when (buffer-live-p buf) (kill-buffer buf))))
 
 ;; --- reseed/reopen: when the server persists a reference message it collapses the
@@ -21390,7 +21464,8 @@ ID is the message id, TEXT its single text block, KIND its source kind
 
 ;; --- composer atomic chip: the buffer stores a short @label + canonical text
 ;; properties, and sending expands it back to the full mention
-(let ((canon "@[My Talk](dsh-session:ab12_CD)"))
+(let* ((sid "session-ab12-cd")
+       (canon (concat "@[My Talk](" (dsh-test-reference--session-uri sid) ")")))
   (with-temp-buffer
     (setq-local dsh-emacs--input-marker (point-min-marker))
     (insert "@My Talk")
@@ -21402,7 +21477,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
                                        'dsh-emacs-reference-canonical)
                     canon)
            (equal (get-text-property (point-min) 'dsh-emacs-reference-ref)
-                  '(session . "ab12_CD"))
+                  `(session . ,sid))
            (get-text-property (point-min) 'dsh-emacs-reference-chip)))
     ;; no `display' folding: visible text is exactly the short label in the buffer
     (dsh-test-assert "chip-has-no-display-folding"
@@ -22370,9 +22445,12 @@ ID is the message id, TEXT its single text block, KIND its source kind
 ;; canonical session mention must display as its readable `@label' chip ---
 ;; never the opaque `dsh-session:' id (the transcript message already collapses
 ;; it).  The chip stays clickable inside the one-line dock.
-(let ((goal (dsh-emacs-composer-goal-from-projection
-             '((goal . ((objective . "review @[Alpha session](dsh-session:AbC-1_2) done")
-                        (phase . "active")))))))
+(let* ((sid "session-alpha-1")
+       (goal (dsh-emacs-composer-goal-from-projection
+              `((goal . ((objective . ,(concat "review @[Alpha session]("
+                                               (dsh-test-reference--session-uri sid)
+                                               ") done"))
+                         (phase . "active")))))))
   (let* ((row (dsh-emacs-composer--render-row goal))
          (text (substring-no-properties row))
          (ref (cl-find-if
@@ -22382,7 +22460,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
       (string-match-p "@Alpha session" text)
       (null (string-match-p "dsh-session:" text))
       (and ref
-           (equal '(session . "AbC-1_2")
+           (equal (cons 'session sid)
                   (get-text-property ref 'dsh-emacs-reference-ref row)))
       ;; The chip keeps its link face; plain objective text keeps the body face.
       (and ref
@@ -22403,11 +22481,14 @@ ID is the message id, TEXT its single text block, KIND its source kind
 
 ;; The goal tool card shows the same objective projection, so it collapses the
 ;; mention too and keeps the chip clickable.
-(let ((goal (dsh-emacs-composer-goal-from-projection
-             '((goal . ((objective . "keep @[Beta session](dsh-session:Beta-1) green")
-                        (phase . "active")
-                        (roundsStarted . 1)
-                        (maxGoalRounds . 4)))))))
+(let* ((sid "session-beta-1")
+       (goal (dsh-emacs-composer-goal-from-projection
+              `((goal . ((objective . ,(concat "keep @[Beta session]("
+                                               (dsh-test-reference--session-uri sid)
+                                               ") green"))
+                         (phase . "active")
+                         (roundsStarted . 1)
+                         (maxGoalRounds . 4)))))))
   (let* ((body (dsh-emacs-render--goal-card-body goal))
          (text (substring-no-properties body))
          (ref (cl-find-if
@@ -22417,7 +22498,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
       (string-match-p "@Beta session" text)
       (null (string-match-p "dsh-session:" text))
       (and ref
-           (equal '(session . "Beta-1")
+           (equal (cons 'session sid)
                   (get-text-property ref 'dsh-emacs-reference-ref body))))))
 
 ;; External clients may create multiline objectives; chrome remains one line

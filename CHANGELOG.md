@@ -267,6 +267,14 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Open a session mention as the session, not as its opaque URI**: RET or a
+  click on a `@label` chip or a rendered `@[label](dsh-session:…)` mention now
+  decodes the URI payload into the session id before opening the chat.
+  Previously the encoded payload itself was sent as the id, so the host
+  answered `session/not-found` and the chat stayed in a follow-stream
+  reconnect loop. Escaped IDs and malformed payloads are handled without
+  stalling reference rendering.
+
 - **Keep inline queue actions tied to confirmed state**: local pending previews
   offer no actions until the server supplies their queue ID; placement changes
   refresh the buttons even when the preview text stays the same. Sending an

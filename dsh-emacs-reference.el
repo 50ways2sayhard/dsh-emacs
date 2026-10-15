@@ -70,6 +70,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
 (require 'dsh-emacs-protocol)
 
 (declare-function dsh-emacs--rpc-async "dsh-emacs.el" (method params callback))
@@ -918,7 +919,8 @@ the read-only transcript (`insert-for-yank: Text is read-only').")
   "@\\[\\(\\(?:\\\\.\\|[^]\\\\]\\)*\\)\\](dsh-session:\\([A-Za-z0-9_-]+\\))"
   "Regexp matching a completed session mention `@[label](dsh-session:…)'.
 Group 1 is the raw label interior (possibly carrying `\\]' / `\\\\' escapes),
-group 2 the opaque session id.")
+group 2 the base64url URI payload that encodes the session id (see
+`dsh-emacs-reference--decode-session-uri') — not the id itself.")
 
 (defconst dsh-emacs-reference--file-mention-re
   "\\(?:^\\|[ \t\r\n\f]\\)\\(@\"[^\"]*\"\\|@[^ \t\r\n\f@]+\\)"
@@ -932,6 +934,30 @@ character, so a lone `@' and prose like `mail@example' are not linked.")
 Decodes the `\\\\X' escapes the host emits (`\\\\]' → `]', `\\\\\\\\' → `\\')."
   (replace-regexp-in-string
    "\\\\\\(.\\)" "\\1" raw t t))
+
+(defun dsh-emacs-reference--decode-session-uri (payload)
+  "Return the session id the `dsh-session:' URI PAYLOAD encodes, or nil.
+The host writes base64url(JSON.stringify(ID)) into a mention (see the
+harness's `encodeSessionReferenceUri'), so the id every RPC expects is the
+decoded JSON string; treating PAYLOAD itself as the identity asks the host
+for a session named after the encoding and earns `session/not-found'.  Nil
+when PAYLOAD is no decodable session reference."
+  (when (and (stringp payload)
+             (string-match-p "\\`[A-Za-z0-9_-]+\\'" payload))
+    (let* ((b64 (replace-regexp-in-string
+                 "-" "+" (replace-regexp-in-string "_" "/" payload t t) t t))
+           (pad (mod (- 4 (mod (length b64) 4)) 4))
+           (decoded (ignore-errors
+                      (base64-decode-string (concat b64 (make-string pad ?=))))))
+      (when (stringp decoded)
+        ;; JSON numbers/escapes use match data; preserve the mention scan.
+        (let ((id (ignore-errors
+                    (save-match-data
+                      (json-read-from-string
+                       (if (multibyte-string-p decoded)
+                           decoded
+                         (decode-coding-string decoded 'utf-8)))))))
+          (and (stringp id) id))))))
 
 (defun dsh-emacs-reference--link-spans (string &optional references)
   "Reference spans (BEG END KIND VALUE) in STRING, non-overlapping, by start.
@@ -953,7 +979,8 @@ matcher)."
     (let ((pos 0))
       (while (and (<= pos limit) (string-match sm string pos))
         (push (list (match-beginning 0) (match-end 0) 'session
-                    (match-string 2 string))
+                    (dsh-emacs-reference--decode-session-uri
+                     (match-string 2 string)))
               spans)
         (setq pos (match-end 0))))
     ;; Readable `@label' session tokens recovered from the recall event.
@@ -1104,11 +1131,13 @@ session span carrying the real SESSION-ID."
                      (or value "")))))))
 
 (defun dsh-emacs-reference--mention-label-id (text)
-  "Return (LABEL . ID) of canonical session mention TEXT, else nil."
+  "Return (LABEL . ID) of canonical session mention TEXT, else nil.
+ID is the session id the mention's URI payload encodes, not the payload."
   (let ((m dsh-emacs-reference--session-mention-re))
     (and (string-match (concat "\\`" m "\\'") text)
          (cons (dsh-emacs-reference--unescape-label (match-string 1 text))
-               (match-string 2 text)))))
+               (dsh-emacs-reference--decode-session-uri
+                (match-string 2 text))))))
 
 (defun dsh-emacs-reference-open-at-point ()
   "Open the @ reference under point: jump to its session or open its file.
