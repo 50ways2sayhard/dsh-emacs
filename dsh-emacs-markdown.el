@@ -719,7 +719,8 @@ and a keymap that opens the URL."
                 (group (one-or-more (not (any "]"))))
                 "]"
                 "("
-                (group (one-or-more (not (any ")"))))
+                (or (seq "<" (group (zero-or-more (not (any ">\n")))) ">")
+                    (group (one-or-more (not (any ")")))))
                 ")")
             nil t)
       (let* ((markup-start (match-beginning 0))
@@ -733,8 +734,8 @@ and a keymap that opens the URL."
          (is-image nil)
          (t
           (let ((title (buffer-substring (match-beginning 1) (match-end 1)))
-                (url (buffer-substring-no-properties
-                      (match-beginning 2) (match-end 2))))
+                (url (or (match-string-no-properties 2)
+                         (match-string-no-properties 3))))
             (delete-region markup-start markup-end)
             (goto-char markup-start)
             (insert title)

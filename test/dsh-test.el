@@ -11041,6 +11041,36 @@ Lets a test drive a malformed content value through the result path."
             (dsh-test-pass "parse-local-link-remote-nil"))))
     (delete-directory tmpdir t)))
 
+;; Markdown destinations in angle brackets are syntax, not part of the path.
+;; Exercise the rendered RET command, including a destination containing `)'.
+(let ((directory (make-temp-file "dsh-link" t)))
+  (unwind-protect
+      (dolist (name '("source.el" "source (draft).el"))
+        (let ((file (expand-file-name name directory)))
+          (with-temp-file file (insert "first\nsecond\nthird\n"))
+          (with-temp-buffer
+            (insert (dsh-emacs-markdown-convert
+                     (format "[source](<%s#L2>)" file)))
+            (goto-char (point-min))
+            (let ((command (lookup-key (get-text-property (point) 'keymap)
+                                       (kbd "RET")))
+                  opened browsed)
+              (dsh-test-assert (format "markdown-angle-link-label-%s" name)
+                (equal (buffer-string) "source"))
+              (cl-letf (((symbol-function 'find-file)
+                         (lambda (path &rest _)
+                           (setq opened path)
+                           (erase-buffer)
+                           (insert-file-contents path)))
+                        ((symbol-function 'browse-url)
+                         (lambda (url &rest _) (setq browsed url))))
+                (call-interactively command))
+              (dsh-test-assert (format "markdown-angle-link-ret-%s" name)
+                (equal opened file)
+                (null browsed)
+                (= (line-number-at-pos) 2))))))
+    (delete-directory directory t)))
+
 ;; --- Test 73: mode-line pure-logic reinforcement (shorten-cwd / branch
 ;; cache) ---
 ;; mode-line--shorten-cwd's ~ prefix, non-home paths verbatim; cached-branch's

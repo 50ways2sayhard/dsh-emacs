@@ -286,6 +286,11 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Open angle-bracketed file links**: Markdown links such as
+  `[source](</path/to/file.el#L10>)` now open the file at the requested line.
+  Spaces and parentheses inside the bracketed destination are preserved,
+  instead of sending an invalid target to the browser.
+
 - **Keep render-report property ranges stable**: marker endpoints are recorded
   as positions at the time of each setter call, so later edits or marker cleanup
   cannot change the reported ranges or their summed span.
