@@ -3478,7 +3478,11 @@ everything else `success'."
                                      full-text)))
                                (goal-card
                                 (or (and goal-value
-                                         (dsh-protocol-goal-objective goal-value))
+                                         (when-let* ((objective
+                                                      (dsh-protocol-goal-objective
+                                                       goal-value)))
+                                           (dsh-emacs-reference-fontify
+                                            objective)))
                                     "No goal"))
                                (t summary)))
                  (face (pcase state
@@ -3693,8 +3697,13 @@ unfold preserve the styling."
      (append
       (and (stringp objective) (not (string-empty-p objective))
            (list (concat "  "
-                         (propertize objective
-                                     'face 'dsh-emacs-tool-title-face))))
+                         (let ((text (dsh-emacs-reference-fontify objective)))
+                           ;; Prepend, so a collapsed session chip keeps its
+                           ;; own link face instead of the title face.
+                           (add-face-text-property
+                            0 (length text)
+                            'dsh-emacs-tool-title-face nil text)
+                           text))))
       (list (dsh-emacs-render--goal-field-row
              "Status" (dsh-emacs-render--goal-state-text goal)))
       (list (dsh-emacs-render--goal-field-row "Rounds" rounds))

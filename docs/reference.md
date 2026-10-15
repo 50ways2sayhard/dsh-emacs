@@ -152,7 +152,10 @@ host.
 > obvious non-references are skipped — a `@` inside a word such as an email
 > (`mail@example`) and a lone `@`. RET or mouse-1 opens the reference: a
 > session jumps to that session's chat buffer, a file opens under the session's
-> working directory (`find-file` of `cwd + path`). The buffer still holds the
+> working directory (`find-file` of `cwd + path`). The same collapse applies
+> wherever a goal objective is shown — the Goal Row and its tooltip,
+> `C-c C-g ?` and the goal tool card — since a goal objective is a projection
+> of the message that named it. The buffer still holds the
 > canonical text, so the wire is unchanged. Assistant bodies render via the
 > markdown layer and are not linkified. When history is re-seeded on reopen,
 > dsh may already have collapsed a sent session mention to its readable

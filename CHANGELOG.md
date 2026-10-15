@@ -283,6 +283,12 @@ minor) and stay undated until the release is cut.
   `message`; previously the composer surfaces rendered the raw
   `{code, message}` record.
 
+- **Show session mentions in goal text as their label**: the Goal Row (and its
+  tooltip), `C-c C-g ?` and the goal tool card collapse a canonical
+  `@[label](dsh-session:…)` objective to the clickable `@label` chip, exactly
+  like the transcript message that named the goal; the opaque id is never
+  displayed.
+
 - **Keep goal notices when replies finish**: expanding or collapsing a notice
   while the following reply streams no longer lets the final reply replacement
   erase the notice and its prompt.

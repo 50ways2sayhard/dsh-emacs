@@ -173,7 +173,9 @@ dartboard goal SVG icon mirroring dsh web — the `◎ ` text is a fallback when
 Emacs lacks SVG support — tinted with the tool purple shared by the
 transcript goal round notice and the goal tool cards), followed by a prominent
 status label (`Ongoing Goal`, `Paused Goal` or `Blocked Goal`), a muted,
-upright objective and compact dsh-web pause/resume/edit/clear **SVG**
+upright objective (folded to one line, with a canonical session mention
+collapsed to its clickable `@label` chip as in the transcript message that
+named the goal) and compact dsh-web pause/resume/edit/clear **SVG**
 action icons (unicode fallback), one space after the objective and between
 icons. The row uses the buffer background and
 appears only when an unfinished goal exists, fed

@@ -22366,6 +22366,60 @@ ID is the message id, TEXT its single text block, KIND its source kind
       (string-match-p "short" (dsh-emacs-composer--render-row goal2))
       (null (string-match-p "…" (dsh-emacs-composer--render-row goal2))))))
 
+;; A goal objective is a projection of the message that named the goal, so a
+;; canonical session mention must display as its readable `@label' chip ---
+;; never the opaque `dsh-session:' id (the transcript message already collapses
+;; it).  The chip stays clickable inside the one-line dock.
+(let ((goal (dsh-emacs-composer-goal-from-projection
+             '((goal . ((objective . "review @[Alpha session](dsh-session:AbC-1_2) done")
+                        (phase . "active")))))))
+  (let* ((row (dsh-emacs-composer--render-row goal))
+         (text (substring-no-properties row))
+         (ref (cl-find-if
+               (lambda (i) (get-text-property i 'dsh-emacs-reference-ref row))
+               (number-sequence 0 (1- (length row))))))
+    (dsh-test-assert "composer-goal-row-collapses-session-mention"
+      (string-match-p "@Alpha session" text)
+      (null (string-match-p "dsh-session:" text))
+      (and ref
+           (equal '(session . "AbC-1_2")
+                  (get-text-property ref 'dsh-emacs-reference-ref row)))
+      ;; The chip keeps its link face; plain objective text keeps the body face.
+      (and ref
+           (memq 'dsh-emacs-reference-face
+                 (ensure-list (get-text-property ref 'face row))))
+      ;; The chip keeps its link help; the body keeps the goal tooltip.
+      (and ref
+           (equal "RET/mouse-1: open this session"
+                  (get-text-property ref 'help-echo row)))
+      (string-match-p "C-c C-g ?"
+                      (or (get-text-property (string-match-p "review" text)
+                                             'help-echo row)
+                          ""))
+      (cl-find-if (lambda (i)
+                    (memq 'dsh-emacs-composer-goal-body-face
+                          (ensure-list (get-text-property i 'face row))))
+                  (number-sequence 0 (1- (length row)))))))
+
+;; The goal tool card shows the same objective projection, so it collapses the
+;; mention too and keeps the chip clickable.
+(let ((goal (dsh-emacs-composer-goal-from-projection
+             '((goal . ((objective . "keep @[Beta session](dsh-session:Beta-1) green")
+                        (phase . "active")
+                        (roundsStarted . 1)
+                        (maxGoalRounds . 4)))))))
+  (let* ((body (dsh-emacs-render--goal-card-body goal))
+         (text (substring-no-properties body))
+         (ref (cl-find-if
+               (lambda (i) (get-text-property i 'dsh-emacs-reference-ref body))
+               (number-sequence 0 (1- (length body))))))
+    (dsh-test-assert "goal-card-body-collapses-session-mention"
+      (string-match-p "@Beta session" text)
+      (null (string-match-p "dsh-session:" text))
+      (and ref
+           (equal '(session . "Beta-1")
+                  (get-text-property ref 'dsh-emacs-reference-ref body))))))
+
 ;; External clients may create multiline objectives; chrome remains one line
 ;; and clearing it must not leave later objective lines in the transcript.
 (with-temp-buffer
@@ -23151,6 +23205,28 @@ ID is the message id, TEXT its single text block, KIND its source kind
              thereis (let ((help (get-text-property pos 'help-echo)))
                        (and (stringp help)
                             (string-match-p "Needs credentials" help)))))
+  ;; The full-details buffer collapses a canonical session mention like every
+  ;; other objective surface, and a goal without an objective still opens.
+  (dsh-emacs-composer-set-goal-from-projection
+   '((goal . ((id . "mention") (revision . 1) (phase . "active")
+              (objective . "named @[Gamma session](dsh-session:Gamma-7) here")))))
+  (save-window-excursion
+    (dsh-emacs-goal-describe)
+    (with-current-buffer "*dsh goal*"
+      (dsh-test-assert "goal-details-collapse-session-mention"
+        (string-match-p "@Gamma session" (buffer-string))
+        (null (string-match-p "dsh-session:" (buffer-string)))
+        (cl-find-if (lambda (i)
+                      (get-text-property i 'dsh-emacs-reference-ref
+                                         (buffer-string)))
+                    (number-sequence 0 (1- (length (buffer-string))))))))
+  (dsh-emacs-composer-set-goal-from-projection
+   '((goal . ((id . "no-objective") (revision . 1) (phase . "active")))))
+  (save-window-excursion
+    (dsh-emacs-goal-describe)
+    (with-current-buffer "*dsh goal*"
+      (dsh-test-assert "goal-details-fall-back-without-objective"
+        (string-match-p "Untitled goal" (buffer-string)))))
   (dsh-test-assert "goal-details-key"
     (eq (lookup-key dsh-emacs-goal-map (kbd "?"))
         #'dsh-emacs-goal-describe)))

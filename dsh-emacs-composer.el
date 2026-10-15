@@ -48,6 +48,8 @@
 ;; render here to avoid a cycle.  Input-marker geometry remains owned by
 ;; dsh-emacs.el; this module only reads the shared variable.
 (declare-function dsh-emacs-render--input-insert-point "dsh-emacs-render" ())
+(declare-function dsh-emacs-reference-fontify "dsh-emacs-reference"
+                  (string &optional references))
 (declare-function dsh-emacs-queue-next-item "dsh-emacs-queue" ())
 (declare-function dsh-emacs-queue--send-now "dsh-emacs-queue" (item))
 (declare-function dsh-emacs-queue--edit "dsh-emacs-queue" (item new-text))
@@ -262,7 +264,11 @@ to `dsh-emacs-composer-goal-action-face'."
   (or (dsh-protocol-goal-phase goal) ""))
 
 (defun dsh-emacs-composer--objective-text (goal)
-  "Return GOAL's objective as non-empty, single-line display text."
+  "Return GOAL's objective as non-empty, single-line display text.
+Line breaks fold to spaces, and a canonical session mention
+\(`@[label](dsh-session:…)') collapses to its clickable `@label' — the
+objective is a projection of the message that named the goal, so it is
+displayed like that message."
   (let* ((objective (or (dsh-protocol-goal-objective goal) ""))
          ;; Goal objectives come from an external projection and may contain
          ;; line breaks.  The Goal Row owns exactly one physical line, so fold
@@ -271,7 +277,7 @@ to `dsh-emacs-composer-goal-action-face'."
          (one-line (replace-regexp-in-string "[\n\r]+" " " objective)))
     (if (string-empty-p (string-trim one-line))
         "untitled goal"
-      one-line)))
+      (dsh-emacs-reference-fontify one-line))))
 
 (defun dsh-emacs-composer--pending-text ()
   "Return the current mutation's user-facing progress label, or nil."
@@ -391,6 +397,23 @@ complete)."
                       " "))))
     (and strip (cons strip (string-width strip)))))
 
+(defun dsh-emacs-composer--goal-body (objective width help)
+  "Return OBJECTIVE truncated to WIDTH as the Goal Row's body text.
+The body wears `dsh-emacs-composer-goal-body-face' and HELP, but a collapsed
+session chip keeps its own link face, help and keymap: the body face is
+prepended to the chip's face list, and HELP is stamped only outside a chip."
+  (let ((text (truncate-string-to-width objective width nil nil "…"))
+        (pos 0))
+    (add-face-text-property 0 (length text)
+                            'dsh-emacs-composer-goal-body-face nil text)
+    (while (< pos (length text))
+      (let ((next (next-single-property-change
+                   pos 'dsh-emacs-reference-ref text (length text))))
+        (unless (get-text-property pos 'dsh-emacs-reference-ref text)
+          (add-text-properties pos next (list 'help-echo help) text))
+        (setq pos next)))
+    text))
+
 (defun dsh-emacs-composer--render-row (goal)
   "Return GOAL's single-line dock above the input, matching dsh web.
 Show the dartboard, a status label, the truncated objective and compact
@@ -400,7 +423,9 @@ then the dartboard to keep status visible.  Callers add read-only chrome."
   (let* ((icon (or (dsh-emacs-composer--goal-icon)
                    (propertize "◎ " 'face 'dsh-emacs-composer-goal-face)))
          (objective (dsh-emacs-composer--objective-text goal))
-         (help (concat (or (dsh-protocol-goal-objective goal) "")
+         ;; The tooltip shows the displayed objective (mentions collapsed),
+         ;; never the opaque wire mention.
+         (help (concat (substring-no-properties objective)
                        (when-let* ((reason
                                     (dsh-protocol-goal-blocked-reason goal)))
                          (format "\nBlocked: %s" reason))
@@ -416,12 +441,11 @@ then the dartboard to keep status visible.  Callers add read-only chrome."
          ;; Keep at least eight objective columns before offering click cells.
          (action (and strip (<= (+ base-cols 1 (cdr strip) 8) available)
                       (concat " " (car strip))))
-         (body (propertize
-                (truncate-string-to-width
-                 objective (max 1 (- available base-cols
-                                     (if action (string-width action) 0)))
-                 nil nil "…")
-                'face 'dsh-emacs-composer-goal-body-face 'help-echo help))
+         (body (dsh-emacs-composer--goal-body
+                objective
+                (max 1 (- available base-cols
+                             (if action (string-width action) 0)))
+                help))
          (row (if (>= base-cols available)
                   (concat label " " body)
                 (concat prefix body))))
@@ -845,7 +869,11 @@ tombstone identity).  Failures surface via `message' and leave the row unchanged
         (pending (dsh-emacs-composer--pending-text)))
     (unless goal (user-error "No current goal"))
     (with-help-window "*dsh goal*"
-      (princ (or (dsh-protocol-goal-objective goal) "Untitled goal"))
+      ;; `insert', not `princ': a canonical session mention must keep its
+      ;; collapsed `@label' display and clickable chip.
+      (insert (or (when-let* ((objective (dsh-protocol-goal-objective goal)))
+                    (dsh-emacs-reference-fontify objective))
+                  "Untitled goal"))
       (when pending
         (princ (format "\n\n%s" pending)))
       (when-let* ((phase (dsh-protocol-goal-phase goal)))
