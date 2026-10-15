@@ -19903,8 +19903,8 @@ ID is the message id, TEXT its single text block, KIND its source kind
 
 ;; The Next Message row mirrors the Goal Row's anatomy: its own queue-glyph
 ;; tint slot and the muted body tier the goal objective uses --- never the input
-;; prompt's accent, and no input-box band (the editable `❯' line has none,
-;; postmortem/101).
+;; prompt's accent.  Both rows sit on the buffer background (postmortem/101,
+;; postmortem/103).
 (let ((item (dsh-emacs-test--queue-item "a" "queued" "Alpha")))
   (cl-letf (((symbol-function 'image-type-available-p) (lambda (_type) t))
             ((symbol-function 'create-image)
@@ -19915,14 +19915,11 @@ ID is the message id, TEXT its single text block, KIND its source kind
       (dsh-test-assert "composer-next-icon-is-chrome"
         (string-prefix-p "   Alpha" (substring-no-properties row))
         (eq 'image (car (get-text-property 0 'display row)))
-        ;; The glyph carries its tint face; the line carries no band face.
+        ;; The glyph carries its tint face; the body carries only the muted tier.
         (equal '(dsh-emacs-composer-next-face) icon-faces)
         (equal '(dsh-emacs-composer-next-body-face) body-faces)
         ;; Both glyph paths reserve the dartboard's two columns.
         (= 2 (string-width (dsh-emacs-composer--next-icon)))
-        (null (cl-find-if (lambda (i) (memq 'dsh-emacs-input-box-face
-                                            (ensure-list (get-text-property i 'face row))))
-                          (number-sequence 0 (1- (length row)))))
         (null (memq 'dsh-emacs-input-prompt-face body-faces)))))
   (cl-letf (((symbol-function 'image-type-available-p) (lambda (_type) nil)))
     (let* ((row (dsh-emacs-composer--render-next-row item))

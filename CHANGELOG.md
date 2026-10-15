@@ -10,6 +10,10 @@ minor) and stay undated until the release is cut.
 
 ### Breaking Changes
 
+- **Remove unused composer background settings**: `dsh-emacs-input-box-face`,
+  `dsh-emacs-color-input-bg` and `dsh-emacs-color-input-bg-dark` are removed;
+  composer rows now use the buffer background. (rationale: postmortem/103)
+
 - **Stage files before sending**: `C-c C-a` now adds one file to the existing
   attachment list; repeat to add more. Drag-and-drop keeps its confirmation
   and stages valid files in order. Neither sends immediately or prompts for
@@ -228,15 +232,15 @@ minor) and stay undated until the release is cut.
 - **Next Message matches the Goal Row's anatomy**: the pending-input preview no
   longer paints its whole line in the `❯` prompt accent. It leads with dsh
   web's queue glyph in the queue amber and folds the preview into the same muted
-  tier as the goal objective, without the Goal Row's input-box band (that face
-  is painted nowhere else, so a band would float above the uncoloured `❯`
-  line); without SVG support a `≡` glyph replaces the old `Next:` prefix.
+  tier as the goal objective, on the buffer background; without SVG support
+  a `≡` glyph replaces the old `Next:` prefix.
   (rationale: postmortem/101)
 
 - **Show goal status before the objective**: a prominent `Ongoing Goal`,
   `Paused Goal` or `Blocked Goal` label now precedes the upright, muted
-  objective. Action icons stay at the right edge on the input-box background;
-  narrow windows hide actions first and keep status visible.
+  objective. Like Next Message, the row uses the buffer background and places
+  compact action icons one space after the objective, one space apart; narrow
+  windows hide actions first and keep status visible. (rationale: postmortem/103)
 
 - **Tint every goal dartboard with the tool purple**: the Goal Row icon, the
   transcript **Continuing goal** notice and the goal tool cards now share the

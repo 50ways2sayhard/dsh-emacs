@@ -24,6 +24,12 @@ with `M-x dsh-emacs-open-web`. Select the current session's model with
 `dsh-emacs-default-model` supplies a display fallback and does not choose the
 model used by a session.
 
+Composer rows use the buffer background. The former
+`dsh-emacs-input-box-face`, `dsh-emacs-color-input-bg` and
+`dsh-emacs-color-input-bg-dark` settings are removed in 0.6.0; remove these
+entries from personal theme configuration. Goal icon, label, body and action
+faces remain separately customizable.
+
 ## Common options
 
 The most commonly used options, straight in your config:

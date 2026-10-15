@@ -325,7 +325,6 @@ not a working grouping surface.
 | `dsh-emacs-meta-face` | Meta information and ask option descriptions |
 | `dsh-emacs-error-face` | Error message |
 | `dsh-emacs-running-face` | Generating status |
-| `dsh-emacs-input-box-face` | Input box background |
 | `dsh-emacs-input-prompt-face` | Input prompt "❯" |
 | `dsh-emacs-composer-goal-face` | Goal dartboard icon tint (Goal Row, round notice, goal tool cards; dartboard SVG, `currentColor`; tool purple) |
 | `dsh-emacs-composer-goal-label-face` | Goal Row leading status label (semi-bold) |
@@ -336,13 +335,10 @@ not a working grouping surface.
 | `dsh-emacs-composer-next-action-face` | Next Message row up-arrow steer cell (muted like the Goal Row actions) |
 | `dsh-emacs-accent-face` | Accent color (badges, headings) |
 
-The Composer Goal Row uses the input-box background across the row (the only
-place that face is painted: the editable `❯` line deliberately carries no face,
-so nothing else supplies an "input box"). It places
-the status before the objective and holds action icons at the right edge;
-short objectives leave a flexible gap before the actions. The gap and the
-background after a goal with hidden actions stretch without text padding that
-could wrap when text is enlarged. While an operation
+The Composer Goal Row uses the buffer background, like Next Message and the
+editable `❯` line. It places the status before the objective and a compact
+action cluster one space after it, with one space between icons and no trailing
+stretch padding. While an operation
 is pending its progress (for example, “Pausing…”) replaces the status label
 and action icons are hidden. In narrow windows it drops
 inline actions to preserve objective and status space; the `C-c C-g` commands
@@ -356,9 +352,8 @@ row: dsh web's queue glyph (a chat bubble with two text lines,
 queue amber `dsh-emacs-color-queue` that the mode line's `[Q2 S1]` indicator
 also uses — then the folded preview in `dsh-emacs-composer-next-body-face`,
 the muted upright tier the goal objective uses. The row carries **no**
-input-box band: `dsh-emacs-input-box-face` is only ever painted by the Goal Row
-(the editable `❯` line has no background of its own), so a band here would
-float above nothing — the row's identity is the tinted glyph and muted text.
+background band, like the Goal Row and editable `❯` line; its identity is
+the tinted glyph and muted text.
 One space after the preview text sits a compact action cluster, one
 space apart, all tinted with `dsh-emacs-composer-next-action-face` (unicode
 fallbacks when Emacs lacks SVG): the up arrow `IconSendOutlineRegular` (RET or

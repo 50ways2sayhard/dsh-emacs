@@ -188,16 +188,6 @@
   :type 'string
   :group 'dsh-emacs-faces)
 
-(defcustom dsh-emacs-color-input-bg "#f8f9fa"
-  "Input box background (light)."
-  :type 'string
-  :group 'dsh-emacs-faces)
-
-(defcustom dsh-emacs-color-input-bg-dark "#1e1e2e"
-  "Input box background (dark)."
-  :type 'string
-  :group 'dsh-emacs-faces)
-
 (defcustom dsh-emacs-color-queue "#b45f06"
   "Pending-input queue color (light).
 One owner for the mode-line queue indicator and the Composer Next Message
@@ -573,15 +563,6 @@ Muted like dsh web's `label-tertiary'."
   "Generating state."
   :group 'dsh-emacs-faces)
 
-(defface dsh-emacs-input-box-face
-  `((((background light))
-     :background ,dsh-emacs-color-input-bg :foreground "#1a1a2e")
-    (((background dark))
-     :background ,dsh-emacs-color-input-bg-dark :foreground "#cdd6f4")
-    (t :inherit shadow))
-  "Input box face."
-  :group 'dsh-emacs-faces)
-
 (defface dsh-emacs-input-prompt-face
   `((((background light)) :foreground ,dsh-emacs-color-accent :weight bold)
     (((background dark))  :foreground ,dsh-emacs-color-accent-dark :weight bold)
@@ -606,7 +587,7 @@ goal tool cards, so a goal icon matches the tool purple
 
 (defface dsh-emacs-composer-goal-body-face
   '((t :inherit shadow :slant normal))
-  "Goal Row objective text on the input-box background."
+  "Goal Row objective text on the buffer background."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-composer-goal-action-face
@@ -626,7 +607,7 @@ amber is the pending-input hue the mode line already shows
 
 (defface dsh-emacs-composer-next-body-face
   '((t :inherit shadow :slant normal))
-  "Next Message row preview on the input-box background.
+  "Next Message row preview on the buffer background.
 The muted upright tier the Goal Row gives its objective; the row no longer
 borrows the input prompt's accent."
   :group 'dsh-emacs-faces)

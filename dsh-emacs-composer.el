@@ -393,8 +393,9 @@ complete)."
 
 (defun dsh-emacs-composer--render-row (goal)
   "Return GOAL's single-line dock above the input, matching dsh web.
-Show the dartboard, a status label, the truncated objective and right-aligned
-pause/resume, edit and clear actions.  Narrow windows drop actions first,
+Show the dartboard, a status label, the truncated objective and compact
+pause/resume, edit and clear actions one space after the objective.  Use the
+buffer background like Next Message.  Narrow windows drop actions first,
 then the dartboard to keep status visible.  Callers add read-only chrome."
   (let* ((icon (or (dsh-emacs-composer--goal-icon)
                    (propertize "◎ " 'face 'dsh-emacs-composer-goal-face)))
@@ -413,12 +414,8 @@ then the dartboard to keep status visible.  Callers add read-only chrome."
          (base-cols (string-width prefix))
          (strip (dsh-emacs-composer--goal-action-strip goal))
          ;; Keep at least eight objective columns before offering click cells.
-         (action (and strip (<= (+ base-cols 2 (cdr strip) 8) available)
-                      (concat
-                       (propertize
-                        "  " 'display
-                        `(space :align-to (- right ,(1+ (cdr strip)))))
-                       (car strip))))
+         (action (and strip (<= (+ base-cols 1 (cdr strip) 8) available)
+                      (concat " " (car strip))))
          (body (propertize
                 (truncate-string-to-width
                  objective (max 1 (- available base-cols
@@ -427,16 +424,8 @@ then the dartboard to keep status visible.  Callers add read-only chrome."
                 'face 'dsh-emacs-composer-goal-body-face 'help-echo help))
          (row (if (>= base-cols available)
                   (concat label " " body)
-                (concat prefix body)))
-         ;; Stretch the background instead of filling canonical columns with
-         ;; spaces, whose displayed width grows under `text-scale-mode'.
-         (padding (and (not action) (< (string-width row) available)
-                       (propertize
-                        " " 'display '(space :align-to (- right 1)))))
-         (dock (truncate-string-to-width
-                (concat row padding action) available nil nil "…")))
-    (add-face-text-property 0 (length dock) 'dsh-emacs-input-box-face t dock)
-    dock))
+                (concat prefix body))))
+    (truncate-string-to-width (concat row action) available nil nil "…")))
 
 (defconst dsh-emacs-composer--next-icon-svg
   "<svg width=\"14\" height=\"14\" viewBox=\"0 0 14 14\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M7.00049 0.199829C3.24488 0.199829 0.199952 3.24408 0.199707 6.99963C0.199707 8.0414 0.434087 9.03061 0.854004 9.91467L1.11279 10.4576L2.19775 9.94202L1.94092 9.39905L1.81787 9.12268C1.5498 8.46885 1.40186 7.75171 1.40186 6.99963C1.4021 3.90808 3.90888 1.40198 7.00049 1.40198C10.0919 1.40219 12.5979 3.90821 12.5981 6.99963C12.5981 10.0913 10.0921 12.5983 7.00049 12.5983C6.36734 12.5983 5.90348 12.5535 5.49268 12.4401C5.08803 12.3283 4.7041 12.1414 4.24463 11.8209C3.57111 11.3511 2.60588 11.1855 1.81006 11.6881L1.79736 11.6959L1.78467 11.7047L1.25537 12.0778L1.65381 13.2672L2.46045 12.6989C2.75029 12.5214 3.18004 12.5442 3.55615 12.8063C4.10063 13.1861 4.60863 13.4423 5.17334 13.5983C5.73194 13.7525 6.31665 13.8004 7.00049 13.8004C10.7561 13.8002 13.8003 10.7553 13.8003 6.99963C13.8 3.24421 10.7559 0.200041 7.00049 0.199829ZM3.81201 7.47327V8.67542H7.11572V7.47327H3.81201ZM3.81201 6.34924H10.2173V5.14709H3.81201V6.34924Z\" fill=\"currentColor\"></path></svg>"
@@ -530,14 +519,14 @@ grows left to right and the steer arrow outlives the secondary actions."
 
 (defun dsh-emacs-composer--render-next-row (item)
   "Return ITEM's single-line preview fitted to the viewing windows.
-The row mirrors the Goal Row's anatomy without its dock background: the queue
+The row mirrors the Goal Row's anatomy on the buffer background: the queue
 glyph in its own tint slot, the folded preview in the muted
 `dsh-emacs-composer-next-body-face', and the compact action cluster — steer,
 edit, delete, one space apart — right after the preview text.  Line breaks
 collapse, the preview truncates to the narrowest viewing window, narrow windows
 drop the cluster's tail before the steer arrow, and the full text stays in the
 tooltip.
-No `dsh-emacs-input-box-face' band: the editable `❯' line carries no such
+No background band: the editable `❯' line carries no such
 background (typed text must not inherit faces), so a band here would float
 above nothing; the row's identity is its tinted glyph and muted text instead."
   (let* ((text (or (dsh-protocol-queue-item-text item) ""))

@@ -3,6 +3,9 @@
 _Action availability and idle send-now safety are superseded by
 [102](102-confirmed-queue-actions.md)._
 
+_Goal Row background and action placement are superseded by
+[103](103-compact-goal-row.md)._
+
 ## Background
 
 Composer's Goal Row became a dock: a leading dartboard in its own tint face

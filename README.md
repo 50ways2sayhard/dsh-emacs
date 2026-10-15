@@ -407,6 +407,10 @@ Use `M-x customize-face` or `custom-set-faces` to change the appearance.
 the [streaming performance audit](docs/streaming-performance.md) records
 measurements and remaining limits.
 
+The composer's Goal and Next Message rows use the buffer background, with their
+action icons placed directly after the text; `C-c C-g ?` opens the full goal
+details.
+
 ## Documentation
 
 - [Customization](docs/customization.md) — configuration examples and options

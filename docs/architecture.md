@@ -173,8 +173,9 @@ dartboard goal SVG icon mirroring dsh web — the `◎ ` text is a fallback when
 Emacs lacks SVG support — tinted with the tool purple shared by the
 transcript goal round notice and the goal tool cards), followed by a prominent
 status label (`Ongoing Goal`, `Paused Goal` or `Blocked Goal`), a muted,
-upright objective and right-aligned dsh-web pause/resume/edit/clear **SVG**
-action icons (unicode fallback). The row shares the input-box background and
+upright objective and compact dsh-web pause/resume/edit/clear **SVG**
+action icons (unicode fallback), one space after the objective and between
+icons. The row uses the buffer background and
 appears only when an unfinished goal exists, fed
 **passively** from the server `goal` session projection (`rpc.md §9`):
 `session/control` projection frames and the `session/follow` snapshot route to
@@ -199,8 +200,7 @@ While an action is pending, its progress label replaces the status label and
 inline actions are hidden. Narrow windows drop actions before sacrificing
 objective space, then prioritize status when even the fixed chrome cannot fit.
 The dock reserves the final window column to prevent a filled row from wrapping.
-Flexible background gaps use display alignment rather than literal spaces, so
-text scaling does not enlarge the padding beyond the window.
+There is no trailing background padding or right-edge action alignment.
 SVGs reserve two columns and are capped to fit the narrowest viewing frame's cells.
 Goal projection and RPC response decoding both belong to the protocol module;
 Composer's mutation callback compares parsed goal identities and revisions.
@@ -209,9 +209,8 @@ Next Message mirrors the Goal Row's anatomy: dsh web's queue glyph (a chat
 bubble with two text lines, tinted with `dsh-emacs-composer-next-face` from the
 queue amber that the mode-line `[Q2 S1]` indicator shares) followed by the
 folded preview in the muted `dsh-emacs-composer-next-body-face`, or `≡ …` as a
-text fallback when Emacs lacks SVG. It carries no `dsh-emacs-input-box-face`
-band: that face is painted only by the Goal Row, since the editable `❯` line
-deliberately holds no face of its own. One
+text fallback when Emacs lacks SVG. Like the Goal Row and editable `❯` line,
+it uses the buffer background. One
 space after the preview text carries a compact action cluster, one space apart,
 whose text-region keymaps run the queue's own item verbs on the previewed
 message: the up arrow (`IconSendOutlineRegular`) → `dsh-emacs-queue--send-now`
