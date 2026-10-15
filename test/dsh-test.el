@@ -85,11 +85,12 @@ candidates as the UI would via `all-completions', not by destructuring."
                  (setq counted (+ counted (- end start)))
                  (apply original start end args))))
       (dsh-test-assert "follow-threshold-keeps-boundary"
-        (dsh-emacs-render--window-at-bottom-p window 16)
-        (not (dsh-emacs-render--window-at-bottom-p window 17)))
+        (dsh-emacs-ui--window-at-bottom-p window 16)
+        (not (dsh-emacs-ui--window-at-bottom-p window 17)))
       (dsh-test-assert "follow-long-history-is-not-at-bottom"
-        (not (dsh-emacs-render--window-at-bottom-p window (point-max))))
-      (cl-letf (((symbol-function 'get-buffer-window) (lambda (&rest _) window))
+        (not (dsh-emacs-ui--window-at-bottom-p window (point-max))))
+      (cl-letf (((symbol-function 'get-buffer-window-list)
+                 (lambda (&rest _) (list window)))
                 ((symbol-function 'set-window-start) #'ignore))
         (dsh-emacs-ui-update-fragment
          (dsh-emacs-ui-make-fragment :label-left "New" :style 'minimal)
@@ -141,7 +142,7 @@ candidates as the UI would via `all-completions', not by destructuring."
         (set-window-start window (point-min))
         (goto-char (point-max))
         (dsh-test-assert "follow-wrapped-history-is-not-at-bottom"
-          (not (dsh-emacs-render--window-at-bottom-p window anchor)))
+          (not (dsh-emacs-ui--window-at-bottom-p window anchor)))
         (dsh-emacs-render--follow-stream)
         (dsh-test-assert "follow-preserves-scrolled-wrapped-window"
           (= (window-start window) (point-min)))
@@ -166,7 +167,7 @@ candidates as the UI would via `all-completions', not by destructuring."
      '((data . ((turn . 1) (step . 1)))) "visible history\n")
     (goto-char (point-min))
     (let ((scans 0))
-      (cl-letf (((symbol-function 'dsh-emacs-render--window-at-bottom-p)
+      (cl-letf (((symbol-function 'dsh-emacs-ui--window-at-bottom-p)
                  (lambda (&rest _) (cl-incf scans) t)))
         (dsh-emacs-render--follow-stream))
       (dsh-test-assert "follow-history-reader-skips-screen-row-scans"
@@ -272,6 +273,113 @@ candidates as the UI would via `all-completions', not by destructuring."
       (dsh-test-assert "spinner-visible-resumes-redraw"
         (= redraws 1)
         (= (nth 2 (gethash "spin" dsh-emacs--command-spinners)) 2)))))
+
+;; Fragment updates keep every reader's window start on the same text.
+(defun dsh-test--viewport-card (lines)
+  "Return a fragment snapshot for the viewport tests with LINES body lines."
+  (dsh-emacs-ui-make-fragment
+   :namespace-id "viewport" :block-id "card" :label-left "Card"
+   :style 'minimal :non-foldable t
+   :body (mapconcat (lambda (i) (format "card line %d" i))
+                    (number-sequence 1 lines) "\n")))
+
+(defun dsh-test--window-start-line (window)
+  "Return the text of the line WINDOW starts with, and whether it is whole."
+  (save-excursion
+    (goto-char (window-start window))
+    (list (buffer-substring-no-properties (point) (line-end-position))
+          (bolp))))
+
+(save-window-excursion
+  (with-temp-buffer
+    (let ((top (selected-window))
+          (inhibit-read-only t))
+      (dsh-emacs-ui-update-fragment (dsh-test--viewport-card 10) :expanded t)
+      (goto-char (point-max))
+      (dotimes (i 300) (insert (format "filler %d\n" i)))
+      (set-window-buffer top (current-buffer))
+      (let ((other (split-window top)))
+        (set-window-buffer other (current-buffer))
+        (dolist (view `((,top . "filler 40") (,other . "filler 120")))
+          (goto-char (point-min))
+          (search-forward (concat (cdr view) "\n"))
+          (set-window-start (car view) (line-beginning-position 0)))
+        (dsh-emacs-ui-update-fragment (dsh-test--viewport-card 15))
+        (dsh-test-assert "fragment-growth-above-keeps-every-window-start"
+          (equal (dsh-test--window-start-line top) '("filler 40" t))
+          (equal (dsh-test--window-start-line other) '("filler 120" t)))
+        (dsh-emacs-ui-update-fragment (dsh-test--viewport-card 3))
+        (dsh-test-assert "fragment-shrink-above-keeps-every-window-start"
+          (equal (dsh-test--window-start-line top) '("filler 40" t))
+          (equal (dsh-test--window-start-line other) '("filler 120" t)))
+        ;; A start inside the replaced span collapses to the edit's first
+        ;; difference (mid-line here); it must land on a whole card line.
+        (goto-char (point-min))
+        (search-forward "card line 2\n")
+        (set-window-start top (line-beginning-position 0))
+        (dsh-emacs-ui-update-fragment
+         (dsh-emacs-ui-make-fragment
+          :namespace-id "viewport" :block-id "card" :label-left "Card"
+          :style 'minimal :non-foldable t
+          :body "card line 1 x\nchanged 2\ncard line 3 x"))
+        (dsh-test-assert "fragment-replaced-window-start-stays-on-line-start"
+          (equal (dsh-test--window-start-line top) '("card line 1 x" t)))))))
+
+;; Updates that write nothing must not measure any window.
+(save-window-excursion
+  (with-temp-buffer
+    (set-window-buffer (selected-window) (current-buffer))
+    (let ((model (dsh-test--viewport-card 3))
+          (measured 0))
+      (dsh-emacs-ui-update-fragment model :expanded t)
+      (cl-letf (((symbol-function 'dsh-emacs-ui--window-at-bottom-p)
+                 (lambda (&rest _) (cl-incf measured) nil)))
+        (dsh-emacs-ui-update-fragment model)
+        (dsh-emacs-ui-update-fragment (copy-tree model))
+        (dsh-test-assert "fragment-unchanged-update-skips-viewport-work"
+          (zerop measured))
+        (dsh-emacs-ui-update-fragment (dsh-test--viewport-card 4))
+        (dsh-test-assert "fragment-changed-update-measures-viewport"
+          (= measured 1))))))
+
+;; Wrapped lines are screen rows: a reader above one is not at the bottom.
+(save-window-excursion
+  (with-temp-buffer
+    (let ((window (selected-window))
+          (inhibit-read-only t))
+      (dsh-emacs-ui-update-fragment (dsh-test--viewport-card 2) :expanded t)
+      (goto-char (point-max))
+      (dotimes (i 100) (insert (format "filler %d\n" i)))
+      (insert (make-string 20000 ?x) "\n")
+      (set-window-buffer window (current-buffer))
+      (goto-char (point-min))
+      (search-forward "filler 90\n")
+      (set-window-start window (line-beginning-position 0))
+      (dsh-emacs-ui-update-fragment (dsh-test--viewport-card 4))
+      (dsh-test-assert "fragment-update-keeps-reader-above-wrapped-line"
+        (equal (dsh-test--window-start-line window) '("filler 90" t))))))
+
+;; A window at the bottom keeps following new fragments.
+(save-window-excursion
+  (with-temp-buffer
+    (let ((window (selected-window))
+          (inhibit-read-only t))
+      (dotimes (i 100) (insert (format "filler %d\n" i)))
+      (set-window-buffer window (current-buffer))
+      (goto-char (point-max))
+      (recenter -1)
+      (dotimes (i 5)
+        (dsh-emacs-ui-update-fragment
+         (dsh-emacs-ui-make-fragment
+          :namespace-id "viewport" :block-id (format "new-%d" i)
+          :label-left "New" :style 'minimal :non-foldable t
+          :body "one\ntwo\nthree\nfour")
+         :create-new t))
+      (dsh-test-assert "fragment-update-follows-bottom-window"
+        (save-excursion
+          (goto-char (window-start window))
+          (vertical-motion (window-body-height window) window)
+          (>= (point) (1- (point-max))))))))
 
 ;; Identical fragment updates must preserve interior markers and change ticks.
 (dolist (style '(minimal rounded sharp))
@@ -10968,6 +11076,27 @@ Lets a test drive a malformed content value through the result path."
              (equal "" (dsh-emacs--http-error-hint nil)))
     (dsh-test-pass "http-error-hint-branches"))
   pass-n)
+
+;; Code blocks reuse one fontification buffer per mode: the mode is set up
+;; once, and a previous block's text or faces never leak into the next.
+(let* ((buffer (get-buffer " *dsh-emacs-markdown-fontify:emacs-lisp-mode*"))
+       (setups 0)
+       (count (lambda (&rest _) (cl-incf setups))))
+  (when buffer (kill-buffer buffer))
+  (advice-add 'emacs-lisp-mode :before count)
+  (unwind-protect
+      (let* ((first (dsh-emacs-markdown--highlight-code "\"open string" "elisp"))
+             (second (dsh-emacs-markdown--highlight-code "(foo)" "elisp")))
+        (dsh-test-assert "markdown-highlight-reuses-mode-buffer"
+          (= setups 1)
+          (memq 'font-lock-string-face
+                (ensure-list (get-text-property 1 'face first)))
+          (equal-including-properties
+           second (dsh-emacs-markdown--highlight-code "(foo)" "emacs-lisp"))
+          (string= second "(foo)")
+          (not (memq 'font-lock-string-face
+                     (ensure-list (get-text-property 1 'face second))))))
+    (advice-remove 'emacs-lisp-mode count)))
 
 ;; --- Test 72: markdown parsing layer pure-function reinforcement (coverage
 ;; report class A blind spots) ---

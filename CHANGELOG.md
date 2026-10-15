@@ -286,6 +286,13 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep your reading position when cards above it change**: a tool, job or
+  subagent card growing or shrinking above the visible text no longer scrolls
+  the transcript by the same number of lines; every window showing the chat,
+  not only the first, keeps its place. Windows at the bottom keep following,
+  now measured in screen rows so a long wrapped line no longer pulls a
+  scrolled-up reader down. (rationale: postmortem/107)
+
 - **Open angle-bracketed file links**: Markdown links such as
   `[source](</path/to/file.el#L10>)` now open the file at the requested line.
   Spaces and parentheses inside the bracketed destination are preserved,

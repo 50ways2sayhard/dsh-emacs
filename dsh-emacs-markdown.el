@@ -801,6 +801,15 @@ For example, the buffer \"see ![logo](logo.png)\" becomes
                                         (find-file path))))
                   (put-text-property markup-start end 'mouse-face 'highlight)))))))))))
 
+(defvar dsh-emacs-markdown--image-path-regexp nil
+  "Cons of a copy of `image-file-name-extensions' and its line regexp.
+
+The copy is what makes the cache notice ordinary configuration:
+comparing against the variable itself would compare the very list
+object the caller may have mutated in place, so an edited list would
+look unchanged and keep serving a regexp built from the old
+extensions.")
+
 (cl-defun dsh-emacs-markdown--replace-image-file-paths (&key avoid-ranges)
   "Render bare image-path lines as displayed images.
 
@@ -814,11 +823,17 @@ untouched, as are unresolvable paths.
 
 For example, a buffer line containing just `/abs/path/img.png'
 renders the image in place of that text."
-  (let* ((case-fold-search t)
-         (ext-re (regexp-opt image-file-name-extensions))
-         (regex (concat "^[ \t]*\\(\\(?:file://\\|[/~.]\\)[^ \t\n]*\\."
-                        ext-re
-                        "\\)[ \t]*$")))
+  (let ((case-fold-search t)
+        (regex (cdr dsh-emacs-markdown--image-path-regexp)))
+    ;; `regexp-opt' would otherwise run on every streamed flush.
+    (unless (and regex
+                 (equal (car dsh-emacs-markdown--image-path-regexp)
+                        image-file-name-extensions))
+      (setq regex (concat "^[ \t]*\\(\\(?:file://\\|[/~.]\\)[^ \t\n]*\\."
+                          (regexp-opt image-file-name-extensions)
+                          "\\)[ \t]*$")
+            dsh-emacs-markdown--image-path-regexp
+            (cons (copy-sequence image-file-name-extensions) regex)))
     (goto-char (point-min))
     (while (re-search-forward regex nil t)
       (let* ((line-start (match-beginning 0))
@@ -1866,23 +1881,21 @@ via different paths and drift sub-pixel on their right edge."
   (make-string width
                (if dsh-emacs-markdown-table-use-unicode-borders ?─ ?-)))
 
-(defun dsh-emacs-markdown--render-table-separator-row (col-widths)
-  "Build the rendered separator line for COL-WIDTHS."
-  (let ((pipe (if dsh-emacs-markdown-table-use-unicode-borders "┼" "|"))
-        (left (if dsh-emacs-markdown-table-use-unicode-borders "├" "|"))
-        (right (if dsh-emacs-markdown-table-use-unicode-borders "┤" "|")))
-    (concat
-     (propertize left 'face 'dsh-emacs-markdown-table-border)
-     (mapconcat
-      (lambda (w)
-        (propertize (dsh-emacs-markdown--make-table-separator-cell (+ w 2))
-                    'face 'dsh-emacs-markdown-table-border))
-      col-widths
-      (propertize pipe 'face 'dsh-emacs-markdown-table-border))
-     (propertize right 'face 'dsh-emacs-markdown-table-border))))
+(defun dsh-emacs-markdown--insert-table-separator-row (col-widths)
+  "Insert the rendered separator line for COL-WIDTHS at point."
+  (let ((start (point))
+        (unicode dsh-emacs-markdown-table-use-unicode-borders))
+    (insert (if unicode "├" "|"))
+    (let ((first t))
+      (dolist (w col-widths)
+        (unless first (insert (if unicode "┼" "|")))
+        (setq first nil)
+        (insert (dsh-emacs-markdown--make-table-separator-cell (+ w 2)))))
+    (insert (if unicode "┤" "|"))
+    (put-text-property start (point) 'face 'dsh-emacs-markdown-table-border)))
 
-(cl-defun dsh-emacs-markdown--render-table-data-row (&key processed-cells col-widths row-face window)
-  "Build the rendered string for a data row, possibly multi-line.
+(cl-defun dsh-emacs-markdown--insert-table-data-row (&key processed-cells col-widths row-face window)
+  "Insert the rendered data row at point, possibly multi-line.
 
 PROCESSED-CELLS is the list of propertized cell strings.
 COL-WIDTHS is the list of column widths.  ROW-FACE, when non-nil,
@@ -1894,9 +1907,10 @@ Each cell on the first physical line of a wrapped row carries
 `dsh-emacs-markdown-table-cell-start' on its leading padding char so
 `dsh-emacs-markdown-table-next-cell' / `-previous-cell' can navigate
 logical rows (skipping the visual continuation lines)."
-  (let* ((pipe (if dsh-emacs-markdown-table-use-unicode-borders "│" "|"))
-         (styled-pipe (propertize pipe 'face 'dsh-emacs-markdown-table-border))
-         (wrapped (seq-mapn
+  (let* ((pipe (propertize (if dsh-emacs-markdown-table-use-unicode-borders
+                               "│" "|")
+                           'face 'dsh-emacs-markdown-table-border))
+         (wrapped (cl-mapcar
                    (lambda (cell width)
                      (dsh-emacs-markdown--table-wrap-text
                       cell width window))
@@ -1917,44 +1931,41 @@ logical rows (skipping the visual continuation lines)."
                     (or (not (string-match-p (rx bos (* ascii) eos) cell))
                         (dsh-emacs-markdown--text-has-face-p cell)))
                   processed-cells))
-         (max-lines (apply #'max 1 (mapcar #'length wrapped)))
-         (lines '()))
+         (max-lines (apply #'max 1 (mapcar #'length wrapped))))
+    ;; Insert each piece once instead of concatenating per cell, line and
+    ;; row: every copy of a propertized string conses its interval list.
     (dotimes (line-idx max-lines)
-      (let ((parts '()))
-        (seq-mapn
+      (unless (zerop line-idx) (insert "\n"))
+      (insert pipe)
+      (let ((first t))
+        (cl-mapc
          (lambda (cell-lines width force-pixel)
-           (let* ((line (if (< line-idx (length cell-lines))
-                            (nth line-idx cell-lines)
-                          ""))
-                  (padded (concat " "
-                                  (dsh-emacs-markdown--pad-table-string
-                                   :str line :width width :window window
-                                   ;; Empty continuation lines have no
-                                   ;; content to measure — leaving them
-                                   ;; on the ASCII path avoids a wasted
-                                   ;; pixel measurement that some Emacs
-                                   ;; builds appear to mishandle for an
-                                   ;; empty range.
-                                   :force-pixel (and force-pixel
-                                                     (not (string-empty-p
-                                                           line))))
-                                  " ")))
+           (unless first (insert pipe))
+           (setq first nil)
+           (let ((line (or (nth line-idx cell-lines) ""))
+                 (start (point)))
+             (insert " "
+                     (dsh-emacs-markdown--pad-table-string
+                      :str line :width width :window window
+                      ;; Empty continuation lines have no content to
+                      ;; measure — leaving them on the ASCII path avoids a
+                      ;; wasted pixel measurement that some Emacs builds
+                      ;; appear to mishandle for an empty range.
+                      :force-pixel (and force-pixel
+                                        (not (string-empty-p line))))
+                     " ")
              (when row-face
-               (add-face-text-property 0 (length padded) row-face t padded))
+               (add-face-text-property start (point) row-face t))
              ;; Mark first physical line of each cell as navigable —
              ;; continuation lines of a wrapped row aren't standalone
-             ;; cells.  Tag the first content char (index 1, past the
-             ;; leading padding space) so navigation lands cursor on
-             ;; the content rather than the border-adjacent space.
-             (when (and (zerop line-idx) (> (length padded) 1))
-               (put-text-property 1 2 'dsh-emacs-markdown-table-cell-start t padded))
-             (push padded parts)))
-         wrapped col-widths force-pixel-flags)
-        (push (concat styled-pipe
-                      (string-join (nreverse parts) styled-pipe)
-                      styled-pipe)
-              lines)))
-    (mapconcat #'identity (nreverse lines) "\n")))
+             ;; cells.  Tag the first content char (past the leading
+             ;; padding space) so navigation lands cursor on the content
+             ;; rather than the border-adjacent space.
+             (when (and (zerop line-idx) (> (- (point) start) 1))
+               (put-text-property (1+ start) (+ start 2)
+                                  'dsh-emacs-markdown-table-cell-start t))))
+         wrapped col-widths force-pixel-flags))
+      (insert pipe))))
 
 (cl-defun dsh-emacs-markdown--preprocess-table (&key rows window)
   "Parse cells in ROWS and compute natural column widths.
@@ -2126,7 +2137,9 @@ prone to a few-pixel drift on emoji-heavy tables."
                             target-width)
                          natural-widths))
            (data-row-num 0)
-           (rendered-rows '()))
+           (first t))
+      ;; Cells are strings now; reuse this buffer for the output.
+      (erase-buffer)
       (dolist (entry processed-rows)
         (let* ((row (car entry))
                (processed-cells (cdr entry))
@@ -2143,15 +2156,16 @@ prone to a few-pixel drift on emoji-heavy tables."
                           (is-zebra 'dsh-emacs-markdown-table-zebra))))
           (unless (or is-header is-separator)
             (setq data-row-num (1+ data-row-num)))
-          (push (if is-separator
-                    (dsh-emacs-markdown--render-table-separator-row col-widths)
-                  (dsh-emacs-markdown--render-table-data-row
-                   :processed-cells processed-cells
-                   :col-widths col-widths
-                   :row-face row-face
-                   :window window))
-                rendered-rows)))
-      (string-join (nreverse rendered-rows) "\n"))))
+          (unless first (insert "\n"))
+          (setq first nil)
+          (if is-separator
+              (dsh-emacs-markdown--insert-table-separator-row col-widths)
+            (dsh-emacs-markdown--insert-table-data-row
+             :processed-cells processed-cells
+             :col-widths col-widths
+             :row-face row-face
+             :window window))))
+      (buffer-string))))
 
 (defun dsh-emacs-markdown--collect-table-rows ()
   "Collect table rows in current buffer (typically a temp buffer).
@@ -2337,6 +2351,9 @@ so both properties receive the complete face in one traversal."
           (put-text-property pos next 'font-lock-face face))
         (setq pos next)))))
 
+(defvar-local dsh-emacs-markdown--fontify-mode nil
+  "Major mode already set up in this hidden fontification buffer.")
+
 (defun dsh-emacs-markdown--highlight-code (code lang)
   "Return CODE syntax-highlighted using LANG's major mode.
 
@@ -2344,16 +2361,27 @@ LANG is a language identifier as written after the opening
 fence (e.g. \"python\", \"elisp\").  When the resolved mode is
 loadable, CODE is fontified in a temporary buffer and returned
 with face properties applied.  Otherwise CODE is returned
-unchanged."
+unchanged.
+
+Each mode keeps one hidden fontification buffer, as Org and
+`markdown-mode' do: setting up a major mode costs more than
+fontifying a typical block, so it runs once per mode, not per block."
   (if-let* ((mode (dsh-emacs-markdown--resolve-lang-mode lang))
            ((fboundp mode)))
-      (with-temp-buffer
-        (insert code)
+      (with-current-buffer
+          (get-buffer-create (format " *dsh-emacs-markdown-fontify:%s*" mode))
         (let ((inhibit-message t)
+              (inhibit-read-only t)
               (delay-mode-hooks t))
-          (funcall mode)
-          (font-lock-ensure))
-        (buffer-string))
+          ;; Set after the mode runs: its `kill-all-local-variables' clears
+          ;; it, and a mode that signals is retried on the next block.
+          (unless (eq dsh-emacs-markdown--fontify-mode mode)
+            (funcall mode)
+            (setq dsh-emacs-markdown--fontify-mode mode))
+          (erase-buffer)
+          (insert code)
+          (font-lock-ensure)
+          (buffer-string)))
     code))
 
 (defun dsh-emacs-markdown--resolve-lang-mode (lang)

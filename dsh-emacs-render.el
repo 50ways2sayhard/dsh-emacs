@@ -731,20 +731,6 @@ message is inserted strictly above it."
           (setq found pos))))
     found))
 
-(defun dsh-emacs-render--window-at-bottom-p (window anchor)
-  "Return non-nil when WINDOW currently shows the bottom of the transcript.
-True when the anchor is within one window height plus ten screen rows
-of the window start, respecting wrapping and display properties.
-The slack absorbs insertions that push the anchor down between passes while
-leaving manually scrolled-up windows untouched."
-  (ignore-errors
-    (let ((start (window-start window)))
-      (and (<= start anchor)
-           (save-excursion
-             (goto-char start)
-             (vertical-motion (+ (max 1 (window-text-height window)) 10) window)
-             (>= (point) anchor))))))
-
 (defun dsh-emacs-render--following-windows ()
   "Return windows currently following this buffer's input anchor.
 Capture this immediately before a stream edit so large writes cannot make
@@ -755,7 +741,7 @@ a following window look manually scrolled away.  No state survives the edit."
              when (and (window-live-p window)
                        (or (not (eq window (selected-window)))
                            (>= (window-point window) anchor))
-                       (dsh-emacs-render--window-at-bottom-p window anchor))
+                       (dsh-emacs-ui--window-at-bottom-p window anchor))
              collect window)))
 
 ;; Declared before their first reader: the FOLLOW-STREAM default argument

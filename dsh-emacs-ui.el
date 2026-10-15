@@ -300,6 +300,20 @@ to the number of blank lines to preserve after their content."
       (forward-line -1))
     (get-text-property (line-beginning-position) 'dsh-emacs-ui-space-after)))
 
+(defun dsh-emacs-ui--window-at-bottom-p (window pos)
+  "Return non-nil when WINDOW currently shows POS near its bottom.
+True when POS is within one window height plus ten screen rows of the
+window start, respecting wrapping and display properties.  The slack
+absorbs insertions that push POS down between passes while leaving
+manually scrolled-up windows untouched."
+  (ignore-errors
+    (let ((start (window-start window)))
+      (and (<= start pos)
+           (save-excursion
+             (goto-char start)
+             (vertical-motion (+ (max 1 (window-text-height window)) 10) window)
+             (>= (point) pos))))))
+
 (defvar-local dsh-emacs-ui--blocks nil
   "Identity to (START-MARKER STATE TICK LAYOUT) lookup cache.
 Text properties remain authoritative; invalid markers are never returned.")
@@ -397,14 +411,7 @@ Rendering completes before editing; failed replacements roll back and signal."
          (width (dsh-emacs-ui--box-width))
          (layout (list width (copy-sequence dsh-emacs-ui-label-separator)))
          (changed nil)
-         (window (get-buffer-window (current-buffer)))
-         (saved-window-start (and window (window-start window)))
-         (was-at-bottom
-          (and window
-               (save-excursion
-                 (goto-char (window-start window))
-                 (forward-line (+ (max 1 (window-text-height window)) 10))
-                 (eobp)))))
+         (views nil))
     (unwind-protect
         (save-mark-and-excursion
           (let* ((inhibit-read-only t)
@@ -433,6 +440,18 @@ Rendering completes before editing; failed replacements roll back and signal."
                         text (buffer-substring (car block) (cdr block))))
               (dsh-emacs-ui--remember-block block layout)
               (cl-return-from dsh-emacs-ui-update-fragment block))
+            ;; Captured only once a write is certain, so cache hits stay free.
+            ;; Each reader's start is a marker that moves with the text: only
+            ;; following windows and starts collapsed into the replaced span
+            ;; need adjustment after the write.
+            (setq views (cl-loop for window in (get-buffer-window-list
+                                                (current-buffer) nil t)
+                                 collect (list window
+                                               (dsh-emacs-ui--window-at-bottom-p
+                                                window (point-max))
+                                               (save-excursion
+                                                 (goto-char (window-start window))
+                                                 (bolp)))))
             (let ((range (atomic-change-group
                            (if block
                                (let* ((start (car block))
@@ -496,13 +515,30 @@ Rendering completes before editing; failed replacements roll back and signal."
               (dsh-emacs-ui--remember-block range layout)
               (setq changed t)
               range)))
-      (when (and changed (window-live-p window))
-        (if was-at-bottom
-            (save-excursion
-              (goto-char (point-max))
-              (forward-line (- (1- (max 1 (window-text-height window)))))
-              (set-window-start window (max (point-min) (point)) t))
-          (set-window-start window saved-window-start t))))))
+      (when changed
+        (pcase-dolist (`(,window ,at-bottom ,start-bolp) views)
+          (when (window-live-p window)
+            (cond
+             (at-bottom
+              ;; Native recentering accounts for wrapping, line spacing and
+              ;; faces.  Re-setting the start unforced still lets redisplay
+              ;; keep point visible instead of moving it.
+              (with-selected-window window
+                (save-excursion
+                  (goto-char (point-max))
+                  (recenter -1))
+                (set-window-start window (window-start window) t)))
+             ((and start-bolp
+                   (save-excursion
+                     (goto-char (window-start window))
+                     (not (bolp))))
+              ;; The start sat in the replaced span and collapsed onto the
+              ;; edit; show that whole line rather than a fragment of it.
+              (set-window-start window
+                                (save-excursion
+                                  (goto-char (window-start window))
+                                  (line-beginning-position))
+                                t)))))))))
 
 (cl-defun dsh-emacs-ui-find-block (namespace-id block-id)
   "Find the block identified by NAMESPACE-ID and BLOCK-ID in this buffer.

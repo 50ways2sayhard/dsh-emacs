@@ -70,13 +70,22 @@ An identical snapshot skips rendering when the buffer change tick, measured
 width and label separator still match the last successful update. Snapshot
 strings are copied so later caller mutation cannot fool this comparison.
 Otherwise it renders again; identical rendered text and properties still
-return the range without buffer writes or viewport adjustment.
+return the range without buffer writes or viewport measurement.
 Changed updates preserve the common text prefix and suffix and replace only
 the middle span. Native string comparisons locate the suffix without a Lisp
 loop over every character or reversed copies of the body. The new state is
 applied across the block, but visual properties are written only on differing
 runs. Property-only updates do not replace characters. Changed updates still
 render and compare the whole card.
+
+Changed updates leave each window's start to move with the text, like a
+marker, for every window showing the buffer. Only two cases adjust it: a
+window whose screen-row view reached `point-max` before the write
+(`dsh-emacs-ui--window-at-bottom-p`, shared with the renderer's stream
+following) is recentered on `point-max` with native `recenter`, then left
+unforced so redisplay still keeps point visible; a start that was at a line
+beginning and collapsed into the replaced span is moved back to that line's
+start. See [decision record 107](../postmortem/107-fragment-viewport-markers.md).
 
 Identity is the separate `:namespace-id` / `:block-id` pair, compared with
 `equal`; do not join these strings. Lookup and deletion both take two
