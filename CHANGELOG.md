@@ -232,6 +232,11 @@ minor) and stay undated until the release is cut.
 
 ### Changed
 
+- **Reuse unchanged session row layouts**: repeated list refreshes reuse title
+  padding and styling while keeping status, relative time, child activity and
+  navigation targets current. Hidden and removed rows leave the cache.
+  (rationale: postmortem/106)
+
 - **Act on the next message from its own row**: the pending-input preview is
   followed by a compact cluster — dsh web's up arrow, edit and trash, one space
   apart. RET or a click sends that message now (steering it into the running

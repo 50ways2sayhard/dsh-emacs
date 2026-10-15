@@ -130,6 +130,14 @@ command in the list cancels pending project and session targets.")
 (defvar-local dsh-emacs-session--expanded-subagents nil
   "Session ids whose direct children are expanded in this list buffer.")
 
+(defvar-local dsh-emacs-session--row-cache nil
+  "Visual rows emitted by the last successful render of this list buffer.
+Each id maps to (DISPLAY-INPUTS . ROW); no session or command metadata is
+retained.  Every render replaces the table, dropping rows no longer visible.")
+
+(defvar dsh-emacs-session--previous-row-cache nil
+  "Previous visual rows, dynamically bound while building a list source.")
+
 (defvar dsh-emacs-session-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'dsh-emacs-open-session-at-point)
@@ -491,8 +499,10 @@ baselines regroup hundreds of multibyte rows."
                       nil))))))
       ;; Preserve xref departure markers in surviving child rows.  Erasing
       ;; the list would collapse them to point-min before a follow completes.
-      (let ((target (current-buffer)))
+      (let ((target (current-buffer))
+            (dsh-emacs-session--previous-row-cache dsh-emacs-session--row-cache))
         (with-temp-buffer
+          (setq dsh-emacs-session--row-cache (make-hash-table :test #'equal))
           (dolist (variable '(dsh-emacs-session--workspace-fold-default
                               dsh-emacs-session--workspace-fold-overrides
                               dsh-emacs-session--expanded-subagents
@@ -516,6 +526,7 @@ baselines regroup hundreds of multibyte rows."
             (dolist (group groups)
               (dsh-emacs-session--render-group group)))
           (let ((source (current-buffer))
+                (cache dsh-emacs-session--row-cache)
                 (end (point-max)))
             (with-current-buffer target
               (dsh-emacs-session--update-rows source)
@@ -528,7 +539,8 @@ baselines regroup hundreds of multibyte rows."
                   (let ((next (next-property-change pos source end)))
                     (set-text-properties (+ offset pos) (+ offset next)
                                          (text-properties-at pos source))
-                    (setq pos next)))))))))
+                    (setq pos next))))
+              (setq dsh-emacs-session--row-cache cache))))))
     ;; Where point goes now that the list is rebuilt.  The buffer point is
     ;; the list's focus (commands read it); other windows each keep their own
     ;; captured row and are restored separately.
@@ -889,29 +901,31 @@ CHILD is (DIRECT-PARENT . CATALOG-ENTRY); SESSION may be nil for a cold child."
                              activity)
                    (dsh-emacs-session--compact-time updated-at)))
 
-         ;; Status indicator
-         (status-dot (dsh-emacs-session--status-dot status))
-
-         ;; Column at which the time begins, measured from the left margin.
-         ;; indent + disclosure (2 cols) + status dot + separator space +
-         ;; 46-column title field + 2-col gap.  `:align-to' replaces literal
-         ;; padding so the column holds even when a title's rendered glyph
-         ;; width differs from `string-width' (proportional/CJK fonts), which
-         ;; would otherwise let the time drift right/left.
-         (time-column (+ (or indent 0) 3 49))
-         (row (concat
-               (make-string (or indent 0) ?\s)
-               (cond ((and catalog expanded) "▾ ")
-                     (catalog "▸ ")
-                     (t "  "))
-               status-dot " "
-               ;; Pad to a fixed width so over-long titles truncate and short
-               ;; ones keep a readable gap; the exact column is then pinned by
-               ;; the :align-to below regardless of title glyph widths.
-               (propertize (dsh-emacs-session--pad-right title-str 46)
-                           'face 'dsh-emacs-session-title-face)
-               (propertize " " 'display `(space :align-to ,time-column))
-               (propertize (or detail "") 'face 'dsh-emacs-muted-face))))
+         (disclosure (cond ((and catalog expanded) "▾ ")
+                           (catalog "▸ ")
+                           (t "  ")))
+         ;; Copy strings: projection updates may mutate the same title object.
+         ;; Recompute detail first so an unchanged timestamp can age into a
+         ;; new relative-time bucket.  Metadata is attached afresh below.
+         (inputs (list (or indent 0) disclosure status
+                       (copy-sequence title-str)
+                       (and detail (copy-sequence detail))))
+         (cached (and dsh-emacs-session--previous-row-cache
+                      (gethash session-id dsh-emacs-session--previous-row-cache)))
+         ;; indent + disclosure + dot/separator + title + gap.  :align-to
+         ;; keeps the time column stable with proportional and CJK fonts.
+         (row (if (and cached (equal-including-properties inputs (car cached)))
+                  (cdr cached)
+                (concat
+                 (make-string (or indent 0) ?\s) disclosure
+                 (dsh-emacs-session--status-dot status) " "
+                 (propertize (dsh-emacs-session--pad-right title-str 46)
+                             'face 'dsh-emacs-session-title-face)
+                 (propertize " " 'display
+                             `(space :align-to ,(+ (or indent 0) 3 49)))
+                 (propertize (or detail "") 'face 'dsh-emacs-muted-face)))))
+    (when dsh-emacs-session--row-cache
+      (puthash session-id (cons inputs row) dsh-emacs-session--row-cache))
 
     ;; Insert row with text properties for selection and (optionally) the
     ;; containing workspace

@@ -27706,7 +27706,7 @@ messages (e.g. `command/done')."
     (when (eq scenario 'session-title)
       (dsh-test-assert "render-report-distinguishes-row-visits-from-builds"
         (= (plist-get report :session-rows) 540)
-        (= (plist-get report :session-row-builds) 540)))
+        (= (plist-get report :session-row-builds) 1)))
     (when (memq scenario '(fragment-warm fragment-after-stream fragment-rewarmed))
       (dsh-test-assert (format "render-report-unchanged-%s" scenario)
         (= (plist-get report :renders)
@@ -27714,6 +27714,184 @@ messages (e.g. `command/done')."
         (null (plist-get report :text-edits))
         (null (plist-get report :property-calls))
         (not (plist-get report :modified))))))
+
+;; Visual row reuse must preserve mutable inputs and current command targets.
+(let* ((now 1000.0)
+       (title (copy-sequence "Original title"))
+       (dsh-emacs--sessions
+        (list (dsh-protocol-session--from-alist
+               `((sessionId . "cached-a") (updatedAt . 1000)
+                 (projections (values (title . ,title)))))
+              (dsh-protocol-session--from-alist
+               '((sessionId . "cached-b") (updatedAt . 1000)
+                 (projections (values (title . "Second")))))))
+       (dsh-emacs--workspaces nil)
+       (dsh-emacs--archived-sessions nil)
+       (dsh-emacs--current-session nil)
+       (dsh-emacs-workspaces-collapsed-by-default nil)
+       (dsh-emacs--subagent-catalogs (make-hash-table :test #'equal)))
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'float-time) (lambda (&optional _) now)))
+      (cl-labels
+          ((check (label builds)
+             (let ((report (dsh-render-report-measure #'dsh-emacs-session--render)))
+               (dsh-test-assert (concat "session-row-cache-" label)
+                 (= builds (plist-get report :session-row-builds)))))
+           (row () (dsh-emacs-session--row-pos 'dsh-emacs-session-id "cached-a")))
+        (check "cold-builds-every-row" 2)
+        (check "warm-builds-no-rows" 0)
+        (setcar dsh-emacs--sessions (copy-dsh-protocol-session
+                                    (car dsh-emacs--sessions)))
+        (setf (dsh-protocol-session-context-window (car dsh-emacs--sessions)) 128000)
+        (check "metadata-only-replacement-reuses-layout" 0)
+        (dsh-test-assert "session-row-cache-publishes-current-object-in-padding"
+          (eq (get-text-property (+ (row) 35) 'dsh-emacs-session)
+              (car dsh-emacs--sessions)))
+        (aset title 0 ?X)
+        (check "in-place-title-mutation-rebuilds-one" 1)
+        (dsh-test-assert "session-row-cache-shows-mutated-title"
+          (string-match-p "Xriginal title" (buffer-string)))
+        (put-text-property 0 1 'help-echo 'changed-property title)
+        (check "title-property-change-rebuilds-one" 1)
+        (dsh-test-assert "session-row-cache-retains-title-properties"
+          (text-property-any (point-min) (point-max) 'help-echo 'changed-property))
+        (setf (dsh-protocol-session-running (car dsh-emacs--sessions)) t)
+        (check "status-only-change-rebuilds-one" 1)
+        (dsh-test-assert "session-row-cache-status-face-updates"
+          (eq (get-text-property (+ (row) 4) 'face) 'dsh-emacs-status-running-face))
+        (setq now 1061.0)
+        (check "unchanged-timestamps-age" 2)
+        (dsh-test-assert "session-row-cache-time-bucket-updates"
+          (string-match-p "1m" (buffer-string)))
+        (setq dsh-emacs--current-session "cached-a")
+        (setf (dsh-protocol-session-blank (car dsh-emacs--sessions)) t)
+        (check "blank-title-rebuilds-one" 1)
+        (dsh-test-assert "session-row-cache-blank-title-shown"
+          (string-match-p "New Session" (buffer-string)))
+        (setf (dsh-protocol-session-blank (car dsh-emacs--sessions)) nil
+              (dsh-protocol-session-title-value (car dsh-emacs--sessions)) nil
+              (dsh-protocol-session-cwd (car dsh-emacs--sessions)) "/tmp/fallback")
+        (check "fallback-title-rebuilds-one" 1)
+        (let ((warm (buffer-string)))
+          (setq dsh-emacs-session--row-cache nil)
+          (check "explicit-cold-render-rebuilds" 2)
+          (dsh-test-assert "session-row-cache-cold-and-warm-output-identical"
+            (equal-including-properties warm (buffer-string))))
+        (let ((inhibit-read-only t))
+          (goto-char (+ (row) 5))
+          (delete-char 1)
+          (insert "!")
+          (put-text-property (+ (row) 35) (+ (row) 36) 'dsh-emacs-subagent 'stale))
+        (check "warm-render-repairs-external-edits" 0)
+        (dsh-test-assert "session-row-cache-repairs-text-and-command-properties"
+          (not (string-match-p "!" (buffer-string)))
+          (null (get-text-property (+ (row) 35) 'dsh-emacs-subagent)))
+        (let ((cache dsh-emacs-session--row-cache) escaped)
+          (cl-letf (((symbol-function 'dsh-emacs-session--update-rows)
+                     (lambda (_) (error "Publication failed"))))
+            (condition-case err
+                (dsh-emacs-session--render)
+              (error (setq escaped err))))
+          (dsh-test-assert "session-row-cache-failed-publication-keeps-previous-cache"
+            (equal escaped '(error "Publication failed"))
+            (eq cache dsh-emacs-session--row-cache)))
+        (setq dsh-emacs--sessions (list (car dsh-emacs--sessions)))
+        (check "removed-row-is-pruned" 0)
+        (dsh-test-assert "session-row-cache-holds-only-visible-rows"
+          (= (hash-table-count dsh-emacs-session--row-cache) 1)
+          (null (gethash "cached-b" dsh-emacs-session--row-cache)))
+        (let ((cache dsh-emacs-session--row-cache))
+          (with-temp-buffer
+            (check "other-list-buffer-starts-cold" 1)
+            (dsh-test-assert "session-row-cache-buffer-ownership-is-independent"
+              (not (eq cache dsh-emacs-session--row-cache)))))
+        (setq dsh-emacs-session--workspace-fold-overrides '((:ungrouped . t)))
+        (check "fold-hides-and-prunes-rows" 0)
+        (dsh-test-assert "session-row-cache-folded-cache-is-empty"
+          (= (hash-table-count dsh-emacs-session--row-cache) 0))
+        (setq dsh-emacs-session--workspace-fold-overrides nil)
+        (check "unfold-rebuilds-pruned-row" 1)
+        (setq dsh-emacs--sessions nil)
+        (check "empty-list-prunes-all-rows" 0)
+        (dsh-test-assert "session-row-cache-empty-list-cache-is-empty"
+          (= (hash-table-count dsh-emacs-session--row-cache) 0))))))
+
+;; A visual hit never skips child traversal, notices or navigation metadata.
+(let* ((dsh-emacs--sessions
+        (dsh-emacs-test--session-items '(((sessionId . "cache-root")))))
+       (workspace (dsh-protocol-workspace--from-alist
+                   '((workspaceId . "cache-ws") (title . "Workspace")
+                     (sessionIds . ["cache-root"]))))
+       (dsh-emacs--workspaces (list workspace))
+       (dsh-emacs--archived-sessions nil)
+       (dsh-emacs--current-session nil)
+       (dsh-emacs-workspaces-collapsed-by-default nil)
+       (dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
+       (cell (dsh-protocol-subagent-cell--from-alist
+              '((key . subagentCatalog) (seq . 1)
+                (value . [((id . "cache-child") (label . "Child")
+                           (mode . "one-shot"))])))))
+  (puthash "cache-root" (list :cells (list (cons 'subagentCatalog cell)))
+           dsh-emacs--subagent-catalogs)
+  (with-temp-buffer
+    (setq dsh-emacs-session--expanded-subagents '("cache-root" "cache-child"))
+    (cl-labels ((check (label builds)
+                 (let ((report (dsh-render-report-measure #'dsh-emacs-session--render)))
+                   (dsh-test-assert (concat "session-row-cache-" label)
+                     (= builds (plist-get report :session-row-builds)))))
+               (child-pos () (dsh-emacs-session--row-pos
+                              'dsh-emacs-session-id "cache-child")))
+      (check "cold-child-layout" 2)
+      (setf (dsh-protocol-subagent-cell-value cell)
+            (list (copy-dsh-protocol-subagent-entry
+                   (car (dsh-protocol-subagent-cell-value cell)))))
+      (setf (dsh-protocol-workspace-title workspace) "Renamed workspace")
+      (check "equal-child-replacement-reuses-layout" 0)
+      (dsh-test-assert "session-row-cache-current-child-and-workspace-metadata"
+        (eq (cdr (get-text-property (child-pos) 'dsh-emacs-subagent))
+            (car (dsh-protocol-subagent-cell-value cell)))
+        (equal (get-text-property (child-pos) 'dsh-emacs-workspace-title)
+               "Renamed workspace"))
+      (setf (dsh-protocol-subagent-entry-mode
+             (car (dsh-protocol-subagent-cell-value cell))) "continuable")
+      (check "child-mode-change" 1)
+      (dsh-test-assert "session-row-cache-current-child-mode"
+        (string-match-p "continuable · unknown" (buffer-string)))
+      (push (dsh-protocol-session--from-alist
+             '((sessionId . "cache-child") (origin . "subagent")
+               (parentSessionId . "cache-root") (running . t)))
+            dsh-emacs--sessions)
+      (check "child-activity-change" 1)
+      (dsh-test-assert "session-row-cache-current-child-activity"
+        (string-match-p "continuable · running" (buffer-string))
+        (eq (get-text-property (child-pos) 'dsh-emacs-session)
+            (car dsh-emacs--sessions)))
+      (puthash "cache-child"
+               (list :cells
+                     (list (cons 'subagentCatalog
+                                 (dsh-protocol-subagent-cell--from-alist
+                                  '((key . subagentCatalog) (seq . 1)
+                                    (value . [((id . "cache-grandchild")
+                                               (label . "Grandchild")
+                                               (mode . "one-shot"))]))))))
+               dsh-emacs--subagent-catalogs)
+      (check "cached-root-still-traverses-new-grandchild" 2)
+      (dsh-test-assert "session-row-cache-new-grandchild-direct-parent"
+        (equal (car (get-text-property
+                     (dsh-emacs-session--row-pos 'dsh-emacs-session-id "cache-grandchild")
+                     'dsh-emacs-subagent))
+               "cache-child"))
+      (puthash "cache-root"
+               (plist-put (gethash "cache-root" dsh-emacs--subagent-catalogs)
+                          :state 'error)
+               dsh-emacs--subagent-catalogs)
+      (check "cached-root-still-renders-notice" 0)
+      (dsh-test-assert "session-row-cache-error-notice-visible"
+        (string-match-p "Cannot load subagents" (buffer-string)))
+      (setq dsh-emacs-session--expanded-subagents nil)
+      (check "collapse-updates-disclosure-and-prunes-descendants" 1)
+      (dsh-test-assert "session-row-cache-hidden-descendants-pruned"
+        (= (hash-table-count dsh-emacs-session--row-cache) 1)))))
 
 (princ "\n===== test summary =====\n")
 (let ((pass (cl-count-if (lambda (r) (cdr r)) dsh-test-results))

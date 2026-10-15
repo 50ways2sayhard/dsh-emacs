@@ -403,7 +403,8 @@ and returns a plist. Its fields have deliberately narrow meanings:
   the session source once at the reconciliation boundary, not recursive
   subtree totals. They do not count intermediate allocations.
 - `:session-row-builds` counts calls to title padding/truncation during session
-  source construction: one per newly built visual row.
+  source construction: one per newly built visual row. Cache hits still count
+  as `:session-rows` visits, since metadata and descendants must be refreshed.
 - `:text-edits` lists chronological `(START OLD NEW)` character-change-hook
   notifications. Coordinates belong to the buffer at each notification;
   this is neither a minimal final diff nor an ETAF edit list to replay.
@@ -455,3 +456,70 @@ cache behavior and equality of ordinary/instrumented output including text
 properties. Millisecond thresholds are not test assertions. The script is in
 the normal syntax gate; see [105](../postmortem/105-render-work-reports.md) for
 the decision to adopt diagnostics rather than a retained-tree renderer.
+
+## Session visual row reuse (106)
+
+Each session-list buffer retains the visual strings for rows emitted by its
+last successful publication. A row is rebuilt when its resolved title (including
+text properties), status, indentation, disclosure glyph or rendered detail
+changes. Title snapshots detect in-place mutation of protocol strings; relative
+time is recomputed on every visit, so an unchanged timestamp can age into a new
+bucket. Child mode and activity are part of the rendered detail.
+
+This cache saves title width/truncation, padding and styled-string construction.
+It does not cache command targets: every visit attaches the current session,
+workspace and direct-parent/catalog-entry metadata, then traverses descendants
+and renders loading/error notices. Target-buffer edits are still repaired by
+row reconciliation and full property publication. After publication, the new
+cache replaces the old one, pruning folded, removed and filtered rows. Another
+list buffer starts with its own empty cache.
+
+In the 540-session title-change fixture, row visits remain **540**, while actual
+visual row builds fall from **540 to 1**; a fully unchanged refresh builds none.
+The full source still has 545 lines / 29,241 characters, one 54→54 character
+replacement, and 3,246 property requests covering 29,241 summed characters.
+Neither source generation nor publication becomes proportional to changed rows.
+
+For a separate latency comparison, byte-compile the complete baseline and
+cached session modules into temporary directories, with all other compiled
+production modules held constant. Load the selected full module outside each
+timed sample; alternate baseline/cache order within each pair. Use a fresh
+hidden buffer and 540 fresh sessions for each sample, discard two warmup pairs,
+and keep all 16 measured pairs. Force GC before timing the full render and
+include any GC during it. Cold means an empty destination/cache, not a cold
+Emacs process; warm means one initial render followed by one changed title.
+
+The ASCII fixture uses 11-column titles. The CJK/mixed fixture uses five
+repeated development-task titles, 37–44 characters / 67–69 columns, which need
+46-column truncation. Sessions use a shared numeric Unix-millisecond timestamp
+about two hours old. There are no workspaces or children in this timing fixture;
+those paths have separate regression coverage. Batch measurements omit GUI
+redisplay, network traffic, mode hooks and long-lived allocation/GC effects.
+
+On Emacs 31.1.50 / macOS arm64, the corrected timestamp fixture produced:
+
+| 540-row case | Baseline median ms | Cached median ms | Paired savings median ms | Paired savings median % |
+| --- | ---: | ---: | ---: | ---: |
+| ASCII, cold | 5.763 | 5.817 | 0.082 | 1.384% |
+| ASCII, one-title update | 6.503 | 5.954 | 0.613 | 9.496% |
+| CJK/mixed, cold | 6.866 | 6.616 | -0.033 | -0.512% |
+| CJK/mixed, one-title update | 7.532 | 6.109 | 1.281 | 16.731% |
+
+Paired savings are computed for each baseline/cache pair before taking the
+median; they are not the difference or ratio of the two independent medians.
+Positive savings mean faster cached rendering. Warm ASCII improved in 13/16
+pairs, and warm CJK in 15/16. Warm paired savings IQRs were 0.202–1.480 ms and
+0.787–1.649 ms respectively. The CJK cache timings included a 10.073 ms outlier;
+all samples were retained. Both cold paired IQRs cross zero, so this run does
+not resolve a consistent cold-start gain or penalty. No timed render triggered
+GC, and output including properties matched for all four fixture variants.
+These batch results support retaining the cache for repeated updates,
+especially truncating titles; they do not establish a GUI latency guarantee.
+
+Regression coverage includes in-place title mutation, property-only title
+changes, status and time buckets, fallback titles, replacement metadata,
+workspace renaming, child mode/activity, new grandchildren, error notices,
+fold/removal pruning, buffer isolation, failed publication and repair of external
+text/property edits. Existing regrouping and per-window focus tests still run.
+See [106](../postmortem/106-session-row-cache.md) for the decision and measurement
+limits.
