@@ -231,6 +231,13 @@ extra blank lines), and adjacent tool rows stack tightly; pressing `RET` on a
 tool row expands/collapses the body (the body is stored inside the block, so
 expanding always restores it).
 
+Automatic compaction summaries use a folded **Automatic compaction** row
+with a covered-item count and approximate old-context token estimate.
+`RET` or a click expands the summary text; the original conversation stays
+visible. The row uses neutral wording because applying the summary's
+checkpoint can still fail afterward. Raw model output and the checkpoint
+body stay hidden, and manual `/compact` retains its command card.
+
 Standalone model and automatic compaction errors have one blank line above
 and below their cards, including when collapsed. Their title and error detail
 remain adjacent. A reply footer following an error reuses its bottom blank
@@ -298,6 +305,8 @@ not a working grouping surface.
 | `dsh-emacs-modeline-face` | The entire stats strip |
 | `dsh-emacs-modeline-running-face` | Deep diving caption and elapsed clock |
 | `dsh-emacs-modeline-running-highlight-face` | Peak color of the caption's gentle sweep |
+| `dsh-emacs-modeline-compacting-face` | Teal Compacting caption and elapsed clock |
+| `dsh-emacs-modeline-compacting-highlight-face` | Peak color of the Compacting sweep |
 | `dsh-emacs-modeline-separator-face` | Separator between stats (default: one space) |
 | `dsh-emacs-modeline-token-face` | Token count |
 | `dsh-emacs-modeline-cost-face` | Cost |

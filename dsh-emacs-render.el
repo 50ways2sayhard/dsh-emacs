@@ -4005,6 +4005,44 @@ DATA.REASON.ERROR ({code, message, ...})."
      :create-new t :expanded t
      :insert-before insert-point)))
 
+(defun dsh-emacs-render-compaction-summary (event)
+  "Render automatic compaction EVENT as a folded summary and return its seq.
+The row records a generated summary, not successful checkpoint application.
+Manual compactions retain their command card; later automatic failures keep
+their own error card.  Neither the old conversation nor input history changes."
+  (let* ((summary (dsh-protocol--struct
+                   #'dsh-protocol-compaction-summary-p
+                   #'dsh-protocol-compaction-summary--from-alist event))
+         (seq (dsh-protocol-compaction-summary-seq summary))
+         (text (dsh-protocol-compaction-summary-text summary))
+         (items (dsh-protocol-compaction-summary-item-count summary))
+         (tokens (dsh-protocol-compaction-summary-token-count summary)))
+    (unless (dsh-protocol-compaction-summary-command-id summary)
+      (dsh-emacs-ui-update-fragment
+       (dsh-emacs-ui-make-fragment
+        :namespace-id (dsh-emacs-render--make-namespace)
+        :block-id (format "compaction-summary-%s"
+                          (or (dsh-protocol-compaction-summary-id summary) seq))
+        :label-left (propertize "Automatic compaction"
+                                'face 'dsh-emacs-meta-face)
+        :label-right
+        (propertize
+         (string-join
+          (delq nil
+                (list (when items
+                        (format "%d history item%s" items
+                                (if (= items 1) "" "s")))
+                      (when tokens
+                        (format "~%s tokens" (dsh-emacs-format-tokens tokens)))))
+          " · ")
+         'face 'dsh-emacs-timestamp-face
+         'help-echo "Size of the summarized history; not tokens saved")
+        :body (unless (string-blank-p text) (dsh-emacs-markdown-render text))
+        :style 'minimal :status 'compaction-summary
+        :non-foldable (string-blank-p text) :padding t)
+       :expanded nil :insert-before (dsh-emacs-render--input-insert-point)))
+    seq))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: step boundaries and attempts (V3 vocabulary completion)
 ;;; ---------------------------------------------------------------------------
@@ -4641,6 +4679,8 @@ source filter, so without this check the same tool card is painted twice."
     (pcase type
       ((or "llm/retry" "llm/retry-started" "compaction/start")
        (setq seq (dsh-emacs-render--event-seq event)))
+      ("compaction/summary"
+       (setq seq (dsh-emacs-render-compaction-summary event)))
       ("compaction/end"
        (setq seq (dsh-emacs-render--event-seq event))
        ;; Slash-command failures already have a command/done card.  An

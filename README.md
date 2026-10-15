@@ -57,9 +57,10 @@ Opening an already-running session restores this indicator after an Emacs
 restart, even when its turn started before the loaded history window.
 
 Motion Line is optional and installed separately. Without it, the mode line
-shows a static `Deep diving` caption while running and clears it when the
-turn ends or disconnects. This fallback uses no animation timer or elapsed
-clock. See [Mode-line status](docs/modeline.md) for setup.
+shows a static `Deep diving` or `Compacting` caption for the active phase
+and clears it when both activities finish or the session disconnects. This
+fallback uses no animation timer or elapsed clock. See
+[Mode-line status](docs/modeline.md) for setup.
 
 When `nerd-icons-completion` is active, DSH chat buffers use the whale icon in
 Consult's buffer-switch minibuffer (`C-x b`).
@@ -227,9 +228,19 @@ messages. Goal shortcuts and inline controls are described in
 [Goal actions](docs/customization.md#goal-actions).
 
 The mode line shows `Retry 1/3` while waiting to retry, `Retrying 1/3` once
-the request starts, and `Compacting` during context compaction. Hover, click,
-or run `M-x dsh-emacs-describe-status` for details. See
+the request starts. During context compaction, the whale's caption changes
+to teal `Compacting · 12s`, with its own elapsed clock and gentle sweep when
+Motion Line is installed. It also appears between turns; without Motion
+Line it shows static `Compacting` text. When compaction finishes during a
+turn, `Deep diving` returns with the turn's original clock. Hover, click, or
+run `M-x dsh-emacs-describe-status` for details. See
 [Execution feedback](docs/modeline.md#execution-feedback).
+
+Automatic compaction leaves a folded **Automatic compaction** row in the
+transcript. `RET` or a click expands the generated summary; the header shows
+the number of covered items and an approximate token count for the old
+context. The original conversation stays visible. A later compaction failure
+gets its own error card; manual `/compact` keeps its command result card.
 
 Plan mode shows `Plan` while active, or `Plan → on` / `Plan → off` while a
 switch is pending. Use `/plan` to enter and `/plan off` to leave; the badge

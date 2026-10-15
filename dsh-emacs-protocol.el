@@ -1361,6 +1361,40 @@ alist; CONSTRUCTOR converts the wire alist."
       value
     (funcall constructor value)))
 
+;; Generated compaction summaries are distinct from completion boundaries.
+
+(cl-defstruct (dsh-protocol-compaction-summary
+               (:constructor dsh-protocol--make-compaction-summary))
+  "Generated compaction text and the context it summarizes.
+TOKEN-COUNT is the estimated size of the replaced context, not savings."
+  seq id command-id text item-count token-count)
+
+(defun dsh-protocol-compaction-summary--from-alist (event)
+  "Decode a `compaction/summary' EVENT, or nil for other event types.
+Only summary text blocks are exposed; provider output and reasoning stay
+private.  Missing or invalid counts remain nil; an empty wire array is zero."
+  (when (equal (dsh-protocol--field 'type event) "compaction/summary")
+    (let* ((data (dsh-protocol--field 'data event))
+           (seqs (dsh-protocol--field 'shadowedSeqs data))
+           (tokens (dsh-protocol--field 'shadowedTokenCount data)))
+      (dsh-protocol--make-compaction-summary
+       :seq (dsh-protocol--field 'seq event)
+       :id (dsh-protocol--field 'compactionId data)
+       :command-id (dsh-protocol--field 'sourceCommandId data)
+       :text (mapconcat
+              #'identity
+              (cl-loop for block in (dsh-protocol--objects
+                                    (dsh-protocol--field 'summary data))
+                       for text = (dsh-protocol--field 'text block)
+                       when (and (equal (dsh-protocol--field 'type block) "text")
+                                 (stringp text))
+                       collect text)
+              "")
+       :item-count (when (and (or (vectorp seqs) (consp seqs))
+                              (cl-every #'natnump seqs))
+                     (length seqs))
+       :token-count (when (natnump tokens) tokens)))))
+
 ;; Execution feedback: durable retry/compaction facts and their boundaries.
 
 (cl-defstruct (dsh-protocol-execution-event

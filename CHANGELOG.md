@@ -29,6 +29,14 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Follow automatic compaction**: a folded **Automatic compaction** row
+  shows the generated summary, covered item count and approximate old-context
+  token count while preserving the original conversation. During compaction,
+  the mode line uses a teal `Compacting` caption with the existing whale,
+  gentle sweep and its own elapsed clock when Motion Line is installed,
+  including between turns. Without Motion Line the caption is static.
+  (rationale: postmortem/104)
+
 - **Customize the pending-input queue color**: `dsh-emacs-color-queue` and
   `dsh-emacs-color-queue-dark` now own the amber shared by the mode-line
   `[Q2 S1]` indicator and the Next Message row's queue glyph, so one queue

@@ -1978,9 +1978,11 @@ The event envelope used for persistence/transport (the wire shape
   inside the default 50-message window (`tail_distance=4`).
   **Renderer discipline**: `system/message` is not rendered; `user/message` source
   filtering (skip when `kind` is not `nil`/`user`) already covers compaction
-  summaries (whose `source.kind` is `plugin`); `tool/result` must itself check
-  `surfaceOp.op == "replace"` and skip — it **shares the `callId`** with the
-  replaced record, and `data` has **no** source field to rely on. dsh-emacs does
+  checkpoint bodies (whose `source.kind` is `compact-checkpoint`); the separate
+  `compaction/summary` event supplies the visible summary row. `tool/result`
+  must itself check `surfaceOp.op == "replace"` and skip — it **shares the
+  `callId`** with the replaced record, and `data` has **no** source field to
+  rely on. dsh-emacs does
   this via `dsh-emacs-render--replacement-p` + the dispatcher.
 - **Measured evidence (a `session/follow` snapshot from the 0.1.5-rc.1 live
   service)**: header =
@@ -2128,12 +2130,25 @@ not rendered.
 `compaction/start` / `compaction/end` feed the mode line, with provider, wait
 and failure details through `M-x dsh-emacs-describe-status`. A retry chain
 reuses `retryId` across attempts, so `retry-started` must also match `retry`.
-Compaction's `turn: null` is independent of the running-turn animation.
+Compaction's `turn: null` is independent of the running-turn state. While
+compacting, the same activity slot shows `Compacting` and its own locally
+observed elapsed clock when Motion Line is installed; this preserves the
+enclosing turn's clock and also works between turns.
 Completion boundaries clear live status; disconnect clears it, and the whole
 follow snapshot rebuilds it even below the transcript dedup anchor. Automatic
 compaction failures render a retained error card; `sourceCommandId` failures
-use the existing command result instead. `compaction/summary` and
-`compaction/prune` have no dedicated renderer.
+use the existing command result instead. Automatic `compaction/summary`
+events render as folded `Automatic compaction` rows. The typed summary
+provides the expanded text, `shadowedSeqs` length supplies the item count,
+and `shadowedTokenCount` is displayed as an approximate old-context token
+estimate, not saved or remaining tokens. A summary is emitted before the
+checkpoint is applied, so the title deliberately does not assert success.
+The renderer preserves the original conversation and hides `rawOutput` and
+the replacement checkpoint body. A summary with `sourceCommandId` is
+suppressed; the existing `/compact` command card keeps its counts and result
+or failure text. A retained window without the summary produces no row; the
+client does not fetch or cache it separately. `compaction/prune` still has no
+dedicated renderer.
 
 **0.1.6 additions and the dispatcher**: `image/offload` is a durable event with
 no dedicated renderer, so `dsh-emacs-render-event`'s `_ → nil` default branch

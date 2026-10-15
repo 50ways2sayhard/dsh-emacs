@@ -674,6 +674,7 @@ snapshot rebuild redraws once instead of once per retained record."
          (turn (dsh-protocol-execution-event-turn event))
          (step (dsh-protocol-execution-event-step event))
          (id (dsh-protocol-execution-event-id event))
+         (previous-compaction dsh-emacs--modeline-compaction)
          (retry (car dsh-emacs--modeline-retry))
          (same-turn (and retry (integerp turn)
                          (equal turn (dsh-protocol-execution-event-turn retry))))
@@ -714,18 +715,19 @@ snapshot rebuild redraws once instead of once per retained record."
                                  dsh-emacs--modeline-compaction)))
            (setq dsh-emacs--modeline-compaction nil))))
       (unless defer-update
-        (force-mode-line-update)))))
+        (dsh-emacs-modeline--sync-animation previous-compaction)))))
 
 (defun dsh-emacs-modeline-reset-execution (&optional events)
   "Replace execution feedback with decoded snapshot EVENTS, or clear it.
 Fold the whole retained window independently of the transcript's dedup anchor;
 an old start may still describe the current operation after reconnection."
-  (setq dsh-emacs--modeline-retry nil
-        dsh-emacs--modeline-compaction nil
-        dsh-emacs--modeline-execution-seq nil)
-  (dolist (event events)
-    (dsh-emacs-modeline-note-execution event t))
-  (force-mode-line-update))
+  (let ((previous-compaction dsh-emacs--modeline-compaction))
+    (setq dsh-emacs--modeline-retry nil
+          dsh-emacs--modeline-compaction nil
+          dsh-emacs--modeline-execution-seq nil)
+    (dolist (event events)
+      (dsh-emacs-modeline-note-execution event t))
+    (dsh-emacs-modeline--sync-animation previous-compaction)))
 
 (defun dsh-emacs-modeline--status-detail ()
   "Describe this buffer's execution and Plan mode, or return empty text."
@@ -801,29 +803,19 @@ an old start may still describe the current operation after reconnection."
      'local-map dsh-emacs-modeline--status-map)))
 
 (defun dsh-emacs-modeline--execution-indicator ()
-  "Return a compact retry/compaction label, including standalone compaction."
-  (let* ((retry (car dsh-emacs--modeline-retry))
-         (text (string-join
-                (delq nil
-                      (list
-                       (and dsh-emacs--modeline-compaction "Compacting")
-                       (when retry
-                         (format "%s %s%s"
-                                 (if (cdr dsh-emacs--modeline-retry)
-                                     "Retrying" "Retry")
-                                 (dsh-protocol-execution-event-attempt retry)
-                                 (if-let* ((limit
-                                            (dsh-protocol-execution-event-limit
-                                             retry)))
-                                     (format "/%s" limit) "")))))
-                " · ")))
-    (unless (string-empty-p text)
-      (propertize (concat " " text " ")
-                  'face 'dsh-emacs-mode-line-busy-face
-                  'help-echo (concat (dsh-emacs-modeline--status-detail)
-                                     "\n\nClick or M-x dsh-emacs-describe-status")
-                  'mouse-face 'mode-line-highlight
-                  'local-map dsh-emacs-modeline--status-map))))
+  "Return the retry label beside the running or compacting activity."
+  (when-let* ((retry (car dsh-emacs--modeline-retry)))
+    (propertize
+     (format " %s %s%s "
+             (if (cdr dsh-emacs--modeline-retry) "Retrying" "Retry")
+             (dsh-protocol-execution-event-attempt retry)
+             (if-let* ((limit (dsh-protocol-execution-event-limit retry)))
+                 (format "/%s" limit) ""))
+     'face 'dsh-emacs-mode-line-busy-face
+     'help-echo (concat (dsh-emacs-modeline--status-detail)
+                        "\n\nClick or M-x dsh-emacs-describe-status")
+     'mouse-face 'mode-line-highlight
+     'local-map dsh-emacs-modeline--status-map)))
 
 (defun dsh-emacs-modeline-note-step (turn step start-p)
   "Record the running turn's step for the mode line.
@@ -910,6 +902,10 @@ PERMISSION is the `permissions' projection's `currentValue'."
   "Local time when this buffer last entered the running state.
 Cleared on turn completion or disconnect; never inferred from old history.")
 
+(defvar-local dsh-emacs--modeline-compaction-start nil
+  "Local time when this buffer first observed the active compaction.
+Independent of the turn clock; repeated snapshots preserve this interval.")
+
 (defun dsh-emacs-modeline--animation-redisplay ()
   "Let pending text paint the whale tail, otherwise request a redraw."
   (unless (or (plist-get (bound-and-true-p dsh-emacs--streaming-assistant)
@@ -918,28 +914,42 @@ Cleared on turn completion or disconnect; never inferred from old history.")
                         :timer))
     (force-mode-line-update)))
 
+(defun dsh-emacs-modeline--sync-animation (previous-compaction)
+  "Update the shared activity slot after PREVIOUS-COMPACTION changes.
+Turns and standalone compaction share one animation.  A new compaction phase
+restarts its caption sweep and local clock without changing the turn clock."
+  (let ((changed
+         (not (equal
+               (and previous-compaction
+                    (dsh-protocol-execution-event-id previous-compaction))
+               (and dsh-emacs--modeline-compaction
+                    (dsh-protocol-execution-event-id
+                     dsh-emacs--modeline-compaction))))))
+    (when changed
+      (setq dsh-emacs--modeline-compaction-start
+            (and dsh-emacs--modeline-compaction (float-time))))
+    (when (featurep 'motion-line)
+      (if (or dsh-emacs--ml-busy dsh-emacs--modeline-compaction)
+          (when (or changed (not (motion-line-playing-p 'dsh-running)))
+            (setq-local motion-line-redisplay-function
+                        #'dsh-emacs-modeline--animation-redisplay)
+            (motion-line-play
+             'dsh-running
+             (motion-line-clip 3 #'dsh-emacs-modeline--running-status)))
+        (motion-line-stop 'dsh-running)))
+    (force-mode-line-update)))
+
 (defun dsh-emacs--ml-busy-set (flag)
   "Set this buffer's running state to FLAG and update its animation slot.
 Repeated running snapshots preserve playback position.  Clearing the flag
 also drops the finished turn's step badge."
   (setq dsh-emacs--ml-busy (and flag t))
   (if dsh-emacs--ml-busy
-      (progn
-        (unless dsh-emacs--modeline-run-start
-          (setq dsh-emacs--modeline-run-start (float-time)))
-        (when (and (featurep 'motion-line)
-                   (not (motion-line-playing-p 'dsh-running)))
-          (setq-local motion-line-redisplay-function
-                      #'dsh-emacs-modeline--animation-redisplay)
-          (motion-line-play
-           'dsh-running
-           (motion-line-clip 3 #'dsh-emacs-modeline--running-status))))
+      (unless dsh-emacs--modeline-run-start
+        (setq dsh-emacs--modeline-run-start (float-time)))
     (setq dsh-emacs--modeline-step nil
-          dsh-emacs--modeline-run-start nil)
-    (when (featurep 'motion-line)
-      (motion-line-stop 'dsh-running)))
-  (unless (featurep 'motion-line)
-    (force-mode-line-update)))
+          dsh-emacs--modeline-run-start nil))
+  (dsh-emacs-modeline--sync-animation dsh-emacs--modeline-compaction))
 
 (defun dsh-emacs--ml-busy-clear ()
   "Clear execution status and release this buffer's running animation."
@@ -947,11 +957,22 @@ also drops the finished turn's step badge."
   (dsh-emacs-modeline-reset-execution))
 
 (defun dsh-emacs--ml-busy-indicator ()
-  "Return the running animation or a static caption, empty when idle."
-  (cond
-   ((not dsh-emacs--ml-busy) "")
-   ((featurep 'motion-line) (motion-line-string 'dsh-running))
-   (t (propertize "Deep diving" 'face 'dsh-emacs-modeline-running-face))))
+  "Return the running or compacting activity, empty when both are idle."
+  (if (not (or dsh-emacs--ml-busy dsh-emacs--modeline-compaction))
+      ""
+    (propertize
+     (if (featurep 'motion-line)
+         (motion-line-string 'dsh-running)
+       (if dsh-emacs--modeline-compaction
+           (propertize "Compacting" 'face 'dsh-emacs-modeline-compacting-face)
+         (propertize "Deep diving" 'face 'dsh-emacs-modeline-running-face)))
+     'help-echo (if dsh-emacs--modeline-compaction
+                    (concat (dsh-emacs-modeline--status-detail)
+                            "\n\nClick or M-x dsh-emacs-describe-status")
+                  "dsh is running a request…")
+     'mouse-face 'mode-line-highlight
+     'local-map (and dsh-emacs--modeline-compaction
+                     dsh-emacs-modeline--status-map))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Structural overlay initialization
@@ -1012,14 +1033,11 @@ and text properties remain intact."
 
 (defun dsh-emacs-modeline--ml-indicator ()
   "Return the running animation, step and execution feedback near the mode name.
-Standalone compaction has feedback even while no turn animation is running."
+Standalone compaction shares the activity slot without implying a busy turn."
   (let* ((frame (if dsh-emacs-modeline--doom-segment-installed ""
                   (dsh-emacs--ml-busy-indicator)))
          (text (dsh-emacs-modeline--join
-                (unless (string-empty-p frame)
-                  (propertize frame
-                              'help-echo "dsh is running a request…"
-                              'mouse-face 'mode-line-highlight))
+                frame
                 (when dsh-emacs--ml-busy
                   (dsh-emacs-modeline--step-indicator))
                 (dsh-emacs-modeline--plan-indicator)
@@ -1419,21 +1437,27 @@ indices are selected explicitly; redisplay only sees the cached string."
 
 (defun dsh-emacs-modeline--running-status (phase)
   "Compose the whale, sweeping caption and elapsed time at loop PHASE.
-PHASE drives only the three-second visual loop.  Elapsed time measures
-this buffer's running interval and continues across animation loops."
-  (let* ((caption (propertize "Deep diving"
-                              'face 'dsh-emacs-modeline-running-face))
+PHASE drives only the three-second visual loop.  Compaction takes over the
+caption and clock while preserving the enclosing turn's running interval."
+  (let* ((compacting dsh-emacs--modeline-compaction)
+         (face (if compacting 'dsh-emacs-modeline-compacting-face
+                 'dsh-emacs-modeline-running-face))
+         (highlight (if compacting
+                        'dsh-emacs-modeline-compacting-highlight-face
+                      'dsh-emacs-modeline-running-highlight-face))
+         (caption (propertize (if compacting "Compacting" "Deep diving")
+                              'face face))
+         (start (if compacting dsh-emacs--modeline-compaction-start
+                  dsh-emacs--modeline-run-start))
          (elapsed (max 0 (floor (- (float-time)
-                                   (or dsh-emacs--modeline-run-start
-                                       (float-time))))))
+                                   (or start (float-time))))))
          (duration (if (< elapsed 60) (format "%ds" elapsed)
                      (format "%dm%02ds" (/ elapsed 60) (% elapsed 60)))))
     (when (display-graphic-p)
       (let* ((base (color-name-to-rgb
-                    (face-foreground 'dsh-emacs-modeline-running-face nil t)))
+                    (face-foreground face nil t)))
              (peak (color-name-to-rgb
-                    (face-foreground
-                     'dsh-emacs-modeline-running-highlight-face nil t)))
+                    (face-foreground highlight nil t)))
              ;; Enter and exit outside the text so the loop has a quiet gap.
              (center (- (* (/ phase 3.0) (+ (length caption) 6)) 3)))
         (when (and base peak)
@@ -1442,7 +1466,7 @@ this buffer's running interval and continues across animation loops."
               (when (> strength 0)
                 (put-text-property
                  index (1+ index) 'face
-                 (list :inherit 'dsh-emacs-modeline-running-face
+                 (list :inherit face
                        :foreground
                        (apply #'color-rgb-to-hex
                               (append (cl-mapcar
@@ -1453,12 +1477,13 @@ this buffer's running interval and continues across animation loops."
                  caption)))))))
     (concat (dsh-emacs-modeline--running-frame phase) " " caption
             (propertize (concat " · " duration)
-                        'face 'dsh-emacs-modeline-running-face))))
+                        'face face))))
 
 (defun dsh-emacs-modeline--whale-tail-label ()
   "Return the running or idle tail, using a centered 18-pixel display box."
   (cond
-   (dsh-emacs--ml-busy (dsh-emacs--ml-busy-indicator))
+   ((or dsh-emacs--ml-busy dsh-emacs--modeline-compaction)
+    (dsh-emacs--ml-busy-indicator))
    ((and (display-graphic-p) (image-type-available-p 'svg))
     (let ((color (dsh-emacs-modeline--logo-color)))
       (or (cdr (assoc color dsh-emacs-modeline--whale-tail-labels))
@@ -1539,15 +1564,18 @@ mode name and protects the final column on right-aligned mode lines."
 
 (defun dsh-emacs-modeline--doom-major-mode (text)
   "Show the DSH Web running-status whale tail in Doom's mode slot.
-Preserve the standard major-mode menu and Doom's segment styling."
+Compaction opens status details; otherwise keep the standard major-mode menu.
+Both presentations preserve Doom's segment styling."
   (if (and (derived-mode-p 'dsh-emacs-mode) (stringp text))
       (let ((label (copy-sequence (dsh-emacs-modeline--whale-tail-label))))
         (add-face-text-property 0 (length label)
                                 (get-text-property 1 'face text) t label)
-        (propertize label
-                    'help-echo (get-text-property 1 'help-echo text)
-                    'mouse-face (get-text-property 1 'mouse-face text)
-                    'local-map mode-line-major-mode-keymap))
+        (if dsh-emacs--modeline-compaction
+            label
+          (propertize label
+                      'help-echo (get-text-property 1 'help-echo text)
+                      'mouse-face (get-text-property 1 'mouse-face text)
+                      'local-map mode-line-major-mode-keymap)))
     text))
 
 (defun dsh-emacs-modeline--doom-buffer-file-icon (orig-fn &rest args)

@@ -26,13 +26,14 @@ or add its checkout to `load-path` before loading dsh-emacs:
 ```
 
 When Motion Line is unavailable, dsh-emacs loads normally and displays static
-`Deep diving` text during a turn in both native and Doom mode lines. The text
-has no whale animation, sweep or elapsed clock and creates no animation timer.
-It disappears on completion or disconnect. Step, Plan and execution feedback
-keep their existing behavior; step elapsed text refreshes only when Emacs
-otherwise redraws. No bundled copy or automatic download is needed. Restart
-Emacs after installing Motion Line to enable animation. Errors inside an
-installed library still surface normally.
+`Deep diving` text during a turn, or teal `Compacting` during context
+compaction, in both native and Doom mode lines. The text has no whale
+animation, sweep or elapsed clock and creates no animation timer. It
+disappears when both activities finish or on disconnect. Step, Plan and
+execution feedback keep their existing behavior; step elapsed text refreshes
+only when Emacs otherwise redraws. No bundled copy or automatic download is
+needed. Restart Emacs after installing Motion Line to enable animation.
+Errors inside an installed library still surface normally.
 
 The following animation and clock details apply when Motion Line is installed.
 
@@ -51,7 +52,9 @@ caption uses a gentle foreground sweep over a three-second cycle in graphical
 Emacs, with a quiet gap between passes. The duration updates in whole seconds,
 using `1m05s` after a minute. Terminal captions remain static beside the cycling
 text indicator. Whale, caption and clock share the existing animation slot;
-Doom retains the sweep's text properties and the standard major-mode menu.
+Doom retains the sweep's text properties. Its ordinary running and idle
+states keep the standard major-mode menu; clicking `Compacting` opens status
+details instead.
 
 The clock starts at `0s` when this buffer enters the running state. It measures
 local observed running time, including tools and waits; it is independent of
@@ -64,14 +67,18 @@ server-based duration. See [095](../postmortem/095-running-status.md).
 Customize `dsh-emacs-modeline-running-face` for the caption/clock foreground
 and `dsh-emacs-modeline-running-highlight-face` for the sweep's peak color.
 Setting both foregrounds to the same color removes the text sweep.
+Compaction uses `dsh-emacs-modeline-compacting-face` and
+`dsh-emacs-modeline-compacting-highlight-face` for the same roles, with teal
+defaults. See [Execution feedback](#execution-feedback) for its separate clock.
 
 The stats use `dsh-emacs-modeline-format-spec` to choose segments and their
 separator (one space by default). Status indicators—animation, Plan/retry,
 queue and subagents—and the parenthesized stats have one separating space in
 both native and Doom mode lines. Empty indicators add no gaps; SVG placeholders
 retain their display and click properties. Doom's right-side major-mode slot
-shows the DSH Web runtime whale mark in DSH chat buffers and retains the standard
-major-mode menu. Custom Doom layouts with `buffer-info` and `major-mode`
+shows the DSH Web runtime whale mark in DSH chat buffers. Ordinary running and
+idle states retain the standard major-mode menu; `Compacting` opens status
+details. Custom Doom layouts with `buffer-info` and `major-mode`
 anchors receive the same segments. Reopening chats does not duplicate them,
 and Doom's excluded layouts remain excluded.
 
@@ -141,9 +148,10 @@ misc-info, and all other existing content are preserved:
   outside the retained history window. The elapsed clock starts at local open.
   Cached status seeds only a fresh transcript; reconnecting an existing chat
   preserves its observed state so a delayed cache cannot undo `turn/end`.
-- Ending a turn or disconnecting stops only that chat's slot. Buffer death
-  and major-mode changes also release it. No scheduler remains once all slots
-  stop. Hidden buffers skip intermediate rendering and catch up when visible.
+- Ending the last active turn or compaction, or disconnecting, stops only
+  that chat's slot. Buffer death and major-mode changes also release it.
+  No scheduler remains once all slots stop. Hidden buffers skip intermediate
+  rendering and catch up when visible.
 - The native running indicator is hidden when idle. Doom returns to its static
   major-mode tail; other status labels and stats retain their normal layout.
 - The splicing is done with `(:eval …)` and is recomputed live on
@@ -156,8 +164,9 @@ misc-info, and all other existing content are preserved:
   renamed automatically with the list refresh after a title drifts or is
   renamed.
 
-The animation lights up when a message is sent and goes out at `turn/end`; it
-is cleaned up automatically when the event stream disconnects.
+The animation lights up when a message is sent or compaction starts and goes
+out when both activities finish; it is cleaned up automatically when the
+event stream disconnects.
 While a text refresh is pending, the animation advances without forcing an
 additional redraw; the text refresh also paints the indicator. Quiet visible
 turns redraw through the shared animation scheduler. See
@@ -197,21 +206,29 @@ step shows right after the running whale tail:
 
 ### Execution feedback
 
-The mode line shows exceptional execution states beside the running animation:
+Retry status appears beside the running activity:
 
 | Label | Meaning |
 |---|---|
 | `Retry 1/3` | Waiting before the first retry, with a limit of three retries |
 | `Retrying 1/3` | That retry request has started |
 | `Retry 7` | Waiting to retry under a policy with no fixed retry limit |
-| `Compacting` | Context compaction is in progress |
+
+During context compaction, teal `Compacting · 12s` replaces `Deep diving` in
+the existing whale-tail slot, with the same gentle text sweep. Its clock
+starts when the buffer observes that compaction and does not reset on
+repeated snapshots of the same operation. The underlying turn clock keeps
+running; when compaction finishes, `Deep diving` resumes with that elapsed
+turn time. Standalone compaction between turns starts the same slot without
+claiming a running turn. Without Motion Line, the caption is static
+`Compacting`, with no clock or animation timer.
 
 Hover or click the label, or run `M-x dsh-emacs-describe-status`, to see
 the provider, retry count, scheduled wait and last failure reason/code when
 available. The scheduled wait is the server's delay, not a local countdown.
-The details buffer is a snapshot taken when opened. Standalone compaction
-between turns is visible even without a running animation; if retry and
-compaction overlap, both labels appear.
+The details buffer is a snapshot taken when opened. If retry and compaction
+overlap, the retry label remains beside `Compacting`; Plan state stays
+independent too.
 
 These labels come from `llm/retry`, `llm/retry-started`, `compaction/start`
 and `compaction/end`. Matching completion/cancellation boundaries clear them;
@@ -219,11 +236,22 @@ disconnect clears them immediately. Reconnection rebuilds state from the
 follow snapshot's retained event window, independently of transcript dedup.
 If that window no longer includes the operation's start, no label is shown:
 the client has no current evidence of it. Loading older history never changes
-the current execution status. There is no extra polling or animation timer.
+the current execution status. Compaction shares the existing Motion Line slot
+and scheduler; it adds no polling or separate animation timer.
 
-Successful retry/compaction transitions do not add transcript rows. An
-automatic compaction failure leaves a `Context compaction failed` card with
-the reason; a manual `/compact` failure uses the existing command result card.
+Retry transitions and compaction start/end do not add transcript rows.
+An automatic `compaction/summary` event adds a folded **Automatic compaction**
+row. `RET` or a click expands the generated summary. Its header counts the
+covered items and shows an approximate token count for the old context, for
+example `3 history items · ~42k tokens`. Neither value measures saved tokens
+or the context that remains. The original conversation stays visible, and raw
+model output and the checkpoint body stay hidden. The neutral title records a
+summary being generated, since applying the checkpoint can still fail
+afterward. Such a failure leaves a separate
+`Context compaction failed` card. Manual `/compact` summary events are hidden;
+the existing command result card keeps its counts and result or failure text.
+If the retained history window lacks the summary, no summary row is shown
+and no extra fetch is made. See [104](../postmortem/104-auto-compaction-feedback.md).
 
 ### Plan mode
 

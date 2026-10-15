@@ -1,5 +1,8 @@
 # 070 — Execution waits have an explicit status
 
+Compaction presentation and summary decisions superseded by
+[104](104-auto-compaction-feedback.md); retry rationale still applies.
+
 ## Background
 
 At baseline `6c27b43`, the mode line showed a running animation and an optional

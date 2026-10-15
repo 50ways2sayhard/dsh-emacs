@@ -712,15 +712,22 @@ refresh (`C-c C-r`):
 5. **tool/result** → `dsh-emacs-render-tool-result`: updates the existing tool card (success/error state). `create_goal` / `get_goal` / `update_goal` settle into dsh web's goal card (`dsh-emacs-render--goal-card-body`): objective summary, State / Rounds, and the blocker message while blocked.
 6. **turn/start** / **turn/end** → `dsh-emacs-render-turn-start/end`: rendered as a divider
 
-Retry and compaction events also feed execution status beside the mode-line
-spinner. `dsh-emacs-protocol.el` decodes typed execution facts;
+Retry and compaction events also feed mode-line execution status.
+`dsh-emacs-protocol.el` decodes typed execution facts and compaction summaries;
 `dsh-emacs-modeline.el` owns buffer-local retry and compaction state, their
 matching boundaries, and `dsh-emacs-describe-status`. Retry-started
 matches the chain id and attempt number within the same turn and step;
 compaction matches its own id and may run between turns.
-`dsh-emacs-render.el` routes those facts and keeps automatic compaction
-failures as cards; manual failures already have command result
-cards. These transitions need no new stream, polling loop or timer.
+`dsh-emacs-render.el` routes those facts. Automatic summaries get a folded
+`Automatic compaction` row containing the generated summary, covered-item
+count and approximate old-context token count. It leaves the original
+conversation visible and does not show raw output or the checkpoint body.
+The neutral title does not claim checkpoint application succeeded; automatic
+failures still get separate cards. Summary events with a source command id
+are suppressed; manual compaction keeps the existing command result card's
+counts and result or failure text. Missing summary events are not fetched or
+cached separately. These transitions need no new stream or polling loop. See
+[104](../postmortem/104-auto-compaction-feedback.md).
 
 Before rendering a follow snapshot, `dsh-emacs-events.el` rebuilds execution
 status from its whole retained event window, including records below the
@@ -817,9 +824,10 @@ and property edits do not repeatedly invalidate the mode line. The animation
 advances during pending text batches without forcing a separate redraw.
 When installed, the optional `motion-line` package refreshes quiet visible
 turns. It is installed independently; there is no bundled engine. If it is
-absent, the modeline renders a static Deep diving caption and explicitly
-redraws on busy-state changes. That path calls no animation API, reads no
-animation asset and creates no animation timer. It omits the elapsed clock.
+absent, the modeline renders a static Deep diving or Compacting caption and
+explicitly redraws on activity changes. That path calls no animation API,
+reads no animation asset and creates no animation timer. It omits the elapsed
+clock.
 Library load errors other than a missing file still propagate. The modeline
 module owns the web whale asset,
 color cache and `dsh-running` slot. The independent package owns elapsed-time
@@ -829,10 +837,16 @@ slot. The modeline sets a buffer-local redisplay callback to preserve batching.
 See [095](../postmortem/095-running-status.md) and
 [096](../postmortem/096-standalone-motion-line.md).
 The same cached output includes the English Deep diving caption and its
-foreground sweep. A buffer-local running-start timestamp provides the clock;
+foreground sweep. Compaction temporarily replaces it with teal Compacting
+and a clock measured from local observation of that compaction. Standalone
+compaction uses the same slot; retry and Plan labels remain independent.
+A buffer-local running-start timestamp provides the turn clock;
 the three-second animation phase never acts as elapsed turn time. Completion
-and disconnect clear the timestamp. Doom appends its base face so the caption's
-per-character foregrounds survive. See [095](../postmortem/095-running-status.md).
+and disconnect clear the timestamp. The turn clock keeps running underneath
+compaction and returns with Deep diving afterward. Doom appends its base face
+so the caption's per-character foregrounds survive. See
+[095](../postmortem/095-running-status.md) and
+[104](../postmortem/104-auto-compaction-feedback.md).
 
 After a ready chat socket delivers input, the events module suspends further
 reads for 50ms with `set-process-filter` set to t. Bytes remain in the socket;

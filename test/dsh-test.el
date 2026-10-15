@@ -24340,6 +24340,97 @@ messages (e.g. `command/done')."
       (set-marker draft-point nil)
       (set-marker reading-point nil))))
 
+;; Automatic summaries are inspectable transcript events, not user messages or
+;; proof that checkpoint application succeeded.  Counts describe old context.
+(let* ((event
+        '(("type" . "compaction/summary") ("seq" . 11)
+          ("data" . (("compactionId" . "auto")
+                     ("summary" . [(("type" . "text")
+                                    ("text" . "## Retained notes\n"))
+                                   (("type" . "reasoning")
+                                    ("text" . "HIDDEN REASONING"))
+                                   (("type" . "text")
+                                    ("text" . "Keep the API stable."))])
+                     ("rawOutput" . [(("type" . "text")
+                                      ("text" . "HIDDEN RAW OUTPUT"))])
+                     ("shadowedRange" . (("start" . 40) ("end" . 21)))
+                     ("shadowedSeqs" . [40 3 21])
+                     ("shadowedTokenCount" . 42000)))))
+       (summary (dsh-protocol-compaction-summary--from-alist event)))
+  (dsh-test-assert "compaction-summary-decodes-text-and-actual-item-count"
+    (= (dsh-protocol-compaction-summary-seq summary) 11)
+    (equal (dsh-protocol-compaction-summary-id summary) "auto")
+    (null (dsh-protocol-compaction-summary-command-id summary))
+    (equal (dsh-protocol-compaction-summary-text summary)
+           "## Retained notes\nKeep the API stable.")
+    (= (dsh-protocol-compaction-summary-item-count summary) 3)
+    (= (dsh-protocol-compaction-summary-token-count summary) 42000))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs--buffer-session "compaction-render")
+    (dsh-emacs-render-event
+     '((type . "user/message") (seq . 1)
+       (data . ((content . [((type . "text") (text . "Original conversation"))])))))
+    (dsh-emacs-render-event
+     '((type . "compaction/start") (seq . 10)
+       (data . ((compactionId . "auto") (turn . 1)))))
+    (dsh-emacs-events--dispatch-event (current-buffer) event)
+    (let* ((ns (dsh-emacs-render--make-namespace))
+           (block (dsh-emacs-ui-find-block ns "compaction-summary-auto"))
+           (state (and block (get-text-property (car block) 'dsh-emacs-ui-state))))
+      (dsh-test-assert "compaction-summary-folded-without-ending-live-status"
+        (= dsh-emacs--anchor-seq 11)
+        (equal (dsh-protocol-execution-event-id dsh-emacs--modeline-compaction)
+               "auto")
+        (string-match-p "Original conversation" (buffer-string))
+        (string-match-p "Automatic compaction" (buffer-string))
+        (string-match-p "3 history items · ~42k tokens" (buffer-string))
+        (map-elt state :collapsed)
+        (not (string-match-p "Keep the API stable" (buffer-string))))
+      (goto-char (car block))
+      (dsh-emacs-ui-toggle-fragment)
+      (dsh-emacs-render-event event)
+      (dsh-test-assert "compaction-summary-expand-and-replay-preserve-one-row"
+        (= (how-many "Automatic compaction" (point-min) (point-max)) 1)
+        (string-match-p "Keep the API stable" (buffer-string))
+        (not (string-match-p "HIDDEN" (buffer-string))))
+      (dsh-emacs-render-event
+       '((type . "compaction/end") (seq . 12)
+         (data . ((compactionId . "auto") (turn . 1)
+                  (error . "Checkpoint could not be applied")))))
+      (dsh-test-assert "compaction-summary-keeps-later-application-failure"
+        (null dsh-emacs--modeline-compaction)
+        (string-match-p "Automatic compaction" (buffer-string))
+        (string-match-p "Checkpoint could not be applied" (buffer-string)))))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (let ((dsh-emacs--history-page t))
+      (dsh-emacs-render-history-events (list (list (cons 'event event))) nil 20))
+    (dsh-test-assert "compaction-summary-only-history-page-renders-without-status"
+      (string-match-p "Automatic compaction" (buffer-string))
+      (null dsh-emacs--modeline-compaction)
+      (not dsh-emacs--ml-busy))))
+
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (dsh-test-assert "compaction-manual-summary-uses-command-card"
+    (= (dsh-emacs-render-event
+        '((type . "compaction/summary") (seq . 2)
+          (data . ((compactionId . "manual") (sourceCommandId . "cmd")
+                   (summary . [((type . "text") (text . "Manual summary"))])))))
+       2)
+    (not (string-match-p "Automatic compaction\\|Manual summary" (buffer-string))))
+  (dsh-emacs-render-event
+   '((type . "compaction/summary") (seq . 3)
+     (data . ((compactionId . "partial") (summary . [])))))
+  (let* ((block (dsh-emacs-ui-find-block (dsh-emacs-render--make-namespace)
+                                        "compaction-summary-partial"))
+         (state (and block (get-text-property (car block) 'dsh-emacs-ui-state))))
+    (dsh-test-assert "compaction-summary-unknown-counts-stay-unknown"
+      block (map-elt state :non-foldable)
+      (null (map-elt state :body))
+      (null (map-elt state :label-right)))))
+
 ;; Execution feedback: exercise the public event path, not just status setters.
 (defun dsh-test--execution-event (type seq data)
   "Make a durable execution fixture with TYPE, SEQ and wire DATA."
@@ -24421,25 +24512,28 @@ messages (e.g. `command/done')."
                               '((compactionId . "manual") (turn . nil))))
   (dsh-test-assert "execution-compaction-without-running-turn"
     (not dsh-emacs--ml-busy)
-    (equal (string-trim (dsh-emacs-modeline--ml-indicator)) "Compacting"))
+    (string-match-p "\\bCompacting\\b" (dsh-emacs-modeline--ml-indicator)))
   (dsh-emacs-render-event
    (dsh-test--execution-event "turn/end" 2 '((turn . 9))))
   (dsh-emacs-render-event
    (dsh-test--execution-event "compaction/end" 3
                               '((compactionId . "other") (turn . nil))))
   (dsh-test-assert "execution-compaction-matches-identity"
-    (equal (string-trim (dsh-emacs-modeline--ml-indicator)) "Compacting"))
+    (string-match-p "\\bCompacting\\b" (dsh-emacs-modeline--ml-indicator)))
   (dsh-emacs-render-event
    (dsh-test--execution-event "llm/retry" 4
                               '((retryId . "r") (retry . 1) (turn . 10)
                                 (step . 1) (maxRetries . 2))))
   (dsh-test-assert "execution-compaction-and-retry-coexist"
-    (equal (string-trim (dsh-emacs-modeline--ml-indicator))
-           "Compacting · Retry 1/2"))
+    (string-match-p "Compacting.*Retry 1/2"
+                    (dsh-emacs-modeline--ml-indicator)))
   (dsh-emacs-render-event
    (dsh-test--execution-event "compaction/end" 5
                               '((compactionId . "manual") (turn . nil))))
   (dsh-test-assert "execution-compaction-end-keeps-retry"
+    (null dsh-emacs--modeline-compaction)
+    (null dsh-emacs--modeline-compaction-start)
+    (string-empty-p (dsh-emacs--ml-busy-indicator))
     (equal (string-trim (dsh-emacs-modeline--ml-indicator)) "Retry 1/2"))
   (dsh-emacs-render-event
    (dsh-test--execution-event "assistant/message" 6
@@ -24455,11 +24549,13 @@ messages (e.g. `command/done')."
    (dsh-test--execution-event "compaction/start" 1
                               '((compactionId . "turn-scoped") (turn . 4))))
   (dsh-test-assert "execution-turn-scoped-compaction-shows"
-    (equal (string-trim (dsh-emacs-modeline--ml-indicator)) "Compacting"))
+    (string-match-p "\\bCompacting\\b" (dsh-emacs-modeline--ml-indicator)))
   (dsh-emacs-render-event
    (dsh-test--execution-event "turn/end" 2 '((turn . 4))))
   (dsh-test-assert "execution-turn-end-clears-same-turn-compaction"
     (null dsh-emacs--modeline-compaction)
+    (null dsh-emacs--modeline-compaction-start)
+    (string-empty-p (dsh-emacs--ml-busy-indicator))
     (string-empty-p (dsh-emacs-modeline--ml-indicator))))
 
 (with-temp-buffer
@@ -24515,8 +24611,8 @@ messages (e.g. `command/done')."
     (setq dsh-emacs--anchor-seq 11)
     (dsh-emacs-events--follow-snapshot (current-buffer) snapshot)
     (dsh-test-assert "execution-snapshot-folds-below-transcript-anchor"
-      (equal (string-trim (dsh-emacs-modeline--execution-indicator))
-             "Compacting · Retry 3/5"))
+      (string-match-p "Compacting.*Retry 3/5"
+                      (dsh-emacs-modeline--ml-indicator)))
     (let ((dsh-emacs--history-page t))
       ;; Drop the seq watermark so only the history-page guard can reject the
       ;; replayed record: an older page must never rewind the live status.
@@ -24527,10 +24623,13 @@ messages (e.g. `command/done')."
                          '((compactionId . "c") (turn . 1)))))) nil 10
        :follow-p nil))
     (dsh-test-assert "execution-history-page-keeps-current-status"
-      (equal (string-trim (dsh-emacs-modeline--execution-indicator))
-             "Compacting · Retry 3/5"))
+      (string-match-p "Compacting.*Retry 3/5"
+                      (dsh-emacs-modeline--ml-indicator)))
     (dsh-emacs--ml-busy-clear)
     (dsh-test-assert "execution-teardown-clears-feedback"
+      (null dsh-emacs--modeline-compaction)
+      (null dsh-emacs--modeline-compaction-start)
+      (string-empty-p (dsh-emacs--ml-busy-indicator))
       (null (dsh-emacs-modeline--execution-indicator)))
     (let ((render (symbol-function 'dsh-emacs-render-history-events)))
       (cl-letf (((symbol-function 'dsh-emacs-render-history-events)
@@ -24544,8 +24643,8 @@ messages (e.g. `command/done')."
                                                  (retry . 3)))))))
         (dsh-emacs-events--follow-snapshot (current-buffer) snapshot)))
     (dsh-test-assert "execution-snapshot-cannot-overwrite-newer-live-event"
-      (equal (string-trim (dsh-emacs-modeline--execution-indicator))
-             "Compacting · Retrying 3/5"))
+      (string-match-p "Compacting.*Retrying 3/5"
+                      (dsh-emacs-modeline--ml-indicator)))
     (dsh-emacs-events--follow-snapshot
      (current-buffer)
      `((cursor . 13)
@@ -24553,11 +24652,17 @@ messages (e.g. `command/done')."
                     (event . ,(dsh-test--execution-event
                               "turn/end" 13 '((turn . 1)))))])))
     (dsh-test-assert "execution-closed-snapshot-is-idle"
+      (null dsh-emacs--modeline-compaction)
+      (null dsh-emacs--modeline-compaction-start)
+      (string-empty-p (dsh-emacs--ml-busy-indicator))
       (null (dsh-emacs-modeline--execution-indicator)))
     (dsh-emacs-events--follow-snapshot (current-buffer) snapshot)
     (dsh-emacs-events--follow-snapshot
      (current-buffer) '((cursor . 14) (records . [])))
     (dsh-test-assert "execution-missing-snapshot-evidence-clears-stale-status"
+      (null dsh-emacs--modeline-compaction)
+      (null dsh-emacs--modeline-compaction-start)
+      (string-empty-p (dsh-emacs--ml-busy-indicator))
       (null (dsh-emacs-modeline--execution-indicator)))))
 
 (let ((first (generate-new-buffer " *execution-first*"))
@@ -24572,6 +24677,9 @@ messages (e.g. `command/done')."
         (with-current-buffer second
           (dsh-emacs-mode)
           (dsh-test-assert "execution-state-is-buffer-local"
+            (null dsh-emacs--modeline-compaction)
+            (null dsh-emacs--modeline-compaction-start)
+            (string-empty-p (dsh-emacs--ml-busy-indicator))
             (null (dsh-emacs-modeline--execution-indicator))))
         (save-window-excursion
           (delete-other-windows)
@@ -24596,6 +24704,9 @@ messages (e.g. `command/done')."
                              #'ignore))
                     (dsh-emacs-events--lost process))
                   (dsh-test-assert "execution-socket-loss-clears-status-now"
+                    (null dsh-emacs--modeline-compaction)
+                    (null dsh-emacs--modeline-compaction-start)
+                    (string-empty-p (dsh-emacs--ml-busy-indicator))
                     (null (dsh-emacs-modeline--execution-indicator))))
               (delete-process process)))))
     (kill-buffer first)
@@ -26413,12 +26524,42 @@ messages (e.g. `command/done')."
                       (cl-assert (not (string-match-p
                                        "Deep diving"
                                        (dsh-emacs-modeline--ml-indicator)))))
+                    (dsh-emacs-modeline-note-execution
+                     (dsh-protocol-execution-event--from-alist
+                      '((type . "compaction/start") (seq . 1)
+                        (data . ((compactionId . "static") (turn . 1))))))
+                    (cl-assert (equal (dsh-emacs--ml-busy-indicator)
+                                      "Compacting"))
+                    (let* ((dsh-emacs-modeline--doom-segment-installed t)
+                           (label (dsh-emacs-modeline--doom-major-mode
+                                   (propertize " DSH " 'face 'mode-line))))
+                      (cl-assert (equal label "Compacting"))
+                      (cl-assert (eq (get-text-property 0 'local-map label)
+                                     dsh-emacs-modeline--status-map))
+                      (cl-assert (not (string-match-p
+                                       "Compacting"
+                                       (dsh-emacs-modeline--ml-indicator)))))
                     (setq redraws 0)
                     (dsh-emacs--ml-busy-clear)
                     (cl-assert (> redraws 0))
                     (cl-assert (not dsh-emacs--ml-busy))
                     (cl-assert (not dsh-emacs--modeline-step))
                     (cl-assert (not dsh-emacs--modeline-run-start))
+                    (cl-assert (not dsh-emacs--modeline-compaction))
+                    (cl-assert (not dsh-emacs--modeline-compaction-start))
+                    (cl-assert (equal (dsh-emacs--ml-busy-indicator) ""))
+                    (dsh-emacs-modeline-note-execution
+                     (dsh-protocol-execution-event--from-alist
+                      '((type . "compaction/start") (seq . 1)
+                        (data . ((compactionId . "standalone"))))))
+                    (cl-assert (not dsh-emacs--ml-busy))
+                    (cl-assert (equal (dsh-emacs--ml-busy-indicator)
+                                      "Compacting"))
+                    (dsh-emacs-modeline-note-execution
+                     (dsh-protocol-execution-event--from-alist
+                      '((type . "compaction/end") (seq . 2)
+                        (data . ((compactionId . "standalone"))))))
+                    (cl-assert (not dsh-emacs--modeline-compaction-start))
                     (cl-assert (equal (dsh-emacs--ml-busy-indicator) "")))))
               (princ "fallback-ok"))
            (current-buffer)))
@@ -26544,6 +26685,93 @@ messages (e.g. `command/done')."
                   (equal (dsh-emacs--ml-busy-indicator) "tail Deep diving · 0s")))
             (dsh-emacs--ml-busy-clear)))))
   (princ "SKIP: animation clock (Motion Line not installed)\n"))
+
+;; Compaction takes over one activity slot without replacing the turn clock.
+(if (featurep 'motion-line)
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let* ((now 100.0)
+             (motion-line-current-time-function (lambda () now))
+             (compact (dsh-protocol-execution-event--from-alist
+                       (dsh-test--execution-event
+                        "compaction/start" 1
+                        '((compactionId . "auto") (turn . 1))))))
+        (cl-letf (((symbol-function 'float-time) (lambda (&rest _) now))
+                  ((symbol-function 'display-graphic-p) (lambda (&rest _) nil))
+                  ((symbol-function 'dsh-emacs-modeline--running-frame)
+                   (lambda (phase) (format "tail-%.1f" phase))))
+          (unwind-protect
+              (progn
+                (dsh-emacs--ml-busy-set t)
+                (setq now 112.0)
+                (dsh-emacs-modeline-note-execution compact)
+                (let* ((native (dsh-emacs-modeline--ml-indicator))
+                       (position (string-match "Compacting" native)))
+                  (dsh-test-assert "compaction-caption-replaces-running-status"
+                    (equal (string-trim native) "tail-0.0 Compacting · 0s")
+                    (eq (get-text-property position 'local-map native)
+                        dsh-emacs-modeline--status-map)
+                    (string-match-p "turn 1"
+                                    (get-text-property position 'help-echo native))
+                    (= dsh-emacs--modeline-run-start 100.0)
+                    (= dsh-emacs--modeline-compaction-start 112.0)))
+                (setq now 117.0)
+                (motion-line-seek 'dsh-running 5.0)
+                (dsh-emacs-modeline-reset-execution (list compact))
+                (dsh-emacs-modeline-note-execution
+                 (dsh-protocol-execution-event--from-alist
+                  (dsh-test--execution-event
+                   "compaction/start" 2
+                   '((compactionId . "auto") (turn . 1)))))
+                (dsh-test-assert "compaction-clock-survives-snapshots-and-starts"
+                  (= dsh-emacs--modeline-compaction-start 112.0)
+                  (equal (dsh-emacs--ml-busy-indicator)
+                         "tail-2.0 Compacting · 5s"))
+                (let* ((dsh-emacs-modeline--doom-segment-installed t)
+                       (doom (dsh-emacs-modeline--doom-major-mode
+                              (propertize " DSH " 'face 'mode-line)))
+                       (position (string-match "Compacting" doom)))
+                  (dsh-test-assert "compaction-doom-has-one-caption-and-details"
+                    (equal doom "tail-2.0 Compacting · 5s")
+                    (string-empty-p (dsh-emacs-modeline--ml-indicator))
+                    (eq (get-text-property position 'local-map doom)
+                        dsh-emacs-modeline--status-map)
+                    (string-match-p "turn 1"
+                                    (get-text-property position 'help-echo doom))))
+                (setq now 120.0)
+                (dsh-emacs-modeline-note-execution
+                 (dsh-protocol-execution-event--from-alist
+                  (dsh-test--execution-event
+                   "compaction/end" 3 '((compactionId . "auto") (turn . 1)))))
+                (dsh-test-assert "compaction-end-restores-original-turn-clock"
+                  (null dsh-emacs--modeline-compaction-start)
+                  (= dsh-emacs--modeline-run-start 100.0)
+                  (equal (dsh-emacs--ml-busy-indicator)
+                         "tail-0.0 Deep diving · 20s"))
+                (dsh-emacs--ml-busy-set nil)
+                (dsh-emacs-modeline-note-execution
+                 (dsh-protocol-execution-event--from-alist
+                  (dsh-test--execution-event
+                   "compaction/start" 4 '((compactionId . "standalone")))))
+                (dsh-emacs--ml-busy-set nil)
+                (dsh-test-assert "compaction-standalone-owns-activity-slot"
+                  (not dsh-emacs--ml-busy)
+                  (null dsh-emacs--modeline-run-start)
+                  (motion-line-playing-p 'dsh-running)
+                  (equal (dsh-emacs--ml-busy-indicator)
+                         "tail-0.0 Compacting · 0s"))
+                (dsh-emacs-modeline-note-execution
+                 (dsh-protocol-execution-event--from-alist
+                  (dsh-test--execution-event
+                   "compaction/end" 5 '((compactionId . "standalone")))))
+                (dsh-test-assert "compaction-standalone-end-releases-animation"
+                  (null dsh-emacs--modeline-compaction)
+                  (null dsh-emacs--modeline-compaction-start)
+                  (not (motion-line-playing-p 'dsh-running))
+                  (not (assq 'dsh-running motion-line--players))
+                  (string-empty-p (dsh-emacs--ml-busy-indicator))))
+            (dsh-emacs--ml-busy-clear)))))
+  (princ "SKIP: compaction animation clock (Motion Line not installed)\n"))
 
 ;; Doom must append its face without overwriting the caption's sweep.
 (with-temp-buffer

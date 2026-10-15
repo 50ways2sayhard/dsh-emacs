@@ -659,6 +659,20 @@ Muted like the Goal Row's action glyphs (dsh web tints its queue actions
   "Peak foreground of the gentle sweep across Deep diving."
   :group 'dsh-emacs-faces)
 
+(defface dsh-emacs-modeline-compacting-face
+  '((((background light)) :foreground "#187b74")
+    (((background dark)) :foreground "#69b9af")
+    (t :inherit dsh-emacs-modeline-running-face))
+  "Compacting caption and elapsed time beside the mode-line whale."
+  :group 'dsh-emacs-faces)
+
+(defface dsh-emacs-modeline-compacting-highlight-face
+  '((((background light)) :foreground "#0b4945")
+    (((background dark)) :foreground "#c5f2e8")
+    (t :inherit dsh-emacs-modeline-running-highlight-face))
+  "Peak foreground of the gentle sweep across Compacting."
+  :group 'dsh-emacs-faces)
+
 (defface dsh-emacs-modeline-token-face
   `((((background light)) :foreground "#888888")
     (((background dark))  :foreground "#777777")
