@@ -29,6 +29,12 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Inspect render work offline**: `scripts/render-report.el` reports fragment
+  reconstruction, session row visits, character edits and requested property
+  writes, with separate uninstrumented timing samples. It runs on synthetic
+  buffers and adds no normal-session instrumentation.
+  (rationale: postmortem/105)
+
 - **Follow automatic compaction**: a folded **Automatic compaction** row
   shows the generated summary, covered item count and approximate old-context
   token count while preserving the original conversation. During compaction,
@@ -274,6 +280,10 @@ minor) and stay undated until the release is cut.
   (rationale: postmortem/085)
 
 ### Fixed
+
+- **Keep render-report property ranges stable**: marker endpoints are recorded
+  as positions at the time of each setter call, so later edits or marker cleanup
+  cannot change the reported ranges or their summed span.
 
 - **Open a session mention as the session, not as its opaque URI**: RET or a
   click on a `@label` chip or a rendered `@[label](dsh-session:…)` mention now

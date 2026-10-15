@@ -27617,6 +27617,104 @@ messages (e.g. `command/done')."
             (null read-p) (null posted) (null result))))
     (delete-file file)))
 
+;; Developer diagnostics count only the target, and leave no instrumentation.
+(load (expand-file-name "../scripts/render-report.el"
+                        (file-name-directory load-file-name)) nil t)
+(with-temp-buffer
+  (insert "abcdef")
+  (let* ((target (current-buffer))
+         (local-before (local-variable-p 'after-change-functions))
+         (hooks-before after-change-functions)
+         (setter (symbol-function 'put-text-property))
+         (report
+          (dsh-render-report-measure
+           (lambda ()
+             (put-text-property 2 3 'face 'bold)
+             (put-text-property 0 1 'face 'italic (copy-sequence "x"))
+             (with-temp-buffer
+               (insert "scratch")
+               (put-text-property 1 2 'face 'italic)
+               (put-text-property 4 5 'face 'italic target))
+             (goto-char 2)
+             (insert "X")))))
+    (dsh-test-assert "render-report-scopes-text-and-property-writes"
+      (equal (plist-get report :text-edits) '((2 0 1)))
+      (equal (plist-get report :property-calls)
+             '((put-text-property 2 3 face) (put-text-property 4 5 face)))
+      (plist-get report :text-changed)
+      (plist-get report :modified))
+    (dsh-test-assert "render-report-restores-hook-locality-and-advice"
+      (eq local-before (local-variable-p 'after-change-functions))
+      (equal hooks-before after-change-functions)
+      (eq setter (symbol-function 'put-text-property)))
+    (let (escaped)
+      (add-hook 'after-change-functions #'ignore nil t)
+      (setq hooks-before after-change-functions)
+      (condition-case err
+          (dsh-render-report-measure (lambda () (error "report probe")))
+        (error (setq escaped err)))
+      (dsh-test-assert "render-report-error-propagates-after-cleanup"
+        (equal escaped '(error "report probe"))
+        (local-variable-p 'after-change-functions)
+        (equal hooks-before after-change-functions)
+        (eq setter (symbol-function 'put-text-property))
+        (not dsh-render-report--active)))))
+(dolist (setter '(put-text-property set-text-properties
+                  add-text-properties remove-text-properties))
+  (with-temp-buffer
+    (insert "abcdef")
+    (let* ((start (copy-marker 2))
+           (end (copy-marker 4))
+           (report
+            (dsh-render-report-measure
+             (lambda ()
+               (if (eq setter 'put-text-property)
+                   (funcall setter start end 'face 'bold)
+                 (funcall setter start end '(face bold)))
+               (goto-char 3)
+               (insert "XYZ")
+               (set-marker start nil)
+               (set-marker end nil)))))
+      (dsh-test-assert (format "render-report-snapshots-marker-range-%s" setter)
+        (equal (plist-get report :property-calls)
+               (list (list setter 2 4
+                           (when (eq setter 'put-text-property) 'face))))))))
+(with-temp-buffer
+  (let ((report (dsh-render-report-measure
+                 (lambda ()
+                   (dsh-render-report-scenario 'session-title #'funcall)))))
+    (dsh-test-assert "render-report-excludes-other-session-buffers"
+      (= (plist-get report :renders) 0)
+      (= (plist-get report :session-rows) 0)
+      (= (plist-get report :session-row-builds) 0)
+      (= (plist-get report :generated-chars) 0)
+      (null (plist-get report :text-edits))
+      (null (plist-get report :property-calls))
+      (not (plist-get report :modified)))))
+(dolist (scenario '(session-title fragment-title fragment-warm
+                   fragment-after-stream fragment-rewarmed))
+  (let* (report
+         (instrumented
+          (dsh-render-report-scenario
+           scenario (lambda (run)
+                      (setq report (dsh-render-report-measure run))
+                      (buffer-string))))
+         (ordinary (dsh-render-report-scenario
+                    scenario (lambda (run) (funcall run) (buffer-string)))))
+    (dsh-test-assert (format "render-report-preserves-output-%s" scenario)
+      (equal-including-properties instrumented ordinary))
+    (when (eq scenario 'session-title)
+      (dsh-test-assert "render-report-distinguishes-row-visits-from-builds"
+        (= (plist-get report :session-rows) 540)
+        (= (plist-get report :session-row-builds) 540)))
+    (when (memq scenario '(fragment-warm fragment-after-stream fragment-rewarmed))
+      (dsh-test-assert (format "render-report-unchanged-%s" scenario)
+        (= (plist-get report :renders)
+           (if (eq scenario 'fragment-after-stream) 1 0))
+        (null (plist-get report :text-edits))
+        (null (plist-get report :property-calls))
+        (not (plist-get report :modified))))))
+
 (princ "\n===== test summary =====\n")
 (let ((pass (cl-count-if (lambda (r) (cdr r)) dsh-test-results))
       (fail (cl-count-if (lambda (r) (not (cdr r))) dsh-test-results)))

@@ -46,7 +46,7 @@
     "dsh-emacs-composer.el"
     "dsh-emacs-shell.el"
     "test/dsh-test.el" "test/dsh-e2e.el" "test/dsh-gui.el"
-    "test/check-lisp-test.el")
+    "test/check-lisp-test.el" "scripts/render-report.el")
   "Default elisp files to check (relative to the repository root).")
 
 (defvar dsh-check--no-run nil

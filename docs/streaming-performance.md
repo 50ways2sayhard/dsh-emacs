@@ -367,3 +367,91 @@ alternated window start between 794 and 885 with empty input, and between
 remained at 885 and 911 respectively. The old character-row calculation
 ignored the chat's line spacing and left the cursor offscreen, causing Emacs
 to correct scrolling on the next redisplay.
+
+## Render work reports (105)
+
+Run the offline developer probe from a source checkout:
+
+```sh
+emacs -Q --batch -l scripts/render-report.el -f dsh-render-report-batch
+```
+
+[render-report.el](../scripts/render-report.el) is not loaded by the package.
+It uses temporary buffers, makes no RPC requests and installs advice/hooks only
+for the duration of each synchronous measurement. Errors propagate after
+cleanup. It rejects nested measurements and loaded compiled dsh-emacs modules:
+primitive advice cannot reliably observe byte/native-compiled setter calls.
+The ordinary standard-library loading policy is unchanged.
+
+Each scenario gets one instrumented work report and five **separate,
+uninstrumented** timing samples. Every sample creates and warms a fresh
+fixture; setup and a forced GC are excluded, subsequent GC is included. The
+540-session fixture has no workspaces or child catalogs and changes only
+`Title A` to `Title B` for one session. Fragment fixtures contain 5,000
+`body line\n` lines, use minimal styling and are expanded. Hidden buffers use
+the renderer's fixed 80-column fallback (76 body columns). The stream cases
+flush a real pending plain-text `delta` beside the card **before** measuring
+an unchanged card update; they do not time the flush or a Markdown idle job.
+
+`dsh-render-report-measure` accepts a thunk operating on the current buffer
+and returns a plist. Its fields have deliberately narrow meanings:
+
+- `:renders`, `:session-rows`, `:stream-flushes` count observed constructors,
+  row visits (including children), and flush calls, respectively. All five
+  built-in scenarios have zero measured flush calls because their setup is
+  outside the report. Generated characters/lines count the fragment result or
+  the session source once at the reconciliation boundary, not recursive
+  subtree totals. They do not count intermediate allocations.
+- `:session-row-builds` counts calls to title padding/truncation during session
+  source construction: one per newly built visual row.
+- `:text-edits` lists chronological `(START OLD NEW)` character-change-hook
+  notifications. Coordinates belong to the buffer at each notification;
+  this is neither a minimal final diff nor an ETAF edit list to replay.
+- `:property-calls` lists setter names, requested intervals and, for
+  `put-text-property`, the property name. String writes and writes to other
+  buffers are excluded; explicit target-buffer arguments are included.
+  Marker endpoints are saved as integer positions when each setter is called,
+  so subsequent edits or marker cleanup cannot change the recorded interval.
+  Batch output replaces this list with its count and adds `:property-span`,
+  the sum of requested interval lengths. Repeated and unchanged writes count
+  again. This is **not** unique changed-property coverage or redisplay damage.
+- `:text-changed` and `:modified` compare character/general modification ticks.
+  `:build-ms` covers fragment construction, or session render entry through
+  source preparation. `:other-ms` includes lookup, comparison, reconciliation,
+  writes and navigation; it is not pure publication time. Instrumented times
+  include advice overhead. Suppressed hooks and deferred timer work are not
+  observed; no report measures GUI redisplay.
+
+A local Emacs 31.1.50/macOS source run based on `e8cf554` plus the working-tree
+changes, **before visual row reuse (106)**, produced the following results.
+These are synthetic batch samples, separate from the historical streaming and
+GUI results above.
+
+| Scenario | Rebuild work | Character notifications | Property calls / summed span | Uninstrumented median (range), ms |
+|---|---|---|---:|---:|
+| One session title | 540 row visits; 29,241 source chars | One 54→54 row replacement | 3,246 / 29,241 | 12.462 (11.978–13.539) |
+| Expanded fragment title | One build; 50,009 chars | Delete one char, insert one char | 1 / 50,009 | 2.712 (2.612–4.120) |
+| Warm unchanged fragment | None | None | 0 / 0 | 0.032 (0.028–0.041) |
+| Unchanged fragment after nearby stream | One build; 50,009 chars | None | 0 / 0 | 1.678 (1.604–1.982) |
+| Same fragment, warmed again | None | None | 0 / 0 | 0.030 (0.027–0.038) |
+
+The title-only fragment update still writes its authoritative full-block state
+property; it does not restyle the unchanged body. Nearby stream writes still
+invalidate the conservative whole-buffer cache tick. This trades a subsequent
+reconstruction for correctness when external code edits a fragment.
+
+A discarded session-property experiment compared both source and target
+property boundaries and skipped intervals whose values were all `eq`, keeping
+fresh mutable metadata objects. Setter requests fell from 3,246 to 545 and
+summed spans from 29,241 to 591, but one five-sample trial had a 17.251 ms median
+versus 10.595 ms for the preceding baseline. Later baseline samples also varied;
+these observations do not establish a general speed ratio. They showed no
+reason to retain the extra comparisons, so property publication remains unchanged.
+A comparison of only each source run's first character would also miss stale
+metadata inside that run and is not a valid alternative.
+
+Tests cover target-buffer scoping, hook locality, exception cleanup, unchanged
+cache behavior and equality of ordinary/instrumented output including text
+properties. Millisecond thresholds are not test assertions. The script is in
+the normal syntax gate; see [105](../postmortem/105-render-work-reports.md) for
+the decision to adopt diagnostics rather than a retained-tree renderer.
