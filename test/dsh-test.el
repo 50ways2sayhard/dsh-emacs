@@ -39,6 +39,34 @@ FAIL instead of silently vanishing from the summary.  Empty CONDITIONS
       (dsh-test-pass name)
     (dsh-test-fail name "assertion failed (dsh-test-assert)")))
 
+;; A new session must expose an editable draft before readiness or creation.
+(let ((ready nil)
+      (create nil)
+      (draft nil)
+      (dsh-emacs--current-session "previous-session")
+      (dsh-emacs--current-buffer nil)
+      (dsh-emacs--sessions nil)
+      (dsh-emacs--chat-buffers (make-hash-table :test #'equal)))
+  (save-window-excursion
+    (unwind-protect
+        (cl-letf (((symbol-function 'dsh-emacs-server-ensure-async)
+                   (lambda (callback) (setq ready callback)))
+                  ((symbol-function 'dsh-emacs--rpc-async)
+                   (lambda (_method _params callback) (setq create callback))))
+          (setq draft (dsh-emacs-new-session "/tmp" "w-one" "code"))
+          (dsh-test-assert "new-session-draft-precedes-server-readiness"
+                           (bufferp draft) ready (null create)
+                           (eq (window-buffer (selected-window)) draft))
+          (when (bufferp draft)
+            (with-current-buffer draft
+              (insert "Draft before response")
+              (dsh-test-assert "new-session-draft-blocks-old-session-fallback"
+                               (null (dsh-emacs--active-session-id)))
+              (funcall ready nil)
+              (dsh-test-assert "new-session-starts-create-after-readiness"
+                               create (equal (buffer-string) "Draft before response")))))
+      (when (bufferp draft) (kill-buffer draft)))))
+
 (defun dsh-test--goto-marker (marker)
   "Move the buffer point and the selected window's point onto MARKER's line.
 A real GUI moves both together; tests that only `goto-char' would leave the
@@ -9921,6 +9949,7 @@ Lets a test drive a malformed content value through the result path."
   ;; the new session's default-directory immediately aligns with the
   ;; workspace path (magit et al. locate the project this way).
   (let ((calls nil)
+        (draft nil)
         (buf (generate-new-buffer " *dsh-empty-ws-create*")))
     (unwind-protect
         (with-current-buffer buf
@@ -9931,12 +9960,20 @@ Lets a test drive a malformed content value through the result path."
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-new")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil))
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params)))))))))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                     (lambda (sid buffer &optional _address)
+                       (puthash sid buffer dsh-emacs--chat-buffers)
+                       (with-current-buffer buffer
+                         (setq-local dsh-emacs--buffer-session sid)
+                         (dsh-emacs--chat-buffer-sync sid)
+                         (dsh-emacs-mode))))
                     ((symbol-value 'dsh-emacs--current-buffer) buf)
                     (dsh-emacs--workspaces empty-ws))
-            (call-interactively #'dsh-emacs-new-session)
+            (setq draft (call-interactively #'dsh-emacs-new-session))
             (let* ((call (car calls))
                    (params (cadr call)))
               (when (and (string= "session/create" (car call))
@@ -9948,8 +9985,10 @@ Lets a test drive a malformed content value through the result path."
               (when (or (null (cdr (assq 'workspaceId (cdr (assq 'request params)))))
                         (string-suffix-p "/tmp/dsh-empty-ws"
                                          (directory-file-name
-                                          default-directory)))
+                                          (buffer-local-value
+                                           'default-directory draft))))
                 (dsh-test-pass "new-workspace-session-sets-default-directory")))))
+      (when (buffer-live-p draft) (kill-buffer draft))
       (kill-buffer buf))))
 
   ;; 4) Non-workspace context: no workspaceId (ungrouped), only cwd
@@ -9966,9 +10005,17 @@ Lets a test drive a malformed content value through the result path."
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-plain")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil)))
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params)))))))))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                     (lambda (sid buffer &optional _address)
+                       (puthash sid buffer dsh-emacs--chat-buffers)
+                       (with-current-buffer buffer
+                         (setq-local dsh-emacs--buffer-session sid)
+                         (dsh-emacs--chat-buffer-sync sid)
+                         (dsh-emacs-mode)))))
             (call-interactively #'dsh-emacs-new-session)
             (let* ((call (car calls))
                    (params (cadr call)))
@@ -9995,9 +10042,17 @@ Lets a test drive a malformed content value through the result path."
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-child")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil))
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params)))))))))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                     (lambda (sid buffer &optional _address)
+                       (puthash sid buffer dsh-emacs--chat-buffers)
+                       (with-current-buffer buffer
+                         (setq-local dsh-emacs--buffer-session sid)
+                         (dsh-emacs--chat-buffer-sync sid)
+                         (dsh-emacs-mode))))
                     (dsh-emacs--workspaces (list w1)))
             (call-interactively #'dsh-emacs-new-session)
             (let* ((call (car calls))
@@ -10022,9 +10077,17 @@ Lets a test drive a malformed content value through the result path."
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-child2")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil))
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params)))))))))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                     (lambda (sid buffer &optional _address)
+                       (puthash sid buffer dsh-emacs--chat-buffers)
+                       (with-current-buffer buffer
+                         (setq-local dsh-emacs--buffer-session sid)
+                         (dsh-emacs--chat-buffer-sync sid)
+                         (dsh-emacs-mode))))
                     (dsh-emacs--workspaces nil))
             (call-interactively #'dsh-emacs-new-session)
             (let* ((call (car calls))
@@ -10363,9 +10426,17 @@ Lets a test drive a malformed content value through the result path."
             (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                        (lambda (method params cb)
                          (push (list method params) calls)
-                         (funcall cb t '((sessionId . "s-created")))))
-                      ((symbol-function 'dsh-emacs-open-session)
-                       (lambda (_sid) nil))
+                         (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                  (cdr (assq 'request params)))))))))
+                      ((symbol-function 'pop-to-buffer)
+                       (lambda (buffer &rest _) buffer))
+                      ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                       (lambda (sid buffer &optional _address)
+                         (puthash sid buffer dsh-emacs--chat-buffers)
+                         (with-current-buffer buffer
+                           (setq-local dsh-emacs--buffer-session sid)
+                           (dsh-emacs--chat-buffer-sync sid)
+                           (dsh-emacs-mode))))
                       ((symbol-value 'dsh-emacs--current-buffer) buf))
               (goto-char (point-min))
               (search-forward "existing" nil t)
@@ -11476,10 +11547,18 @@ Lets a test drive a malformed content value through the result path."
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-preset")
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params)))))
                                        (agentPreset . "standard")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil)))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                     (lambda (sid buffer &optional _address)
+                       (puthash sid buffer dsh-emacs--chat-buffers)
+                       (with-current-buffer buffer
+                         (setq-local dsh-emacs--buffer-session sid)
+                         (dsh-emacs--chat-buffer-sync sid)
+                         (dsh-emacs-mode)))))
             (dsh-emacs-new-session nil nil "standard")
             (let* ((call (car calls))
                    (params (cadr call)))
@@ -11491,7 +11570,9 @@ Lets a test drive a malformed content value through the result path."
                 (dsh-test-pass "new-session-with-preset-sends-agent-preset")))
             ;; the placeholder cache row carries the preset
             ;; (written back from the response)
-            (let ((item (dsh-emacs--chat-session-item "s-preset")))
+            (let ((item (dsh-emacs--chat-session-item
+                         (cdr (assq 'sessionId
+                                    (cdr (assq 'request (cadar calls))))))))
               (when (and item
                          (string= "standard"
                                   (dsh-protocol-session-agent-preset item)))
@@ -11501,9 +11582,17 @@ Lets a test drive a malformed content value through the result path."
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-ws-preset")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil)))
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params)))))))))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                     (lambda (sid buffer &optional _address)
+                       (puthash sid buffer dsh-emacs--chat-buffers)
+                       (with-current-buffer buffer
+                         (setq-local dsh-emacs--buffer-session sid)
+                         (dsh-emacs--chat-buffer-sync sid)
+                         (dsh-emacs-mode)))))
             (dsh-emacs-new-session nil "w1" "code")
             (let* ((call (car calls))
                    (params (cadr call)))
@@ -11518,9 +11607,17 @@ Lets a test drive a malformed content value through the result path."
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-plain2")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil)))
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params)))))))))
+                    ((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _) buffer))
+                    ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                     (lambda (sid buffer &optional _address)
+                       (puthash sid buffer dsh-emacs--chat-buffers)
+                       (with-current-buffer buffer
+                         (setq-local dsh-emacs--buffer-session sid)
+                         (dsh-emacs--chat-buffer-sync sid)
+                         (dsh-emacs-mode)))))
             (dsh-emacs-new-session nil nil nil)
             (let* ((call (car calls))
                    (params (cadr call)))
@@ -11550,9 +11647,17 @@ Lets a test drive a malformed content value through the result path."
                    (lambda (method params cb)
                      (push (list method params) calls)
                      (when (string= method "session/create")
-                       (funcall cb t '((sessionId . "s-pfx"))))))
-                  ((symbol-function 'dsh-emacs-open-session)
-                   (lambda (_sid) nil))
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params))))))))))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) buffer))
+                  ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                   (lambda (sid buffer &optional _address)
+                     (puthash sid buffer dsh-emacs--chat-buffers)
+                     (with-current-buffer buffer
+                       (setq-local dsh-emacs--buffer-session sid)
+                       (dsh-emacs--chat-buffer-sync sid)
+                       (dsh-emacs-mode))))
                   ((symbol-function 'completing-read)
                    (lambda (&rest _) "Minimal mode"))
                   (current-prefix-arg '(4)))
@@ -11596,9 +11701,17 @@ Lets a test drive a malformed content value through the result path."
         (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                    (lambda (method params cb)
                      (push (list method params) calls)
-                     (funcall cb t '((sessionId . "s-c-default")))))
-                  ((symbol-function 'dsh-emacs-open-session)
-                   (lambda (_sid) nil)))
+                     (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                              (cdr (assq 'request params)))))))))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) buffer))
+                  ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                   (lambda (sid buffer &optional _address)
+                     (puthash sid buffer dsh-emacs--chat-buffers)
+                     (with-current-buffer buffer
+                       (setq-local dsh-emacs--buffer-session sid)
+                       (dsh-emacs--chat-buffer-sync sid)
+                       (dsh-emacs-mode)))))
           (call-interactively #'dsh-emacs-new-session))
         (let* ((call (car calls))
                (params (cadr call)))
@@ -11627,9 +11740,17 @@ Lets a test drive a malformed content value through the result path."
                    (lambda (method params cb)
                      (push (list method params) calls)
                      (when (string= method "session/create")
-                       (funcall cb t '((sessionId . "s-C"))))))
-                  ((symbol-function 'dsh-emacs-open-session)
-                   (lambda (_sid) nil))
+                       (funcall cb t `((sessionId . ,(cdr (assq 'sessionId
+                                                                (cdr (assq 'request params))))))))))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) buffer))
+                  ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                   (lambda (sid buffer &optional _address)
+                     (puthash sid buffer dsh-emacs--chat-buffers)
+                     (with-current-buffer buffer
+                       (setq-local dsh-emacs--buffer-session sid)
+                       (dsh-emacs--chat-buffer-sync sid)
+                       (dsh-emacs-mode))))
                   ((symbol-function 'completing-read)
                    (lambda (&rest _) "PTC mode")))
           (call-interactively #'dsh-emacs-new-session-choose-preset))
@@ -11725,267 +11846,179 @@ Lets a test drive a malformed content value through the result path."
     (ignore-errors (delete-file sym))
     (delete-directory root t)))
 
-;; orchestration: cache hit skips RPC; a miss creates and caches; RPC
-;; failure falls back to nil; option off skips detection; remote server is
-;; skipped
-(let* ((root (directory-file-name (make-temp-file "dsh-pjws-" t)))
-       (dsh-emacs-new-session-auto-project t))
-  (unwind-protect
-      (progn
-        (let ((dsh-emacs--workspaces
-               (list (dsh-protocol-workspace--from-alist
-                      (list (cons 'workspaceId "w-proj")
-                            (cons 'path root)
-                            (cons 'sessionIds [])))))
-              (rpc-called nil))
-          (cl-letf (((symbol-function 'dsh-emacs--server-local-host-p)
-                     (lambda () t))
-                    ((symbol-function 'dsh-emacs--project-root)
-                     (lambda (_dir) root))
-                    ((symbol-function 'dsh-emacs--rpc-request)
-                     (lambda (&rest _) (setq rpc-called t) (cons nil "no"))))
-            (when (equal (dsh-emacs--new-session-project-workspace root)
-                         "w-proj")
-              (dsh-test-pass "project-workspace-cache-hit-returns-id"))
-            (when (null rpc-called)
-              (dsh-test-pass "project-workspace-cache-hit-skips-create"))))
-        (let ((dsh-emacs--workspaces nil)
-              (created nil))
-          (cl-letf (((symbol-function 'dsh-emacs--server-local-host-p)
-                     (lambda () t))
-                    ((symbol-function 'dsh-emacs--project-root)
-                     (lambda (_dir) root))
-                    ((symbol-function 'dsh-emacs--rpc-request)
-                     (lambda (_method _params)
-                       (setq created t)
-                       (cons t (list (cons 'workspace
-                                           (list (cons 'workspaceId "w-created")
-                                                 (cons 'path root)
-                                                 (cons 'sessionIds []))))))))
-            (when (equal (dsh-emacs--new-session-project-workspace root)
-                         "w-created")
-              (dsh-test-pass "project-workspace-created-on-cache-miss"))
-            (when (and created
-                       (cl-find-if (lambda (w)
-                                     (equal "w-created"
-                                            (dsh-protocol-workspace-workspace-id w)))
-                                   dsh-emacs--workspaces))
-              (dsh-test-pass "project-workspace-created-upserts-cache"))))
-        (let ((dsh-emacs--workspaces nil))
-          (cl-letf (((symbol-function 'dsh-emacs--server-local-host-p)
-                     (lambda () t))
-                    ((symbol-function 'dsh-emacs--project-root)
-                     (lambda (_dir) root))
-                    ((symbol-function 'dsh-emacs--rpc-request)
-                     (lambda (&rest _) (cons nil "boom"))))
-            (when (null (dsh-emacs--new-session-project-workspace root))
-              (dsh-test-pass "project-workspace-rpc-failure-returns-nil"))))
-        (let ((dsh-emacs-new-session-auto-project nil)
-              (rpc-called nil))
-          (cl-letf (((symbol-function 'dsh-emacs--rpc-request)
-                     (lambda (&rest _) (setq rpc-called t) nil)))
-            (when (and (null (dsh-emacs--new-session-project-workspace root))
-                       (null rpc-called))
-              (dsh-test-pass "project-workspace-option-off-disables"))))
-        (cl-letf (((symbol-function 'dsh-emacs--server-local-host-p)
-                   (lambda () nil))
-                  ((symbol-function 'dsh-emacs--project-root)
-                   (lambda (_dir) root))
-                  ((symbol-function 'dsh-emacs--rpc-request)
-                   (lambda (&rest _) (error "remote must not RPC"))))
-          (when (null (dsh-emacs--new-session-project-workspace root))
-            (dsh-test-pass "project-workspace-remote-server-skipped"))))
-    (delete-directory root t)))
+;; Delayed responses must preserve each draft and never steal another window.
+(let ((dsh-emacs--sessions nil)
+      (dsh-emacs--workspaces nil)
+      (dsh-emacs--chat-buffers (make-hash-table :test #'equal))
+      (dsh-emacs--current-session "old-session")
+      (dsh-emacs--current-buffer nil)
+      (dsh-emacs-new-session-auto-project nil)
+      (dsh-emacs-sessions-buffer " *draft-test-list*")
+      (requests nil)
+      (connected nil)
+      (drafts nil)
+      (other (generate-new-buffer " *draft-test-other*")))
+  (save-window-excursion
+    (unwind-protect
+        (cl-letf (((symbol-function 'dsh-emacs-server-ensure)
+                   (lambda () (error "Creation must not use a blocking guard")))
+                  ((symbol-function 'dsh-emacs--rpc-async)
+                   (lambda (method params callback)
+                     (dsh-test-assert "draft-only-creates-before-activation"
+                                      (equal method "session/create"))
+                     (push (list (cdr (assq 'sessionId (cdr (assq 'request params))))
+                                 callback) requests)))
+                  ((symbol-function 'dsh-emacs-command-catalog-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-skill-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-reference-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-events-connect)
+                   (lambda (buf) (push buf connected))))
+          (let* ((first (dsh-emacs-new-session "/tmp/first" nil "code"))
+                 (request-one (car requests))
+                 (second (dsh-emacs-new-session "/tmp/second" nil "code"))
+                 (request-two (car requests)))
+            (setq drafts (list first second))
+            (with-current-buffer first
+              (insert "第一份 draft")
+              (goto-char 3)
+              (narrow-to-region 2 5)
+              (dsh-test-assert "draft-send-is-unavailable"
+                               (condition-case nil
+                                   (progn (dsh-emacs-send-or-stop) nil)
+                                 (user-error t))))
+            (with-current-buffer second (insert "second draft"))
+            (switch-to-buffer other)
+            (funcall (cadr request-two) t
+                     `((sessionId . ,(car request-two)) (agentPreset . "code")))
+            (funcall (cadr request-one) t
+                     `((sessionId . ,(car request-one)) (agentPreset . "code")))
+            (dsh-test-assert "draft-responses-do-not-steal-focus"
+                             (eq (window-buffer (selected-window)) other)
+                             (equal dsh-emacs--current-session "old-session")
+                             (null dsh-emacs--current-buffer))
+            (dsh-test-assert "draft-responses-connect-their-own-buffers"
+                             (equal connected (list first second))
+                             (eq (gethash (car request-one) dsh-emacs--chat-buffers) first)
+                             (eq (gethash (car request-two) dsh-emacs--chat-buffers) second))
+            (with-current-buffer first
+              (dsh-test-assert "draft-activation-preserves-text-point-and-directory"
+                               (derived-mode-p 'dsh-emacs-mode)
+                               (equal (dsh-emacs--get-input) "第一份 draft")
+                               (= (point) (+ dsh-emacs--input-marker 2))
+                               (equal default-directory "/tmp/first/")))
+            (with-current-buffer second
+              (dsh-test-assert "drafts-keep-separate-text-and-identities"
+                               (equal (dsh-emacs--get-input) "second draft")
+                               (equal dsh-emacs--buffer-session (car request-two)))))
+          (let* ((draft (dsh-emacs-new-session "/tmp" nil "code"))
+                 (old (car requests)))
+            (push draft drafts)
+            (insert "retry me")
+            (funcall (cadr old) nil "offline")
+            (dsh-test-assert "draft-failure-keeps-text-and-allows-retry"
+                             (derived-mode-p 'dsh-emacs-draft-mode)
+                             (equal (buffer-string) "retry me")
+                             (null dsh-emacs--creation-pending)
+                             (string-match-p "offline" header-line-format))
+            (dsh-emacs-retry-session-creation)
+            (let ((new (car requests)))
+              (funcall (cadr old) t
+                       `((sessionId . ,(car old)) (agentPreset . "code")))
+              (dsh-test-assert "draft-retry-reuses-id-and-rejects-stale-callback"
+                               (equal (car old) (car new))
+                               (derived-mode-p 'dsh-emacs-draft-mode)
+                               dsh-emacs--creation-pending)
+              (let ((dsh-emacs-mode-hook
+                     (list (lambda () (error "test activation failure")))))
+                (funcall (cadr new) t
+                         `((sessionId . ,(car new)) (agentPreset . "code"))))
+              (dsh-test-assert "draft-activation-error-restores-editable-text"
+                               (derived-mode-p 'dsh-emacs-draft-mode)
+                               (equal (buffer-string) "retry me")
+                               (null dsh-emacs--creation-pending)
+                               dsh-emacs--creation-context
+                               (null (gethash (car new) dsh-emacs--chat-buffers)))
+              (dsh-emacs-retry-session-creation)
+              (funcall (cadar requests) t
+                       `((sessionId . ,(caar requests)) (agentPreset . "code")))
+              (dsh-test-assert "draft-retry-activates-without-sending"
+                               (derived-mode-p 'dsh-emacs-mode)
+                               (equal (dsh-emacs--get-input) "retry me")
+                               (equal dsh-emacs--current-session (car old)))))
+          (let* ((draft (dsh-emacs-new-session "/tmp" nil "code"))
+                 (request (car requests)))
+            (kill-buffer draft)
+            (funcall (cadr request) t
+                     `((sessionId . ,(car request)) (agentPreset . "code")))
+            (dsh-test-assert "closed-draft-is-not-resurrected"
+                             (not (buffer-live-p draft))
+                             (null (gethash (car request) dsh-emacs--chat-buffers))))
+          (let* ((draft (dsh-emacs-new-session "/tmp" nil "code"))
+                 (request (car requests))
+                 (dsh-emacs-base-url "http://different-server:3080"))
+            (push draft drafts)
+            (funcall (cadr request) t
+                     `((sessionId . ,(car request)) (agentPreset . "code")))
+            (dsh-test-assert "draft-server-change-rejects-old-response"
+                             (derived-mode-p 'dsh-emacs-draft-mode)
+                             (null dsh-emacs--creation-pending)
+                             (null (gethash (car request) dsh-emacs--chat-buffers)))))
+      (dolist (buf (cons other drafts))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
 
-;; end-to-end (call-interactively): plain buffer -> project hit
-;; -> assigned to that workspace
-(let* ((old-sessions dsh-emacs--sessions)
-       (root (directory-file-name (make-temp-file "dsh-e2e-" t)))
-       (calls nil)
-       (buf (generate-new-buffer " *dsh-project-create*")))
-  (unwind-protect
-      (with-current-buffer buf
-        (insert "plain text\n")
-        (goto-char (point-min))
-        (let ((dsh-emacs--workspaces
-               (list (dsh-protocol-workspace--from-alist
-                      (list (cons 'workspaceId "w-proj")
-                            (cons 'path root)
-                            (cons 'sessionIds []))))))
-          (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+;; Workspace discovery is asynchronous and never silently changes placement.
+(dolist (scenario '(cached create failed disabled remote))
+  (let* ((dsh-emacs--sessions nil)
+         (dsh-emacs--chat-buffers (make-hash-table :test #'equal))
+         (dsh-emacs-new-session-auto-project (not (eq scenario 'disabled)))
+         (dsh-emacs--workspaces
+          (when (eq scenario 'cached)
+            (list (dsh-protocol-workspace--from-alist
+                   '((workspaceId . "ws") (path . "/tmp/project"))))))
+         (requests nil)
+         (draft nil)
+         (detections nil))
+    (save-window-excursion
+      (unwind-protect
+          (cl-letf (((symbol-function 'dsh-emacs--server-local-host-p)
+                     (lambda () (not (eq scenario 'remote))))
+                    ((symbol-function 'dsh-emacs--project-root)
+                     (lambda (dir) (push dir detections) "/tmp/project"))
+                    ((symbol-function 'dsh-emacs--rpc-request)
+                     (lambda (&rest _) (error "Synchronous workspace request")))
+                    ((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
-                       (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-proj")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil))
-                    ((symbol-function 'dsh-emacs--project-root)
-                     (lambda (_dir) root))
-                    ((symbol-function 'dsh-emacs--server-local-host-p)
-                     (lambda () t))
-                    ((symbol-function 'dsh-emacs--rpc-request)
-                     (lambda (&rest _) (cons nil "must-not-fire"))))
-            (call-interactively #'dsh-emacs-new-session))
-          (let* ((create (cl-find-if
-                          (lambda (c) (string= "session/create" (car c)))
-                          calls))
-                 (params (and create (cadr create))))
-            (when (and create
-                       (string= "w-proj" (cdr (assq 'workspaceId (cdr (assq 'request params)))))
-                       (null (assq 'cwd (cdr (assq 'request params)))))
-              (dsh-test-pass
-               "new-session-attaches-to-detected-project-workspace")))))
-    (setq dsh-emacs--sessions old-sessions)
-    (delete-directory root t)
-    (when (buffer-live-p buf) (kill-buffer buf))))
-
-;; end-to-end: cache miss -> idempotent workspace creation, then assigned
-(let* ((old-sessions dsh-emacs--sessions)
-       (old-ws dsh-emacs--workspaces)
-       (root (directory-file-name (make-temp-file "dsh-e2e-" t)))
-       (calls nil)
-       (buf (generate-new-buffer " *dsh-project-create2*")))
-  (unwind-protect
-      (with-current-buffer buf
-        (insert "plain text\n")
-        (goto-char (point-min))
-        (setq dsh-emacs--workspaces nil)
-        (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
-                   (lambda (method params cb)
-                     (push (list method params) calls)
-                     (funcall cb t '((sessionId . "s-proj2")))))
-                  ((symbol-function 'dsh-emacs-open-session)
-                   (lambda (_sid) nil))
-                  ((symbol-function 'dsh-emacs--project-root)
-                   (lambda (_dir) root))
-                  ((symbol-function 'dsh-emacs--server-local-host-p)
-                   (lambda () t))
-                  ((symbol-function 'dsh-emacs--rpc-request)
-                   (lambda (_method _params)
-                     (cons t (list (cons 'workspace
-                                         (list (cons 'workspaceId "w-created2")
-                                               (cons 'path root)
-                                               (cons 'sessionIds []))))))))
-          (call-interactively #'dsh-emacs-new-session))
-        (let* ((create (cl-find-if
-                        (lambda (c) (string= "session/create" (car c)))
-                        calls))
-               (params (and create (cadr create))))
-          (when (and (string= "w-created2" (cdr (assq 'workspaceId (cdr (assq 'request params)))))
-                     (null (assq 'cwd (cdr (assq 'request params)))))
-            (dsh-test-pass
-             "new-session-creates-project-workspace-on-first-use"))))
-    (setq dsh-emacs--sessions old-sessions)
-    (setq dsh-emacs--workspaces old-ws)
-    (delete-directory root t)
-    (when (buffer-live-p buf) (kill-buffer buf))))
-
-;; end-to-end: project workspace creation fails
-;; -> fall back to cwd (plain semantics)
-(let* ((old-sessions dsh-emacs--sessions)
-       (old-ws dsh-emacs--workspaces)
-       (root (directory-file-name (make-temp-file "dsh-e2e-" t)))
-       (calls nil)
-       (buf (generate-new-buffer " *dsh-project-create3*")))
-  (unwind-protect
-      (with-current-buffer buf
-        (insert "plain text\n")
-        (goto-char (point-min))
-        (setq dsh-emacs--workspaces nil)
-        (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
-                   (lambda (method params cb)
-                     (push (list method params) calls)
-                     (funcall cb t '((sessionId . "s-proj3")))))
-                  ((symbol-function 'dsh-emacs-open-session)
-                   (lambda (_sid) nil))
-                  ((symbol-function 'dsh-emacs--project-root)
-                   (lambda (_dir) root))
-                  ((symbol-function 'dsh-emacs--server-local-host-p)
-                   (lambda () t))
-                  ((symbol-function 'dsh-emacs--rpc-request)
-                   (lambda (&rest _) (cons nil "create-failed"))))
-          (call-interactively #'dsh-emacs-new-session))
-        (let* ((create (cl-find-if
-                        (lambda (c) (string= "session/create" (car c)))
-                        calls))
-               (params (and create (cadr create))))
-          (when (and create
-                     (null (assq 'workspaceId (cdr (assq 'request params))))
-                     (assq 'cwd (cdr (assq 'request params))))
-            (dsh-test-pass "new-session-project-create-failure-keeps-cwd"))))
-    (setq dsh-emacs--sessions old-sessions)
-    (setq dsh-emacs--workspaces old-ws)
-    (delete-directory root t)
-    (when (buffer-live-p buf) (kill-buffer buf))))
-
-;; --- Test 80c: a new session's CWD follows the current buffer's
-;; default-directory ---
-;; When `dsh-emacs-new-session' is called from a dired/magit buffer and the
-;; like, the working directory of the new session must be the current
-;; buffer's default-directory (dired's browsed directory, magit's repo root,
-;; the file's directory) -- both project detection and workspace/create are
-;; based on it. Regression: it used to always take `dsh-emacs-default-cwd'
-;; (a fixed value from load time, typically unset by users), so sessions
-;; landed in the startup directory, the browsed project never entered
-;; detection, and there was naturally no workspace. (The project-root mock
-;; only passes dir through + normalizes: it pins the "dir delivered from the
-;; buffer directory" link; the detection chain itself is covered by test 80b
-;; and real probing.)
-(let* ((proj (directory-file-name (make-temp-file "dsh-dired-proj-" t)))
-       (flat (directory-file-name (make-temp-file "dsh-dired-flat-" t)))
-       (old-ws dsh-emacs--workspaces)
-       (old-sessions dsh-emacs--sessions)
-       (calls nil)
-       (created nil)
-       (buf (generate-new-buffer " *dsh-dired-create*")))
-  (unwind-protect
-      (with-current-buffer buf
-        (insert "dired listing\n")
-        (goto-char (point-min))
-        (setq-local default-directory (file-name-as-directory proj))
-        (let ((dsh-emacs--workspaces nil)     ; no proj in cache -> take the creation path
-              (dsh-emacs-default-cwd flat))   ; old code wrongly took this one
-          (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
-                     (lambda (method params cb)
-                       (push (list method params) calls)
-                       (funcall cb t '((sessionId . "s-dired")))))
-                    ((symbol-function 'dsh-emacs-open-session)
-                     (lambda (_sid) nil))
-                    ((symbol-function 'dsh-emacs--server-local-host-p)
-                     (lambda () t))
-                    ((symbol-function 'dsh-emacs--project-root)
-                     (lambda (dir)
-                       ;; the real implementation normalizes
-                       ;; (directory-file-name); dired's
-                       ;; default-directory has a trailing slash;
-                       ;; the mock keeps the same contract.
-                       (directory-file-name (expand-file-name dir))))
-                    ((symbol-function 'dsh-emacs--rpc-request)
-                     (lambda (_method params)
-                       (setq created params)
-                       (cons t (list (cons 'workspace
-                                           (list (cons 'workspaceId "w-dired")
-                                                 (cons 'path proj)
-                                                 (cons 'sessionIds []))))))))
-            (call-interactively #'dsh-emacs-new-session)
-            (let* ((create (cl-find-if
-                            (lambda (c) (string= "session/create" (car c)))
-                            calls))
-                   (params (and create (cadr create))))
-              (dsh-test-assert
-               "new-session-cwd-follows-buffer-default-directory"
-               (and created
-                    (equal (cdr (assq 'path (cdr (assq 'request created))))
-                           proj)))
-              (dsh-test-assert
-               "new-session-buffer-dir-workspace-used"
-               (and create
-                    (string= "w-dired" (cdr (assq 'workspaceId (cdr (assq 'request params)))))
-                    (null (assq 'cwd (cdr (assq 'request params))))))))))
-    (setq dsh-emacs--sessions old-sessions)
-    (setq dsh-emacs--workspaces old-ws)
-    (delete-directory proj t)
-    (delete-directory flat t)
-    (when (buffer-live-p buf) (kill-buffer buf))))
+                       (push (list method params cb) requests))))
+            (with-temp-buffer
+              (setq default-directory "/tmp/project/subdir/")
+              (setq draft (dsh-emacs-new-session nil nil "code")))
+            (when (memq scenario '(create failed))
+              (dsh-test-assert "draft-workspace-create-precedes-session-create"
+                               (equal (caar requests) "workspace/create")
+                               (equal (cdr (assq 'path (cdr (assq 'request (cadar requests)))))
+                                      "/tmp/project"))
+              (funcall (nth 2 (car requests)) (eq scenario 'create)
+                       '((workspace . ((workspaceId . "ws")
+                                       (path . "/tmp/project"))))))
+            (pcase scenario
+              ('failed
+               (dsh-test-assert "draft-workspace-failure-does-not-create-ungrouped"
+                                (= (length requests) 1)
+                                (with-current-buffer draft
+                                  (and (null dsh-emacs--creation-pending)
+                                       (string-match-p "Workspace" header-line-format)))))
+              (_
+               (let ((args (cdr (assq 'request (cadar requests)))))
+                 (dsh-test-assert (format "draft-workspace-placement-%s" scenario)
+                                  (equal (caar requests) "session/create")
+                                  (if (memq scenario '(disabled remote))
+                                      (and (null detections)
+                                           (equal (cdr (assq 'cwd args)) "/tmp/project/subdir/")
+                                           (null (assq 'workspaceId args)))
+                                    (and (equal detections '("/tmp/project/subdir/"))
+                                         (equal (cdr (assq 'workspaceId args)) "ws")
+                                         (null (assq 'cwd args)))))))))
+        (when (buffer-live-p draft) (kill-buffer draft))))))
 
 ;; --- Test 80d: absolute-cwd precedence ---
 ;; cwd argument > current buffer default-directory > `dsh-emacs-default-cwd'.
@@ -13494,6 +13527,200 @@ Lets a test drive a malformed content value through the result path."
       (dsh-test-pass "server-alive-invalidate-reprobes")))
   (setq dsh-emacs--server-alive-check nil))
 
+;; Server readiness must neither block nor start a remote/failed server loop.
+(dolist (scenario '(ready auth stale challenge challenge-timeout startup
+                         restart-token failed-start remote timeout closed changed
+                         install-ready install-timeout install-closed
+                         install-changed install-concurrent))
+  (let ((noninteractive nil)
+        (dsh-emacs-base-url "http://127.0.0.1:3080")
+        (dsh-emacs--server-alive-check nil)
+        (dsh-emacs--server-auth-cookie (and (eq scenario 'stale) "old-cookie"))
+        (dsh-emacs-server-auth-token
+         (cond ((eq scenario 'restart-token) "old-token")
+               ((memq scenario '(auth stale)) "unit+test")))
+        (dsh-emacs--server-process nil)
+        (dsh-emacs-server-auto-start t)
+        (origin (generate-new-buffer " *async-ready-test*"))
+        (responses nil)
+        (timers nil)
+        (launches 0)
+        (prompts 0)
+        (remembered nil)
+        (alive t)
+        (result nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'dsh-emacs--server-probe)
+                   (lambda () (error "Blocking readiness probe")))
+                  ((symbol-function 'dsh-emacs--server-auth-token)
+                   (lambda () dsh-emacs-server-auth-token))
+                  ((symbol-function 'dsh-emacs--server-local-host-p)
+                   (lambda () (not (eq scenario 'remote))))
+                  ((symbol-function 'dsh-emacs-server--basic-auth-header) #'ignore)
+                  ((symbol-function 'url-retrieve)
+                   (lambda (url callback &rest _)
+                     (let ((buf (generate-new-buffer " *async-http-test*")))
+                       (push (list buf callback url) responses)
+                       buf)))
+                  ((symbol-function 'run-at-time)
+                   (lambda (_delay _repeat function &rest args)
+                     (push (cons function args) timers)
+                     'test-timer))
+                  ((symbol-function 'cancel-timer) #'ignore)
+                  ((symbol-function 'read-string)
+                   (lambda (&rest _)
+                     (cl-incf prompts)
+                     (when (eq scenario 'challenge-timeout)
+                       (apply (caar timers) (cdar timers)))
+                     "entered-token"))
+                  ((symbol-function 'dsh-emacs--server-auth-remember-token)
+                   (lambda (value) (setq remembered value)))
+                  ((symbol-function 'dsh-emacs--server-bin)
+                   (lambda ()
+                     (unless (memq scenario '(install-ready install-timeout
+                                             install-closed install-changed
+                                             install-concurrent))
+                       "/dsh")))
+                  ((symbol-function 'dsh-emacs--server-ensure-installed)
+                   (lambda ()
+                     ;; Installation yields to timers and user input.
+                     (pcase scenario
+                       ('install-timeout (apply (caar timers) (cdar timers)))
+                       ('install-closed (kill-buffer origin))
+                       ('install-changed
+                        (setq dsh-emacs-base-url "http://different-server:3080"))
+                       ('install-concurrent
+                        (setq dsh-emacs--server-process 'test-process)))
+                     "/installed/dsh"))
+                  ((symbol-function 'dsh-emacs--server-launch)
+                   (lambda (&rest _)
+                     (setq launches (1+ launches)
+                           dsh-emacs--server-process 'test-process)))
+                  ((symbol-function 'process-live-p)
+                   (lambda (proc) (and alive (eq proc 'test-process)))))
+          (cl-labels ((respond (code &optional cookie)
+                        (pcase-let ((`(,buf ,callback ,_url) (car responses)))
+                          (with-current-buffer buf
+                            (setq-local url-http-response-status code)
+                            (insert (format "HTTP/1.1 %s Test\r\n" (or code 0)))
+                            (when cookie
+                              (insert "Set-Cookie: " cookie "; Path=/\r\n"))
+                            (insert "\r\n")
+                            (funcall callback nil)))))
+            (with-current-buffer origin
+              (dsh-emacs-server-ensure-async
+               (lambda (reason) (push reason result))))
+            (dsh-test-assert "readiness-returns-before-http-response"
+                             (null result) (= (length responses) 1) (zerop launches))
+            (pcase scenario
+              ((or 'install-ready 'install-timeout 'install-closed
+                   'install-changed 'install-concurrent)
+               (respond nil)
+               (dsh-test-assert (format "readiness-after-%s" scenario)
+                 (if (memq scenario '(install-ready install-concurrent))
+                     (and (null result) (= (length timers) 2)
+                          (= launches (if (eq scenario 'install-ready) 1 0)))
+                   (and (zerop launches) (= (length timers) 1)
+                        (equal result
+                               (pcase scenario
+                                 ('install-timeout
+                                  '("dsh server readiness timed out"))
+                                 ('install-changed
+                                  '("Server changed during startup"))
+                                 ('install-closed nil))))))
+               (when (memq scenario '(install-ready install-concurrent))
+                 (apply (caar timers) (cdar timers))
+                 (respond 200)
+                 (dsh-test-assert (format "readiness-completes-after-%s" scenario)
+                   (equal result '(nil))))
+               ;; Cancel a faulty implementation before restoring timer mocks.
+               (when (buffer-live-p origin) (kill-buffer origin)))
+              ('ready
+               (respond 200)
+               (dsh-test-assert "readiness-http-success" (equal result '(nil))))
+              ('auth
+               (dsh-test-assert "readiness-encodes-launch-token"
+                                (string-suffix-p "?token=unit%2Btest" (nth 2 (car responses))))
+               (respond 303 "dsh-auth-unit=cookie")
+               (dsh-test-assert "readiness-mints-cookie-asynchronously"
+                                (equal result '(nil))
+                                (equal dsh-emacs--server-auth-cookie "dsh-auth-unit=cookie")))
+              ('stale
+               (respond 401)
+               (dsh-test-assert "readiness-stale-cookie-exchanges-known-token"
+                 (null result) (= (length responses) 2)
+                 (string-suffix-p "?token=unit%2Btest" (nth 2 (car responses))))
+               (respond 303 "dsh-auth-unit=fresh")
+               (dsh-test-assert "readiness-stale-cookie-does-not-prompt"
+                 (equal result '(nil)) (null remembered)))
+              ('challenge-timeout
+               (respond 401)
+               (dsh-test-assert "readiness-timeout-during-prompt-stops-exchange"
+                 (string-match-p "timed out" (car result))
+                 (= (length responses) 1)))
+              ('challenge
+               (respond 401)
+               (dsh-test-assert "readiness-token-prompt-retries-exchange"
+                 (null result) (= (length responses) 2)
+                 (string-suffix-p "?token=entered-token" (nth 2 (car responses))))
+               (respond 303 "dsh-auth-unit=entered")
+               (dsh-test-assert "readiness-remembers-successful-entered-token"
+                                (equal result '(nil)) (equal remembered "entered-token")))
+              ('restart-token
+               (respond nil)
+               (apply (caar timers) (cdar timers))
+               ;; The new process is still booting; its launch token arrives
+               ;; after this poll has already reused the configured old one.
+               (dsh-test-assert "readiness-restart-polls-before-token-arrives"
+                 (= launches 1) (null result)
+                 (string-suffix-p "?token=old-token" (nth 2 (car responses))))
+               (respond nil)
+               (setq dsh-emacs-server-auth-token "fresh-token")
+               (apply (caar timers) (cdar timers))
+               (if (string-suffix-p "?token=fresh-token" (nth 2 (car responses)))
+                   (respond 303 "dsh-auth-unit=fresh")
+                 (respond 401)
+                 (respond 401))
+               (dsh-test-assert "readiness-restart-uses-fresh-token-without-prompt"
+                 (equal result '(nil)) (= launches 1) (zerop prompts)
+                 (equal dsh-emacs--server-auth-cookie "dsh-auth-unit=fresh")))
+              ((or 'startup 'failed-start)
+               (respond nil)
+               (dsh-test-assert "readiness-starts-without-blocking"
+                                (= launches 1) (null result))
+               (apply (caar timers) (cdar timers))
+               (if (eq scenario 'startup)
+                   (progn
+                     (respond 200)
+                     (dsh-test-assert "readiness-polls-until-started"
+                                      (equal result '(nil)) (= launches 1)))
+                 (setq alive nil)
+                 (respond nil)
+                 (dsh-test-assert "readiness-does-not-relaunch-exited-server"
+                                  (= launches 1) (string-match-p "exited" (car result)))))
+              ('remote
+               (respond nil)
+               (dsh-test-assert "readiness-never-starts-local-server-for-remote"
+                                (zerop launches) (stringp (car result))))
+              ('timeout
+               (apply (caar timers) (cdar timers))
+               (dsh-test-assert "readiness-timeout-cleans-request"
+                                (string-match-p "timed out" (car result))
+                                (not (buffer-live-p (caar responses)))))
+              ('closed
+               (kill-buffer origin)
+               (dsh-test-assert "readiness-close-cancels-without-callback"
+                                (null result) (not (buffer-live-p (caar responses)))))
+              ('changed
+               (setq dsh-emacs-base-url "http://different-server:3080")
+               (respond 303 "dsh-auth-unit=wrong-server")
+               (dsh-test-assert "readiness-server-change-discards-cookie"
+                                (string-match-p "changed" (car result))
+                                (null dsh-emacs--server-auth-cookie)
+                                (null dsh-emacs--server-alive-check))))))
+      (dolist (buf (cons origin (mapcar #'car responses)))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
 ;; --- Test 81: ensure is always a no-op under batch (noninteractive) ---
 (let ((started 0)
       (noninteractive t))
@@ -14082,6 +14309,31 @@ received, RESULT is FN's return value."
                  (setq result (funcall fn))
                  (cons request result))
              (delete-process server)))))
+    (pcase-let ((`(,request . (,result ,cookie))
+                 (raw-socket-server
+                  (concat "HTTP/1.1 303 See Other\r\nLocation: /\r\n"
+                          "Set-Cookie: dsh-auth-unit=async; Path=/\r\n"
+                          "Content-Length: 0\r\n\r\n")
+                  (lambda ()
+                    (let ((noninteractive nil)
+                          (dsh-emacs--server-auth-cookie nil)
+                          (dsh-emacs-server-auth-token "Tok+Async")
+                          (dsh-emacs--server-alive-check nil)
+                          (dsh-emacs--server-process nil)
+                          (dsh-emacs-server-wait-seconds 1)
+                          (result 'pending))
+                      (with-temp-buffer
+                        (dsh-emacs-server-ensure-async
+                         (lambda (reason) (setq result reason)))
+                        (let ((deadline (+ (float-time) 2)))
+                          (while (and (eq result 'pending)
+                                      (< (float-time) deadline))
+                            (accept-process-output nil 0.01))))
+                      (list result dsh-emacs--server-auth-cookie))))))
+      (dsh-test-assert "async-readiness-real-http-reads-first-303-cookie"
+        (null result) (equal cookie "dsh-auth-unit=async")
+        (string-match-p "GET /\\?token=Tok%2BAsync HTTP/1.1" request)
+        (not (string-match-p "\r\r\n" request))))
     (pcase-let ((`(,probe-request . ,probe-alive)
                  (raw-socket-server
                   "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"

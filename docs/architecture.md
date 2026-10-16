@@ -28,6 +28,27 @@ dsh-emacs/
 └── dsh-emacs-session.el      # Session list card view
 ```
 
+## New session drafts (`dsh-emacs.el`)
+
+New-session commands display an editable `dsh-emacs-draft-mode` buffer first.
+Its creation context captures cwd, workspace, preset, server and a stable
+client-generated session identity. Each retry owns a fresh attempt token;
+callbacks require the original live draft, token and server. Pending drafts
+have no active session fallback. Failures preserve the text and surface in the
+header; `C-c C-c` retries. Workspace creation failures stop the chain instead
+of changing the requested placement.
+
+`dsh-emacs-server-ensure-async` owns asynchronous HTTP readiness and launch-token
+exchange, bounded startup polling, local-only launch, and cancellation on draft
+closure. Initial installation and token entry retain their interactive steps.
+The entry point resolves the project workspace and issues creation RPCs; the
+protocol module serializes the session creation request. Successful creation
+uses the same buffer initialization as opening an existing session, without a
+second server probe or window selection. The draft text and point are restored
+into the chat composer, including recovery if a mode hook fails. Closing a draft
+does not roll back a session already accepted by the host. See
+[decision record 111](../postmortem/111-asynchronous-session-drafts.md).
+
 ## Provider setup (`dsh-emacs-provider.el`)
 
 `dsh-emacs-add-provider` reads `settings/describe`, the configurable provider

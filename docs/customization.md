@@ -539,3 +539,24 @@ Remote deployments need nothing special: a non-loopback base URL is only probed
 for reachability — dsh-emacs never spawns or installs a local server for it.
 HTTPS base URLs (including `https://user:pass@host` Basic-Auth endpoints) are
 probed through TLS.
+
+### New session drafts
+
+`dsh-emacs-new-session` and the session list's `c` / `C` commands open an
+editable draft before waiting for the host. The chosen directory, workspace
+and preset are captured at invocation. Server readiness and first-use workspace
+creation run asynchronously; missing CLI installation or an unknown launch
+token can still require user interaction.
+
+The draft becomes a chat in place after creation, preserving text and cursor.
+Use `dsh-emacs-draft-mode-hook` for editing integrations that currently target
+only `dsh-emacs-mode-hook`.
+
+Completion and session commands become available then; pending drafts never
+target the previously opened chat. The response does not select the buffer if
+you have switched away. On failure, `C-c C-c`
+(`dsh-emacs-retry-session-creation`) retries the same session identity without
+sending the draft. A workspace creation failure keeps the draft for retry
+instead of silently creating an ungrouped session. Closing a draft stops local
+waiting; creation already accepted by the server can still finish and appear
+in the list. See [decision record 111](../postmortem/111-asynchronous-session-drafts.md).

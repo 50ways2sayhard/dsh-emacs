@@ -29,6 +29,14 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Start typing while a session is created**: new-session commands open an
+  editable draft immediately, then connect it in place when the host responds.
+  Creation runs without a header banner; only failures show a header message.
+  Text and cursor survive the transition, and late responses do not steal focus.
+  Failures retain the draft; `C-c C-c` retries the same session without sending.
+  Workspace creation failures now remain available for retry instead of silently
+  creating an ungrouped session. (rationale: postmortem/111)
+
 - **Load history by complete rounds**: `C-c C-o` loads 3 earlier rounds;
   a numeric prefix selects the count. Long rounds are fetched across bounded
   batches; the loaded round range appears only in the completion message. Press
@@ -300,6 +308,14 @@ minor) and stay undated until the release is cut.
   (rationale: postmortem/085)
 
 ### Fixed
+
+- **Respect draft cancellation during CLI installation**: an installation
+  finishing after timeout, draft closure or a server-address change no longer
+  starts a server for the cancelled request. A server started by another request
+  during installation is reused instead of restarted.
+
+- **Authenticate after automatic server restart**: new-session drafts use the
+  replacement server's fresh launch token instead of prompting for the old one.
 
 - **Keep older history readable**: loading a page preserves every window's
   text even at the insertion boundary. Tool cards use the same following

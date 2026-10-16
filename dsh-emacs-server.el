@@ -68,12 +68,12 @@ the server is started lazily on the first command that needs it."
   :group 'dsh-emacs-server)
 
 (defcustom dsh-emacs-server-wait-seconds 30
-  "How long dsh-emacs waits for a freshly started server to become ready.
+  "Maximum seconds to wait for server readiness.
 The first boot of `dsh web' loads the whole plugin tree and can take
-several seconds; this is the grace period before \"did not become
-ready\".  It bounds both the blocking wait of `dsh-emacs-server-ensure'
-and the non-blocking readiness poll `dsh-emacs-list-sessions' runs
-after it starts the server itself."
+several seconds.  This bounds the blocking wait of
+`dsh-emacs-server-ensure', the asynchronous draft readiness check of
+`dsh-emacs-server-ensure-async', and the startup polling performed by
+`dsh-emacs-list-sessions'."
   :type 'integer
   :group 'dsh-emacs-server)
 
@@ -929,6 +929,155 @@ the unauthenticated request pop `url''s Basic username/password box."
                         (dsh-emacs--server-base-url)))
         (user-error "dsh server at %s is not reachable.  Check `dsh-emacs-base-url' and the network path to the remote server (the CLI would only start a local server, so it is not used here)"
                     (dsh-emacs--server-base-url))))))
+
+(declare-function url-retrieve "url"
+                  (url callback &optional cbargs silent inhibit-cookies))
+(defvar url-http-response-status)
+
+(defun dsh-emacs-server-ensure-async (callback)
+  "Ensure readiness without blocking, then call CALLBACK with nil or an error.
+Run CALLBACK in the calling buffer, if it still exists.  Probe, launch-token
+exchange and startup polling are asynchronous.  Initial CLI installation and
+an unknown authentication token still require the usual user interaction."
+  (if noninteractive
+      (funcall callback nil)
+    (let ((origin (current-buffer))
+          (base (dsh-emacs--server-base-url))
+          (deadline (+ (float-time) dsh-emacs-server-wait-seconds))
+          (token nil)
+          (used-cookie nil)
+          (prompted nil)
+          (launched nil)
+          (done nil)
+          (response nil)
+          (timer nil)
+          (retry nil))
+      (cl-labels
+          ((finish (reason)
+             (unless done
+               (setq done t)
+               (when timer (cancel-timer timer))
+               (when retry (cancel-timer retry))
+               (when (buffer-live-p response) (kill-buffer response))
+               (when (buffer-live-p origin)
+                 (with-current-buffer origin
+                   (remove-hook 'kill-buffer-hook #'cancel t)
+                   (funcall callback reason)))))
+           (cancel ()
+             (setq origin nil)
+             (finish "Session draft closed"))
+           (request ()
+             (cond
+              (done nil)
+              ((not (buffer-live-p origin)) (finish "Session draft closed"))
+              ((not (equal base (dsh-emacs--server-base-url)))
+               (finish "Server changed during startup"))
+              (t
+               (condition-case err
+                   (let* ((url-request-method "GET")
+                          (url-request-data nil)
+                          (url-request-noninteractive t)
+                          (url-max-redirections 0)
+                          (url-request-extra-headers
+                           (append
+                            (when dsh-emacs--server-auth-cookie
+                              (list (cons "Cookie" dsh-emacs--server-auth-cookie)))
+                            (when-let* ((auth (dsh-emacs-server--basic-auth-header)))
+                              (list auth)))))
+                     ;; A replacement process can publish its token between
+                     ;; polls.  Only a user-entered token overrides the source.
+                     (setq token (or (and prompted token)
+                                     (dsh-emacs--server-auth-token)
+                                     (dsh-emacs--server-auth-token-from-url
+                                      (dsh-emacs--server-base-url-raw))))
+                     (setq used-cookie dsh-emacs--server-auth-cookie)
+                     (setq response
+                           (url-retrieve
+                            (concat base "/"
+                                    (when (and token
+                                               (not dsh-emacs--server-auth-cookie))
+                                      (concat "?token=" (url-hexify-string token))))
+                            #'received nil t t)))
+                 ((error quit) (finish (error-message-string err)))))))
+           (received (_status)
+             (let ((code (bound-and-true-p url-http-response-status))
+                   (cookie (progn
+                             (goto-char (point-min))
+                             (when (re-search-forward
+                                    "^Set-Cookie: \\(dsh-auth-[_A-Za-z0-9-]+=[^;\r\n]+\\)"
+                                    nil t)
+                               (match-string-no-properties 1)))))
+               (kill-buffer (current-buffer))
+               (setq response nil)
+               (unless done
+                 (condition-case err
+                     (cond
+                      ((not (buffer-live-p origin)) (finish "Session draft closed"))
+                      ((not (equal base (dsh-emacs--server-base-url)))
+                       (finish "Server changed during startup"))
+                      ((or (= (or code 0) 200) (and cookie (eq code 303)))
+                       (when cookie
+                         (setq dsh-emacs--server-auth-cookie cookie)
+                         (when prompted
+                           (dsh-emacs--server-auth-remember-token token)))
+                       (setq dsh-emacs--server-alive-check (cons t (float-time)))
+                       (finish nil))
+                      ((eq code 401)
+                       (setq dsh-emacs--server-auth-cookie nil)
+                       (cond
+                        ((and used-cookie token) (request))
+                        (prompted (finish "Authentication failed"))
+                        (t
+                         (setq prompted t
+                               token (with-current-buffer origin
+                                       (read-string "dsh launch token: " token)))
+                         (if (string-empty-p token)
+                             (finish "No launch token given")
+                           (request)))))
+                      (code (finish (format "Server returned HTTP %s" code)))
+                      ((not (and (dsh-emacs--server-local-host-p)
+                                 dsh-emacs-server-auto-start))
+                       (finish "dsh server is not reachable"))
+                      ((and launched
+                            (not (and dsh-emacs--server-process
+                                      (process-live-p dsh-emacs--server-process))))
+                       (finish "dsh server exited during startup; see *dsh-server*"))
+                      ((>= (float-time) deadline)
+                       (finish "dsh server did not become ready before timeout"))
+                      (t
+                       (let ((bin (unless (and dsh-emacs--server-process
+                                               (process-live-p dsh-emacs--server-process))
+                                    (or (dsh-emacs--server-bin)
+                                        (dsh-emacs--server-ensure-installed)))))
+                         ;; Installation yields to timers and user input.
+                         ;; Recheck ownership before any startup side effect.
+                         (cond
+                          (done nil)
+                          ((not (buffer-live-p origin))
+                           (finish "Session draft closed"))
+                          ((not (equal base (dsh-emacs--server-base-url)))
+                           (finish "Server changed during startup"))
+                          ((>= (float-time) deadline)
+                           (finish "dsh server did not become ready before timeout"))
+                          (t
+                           (unless (and dsh-emacs--server-process
+                                        (process-live-p dsh-emacs--server-process))
+                             (let ((host-port (dsh-emacs--server-host-port)))
+                               (dsh-emacs--server-launch bin (car host-port)
+                                                         (cdr host-port)))
+                             (setq launched t))
+                           (setq retry (run-at-time 0.1 nil #'request)))))))
+                   ((error quit) (finish (error-message-string err))))))))
+        (add-hook 'kill-buffer-hook #'cancel nil t)
+        (setq timer (run-at-time
+                     dsh-emacs-server-wait-seconds nil
+                     (lambda () (finish "dsh server readiness timed out"))))
+        (if (and dsh-emacs--server-auth-cookie
+                 (car dsh-emacs--server-alive-check)
+                 (<= (- (float-time) (cdr dsh-emacs--server-alive-check))
+                     dsh-emacs--server-alive-ttl))
+            (finish nil)
+          (request))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Emacs exit cleanup

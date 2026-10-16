@@ -1590,6 +1590,13 @@ LIMIT bounds messages in one response; ROUNDS is the remaining round target."
   "Cold-read request for SESSION-ID."
   `((request . ((sessionId . ,session-id)))))
 
+(defun dsh-protocol-session-create-request (id cwd workspace preset)
+  "Encode creation of ID in CWD or WORKSPACE with optional PRESET."
+  `((request . ,(append `((sessionId . ,id))
+                        (if workspace `((workspaceId . ,workspace))
+                          `((cwd . ,cwd)))
+                        (and preset `((agentPreset . ,preset)))))))
+
 (defun dsh-protocol-session-fork-request (session-id &optional at-seq)
   "Serialize a fork of SESSION-ID, optionally through inclusive AT-SEQ."
   `((request . ((sessionId . ,session-id)

@@ -989,113 +989,172 @@ matches the workspace registered for it under any spelling."
 (declare-function dsh-emacs--server-auth-http-401-p "dsh-emacs-server" (err))
 (declare-function dsh-emacs--server-auth-maybe-expire "dsh-emacs-server" ())
 
-(defun dsh-emacs--workspace-create-resolve (dir)
-  "Resolve the workspace for DIR, creating it server-side when missing.
-`workspace/create' is idempotent by canonical path, so this single call
-both finds an existing registration and registers a new one; the returned
-workspace is upserted into `dsh-emacs--workspaces' so the new session
-groups into it immediately.  Returns the workspace struct, or nil when
-the RPC failed."
-  (let ((resp (dsh-emacs--rpc-request
-               "workspace/create" `((request . ((path . ,dir)))))))
-    (when (car resp)
-      (let* ((result (dsh-protocol-workspace-result--from-alist (cdr resp)))
-             (ws (dsh-protocol-workspace-result-workspace result)))
-        (when ws
-          (dsh-emacs-events--host-upsert-workspace ws)
-          ws)))))
+(defvar-local dsh-emacs--creation-context nil
+  "Creation arguments (DIRECTORY WORKSPACE PRESET SERVER ID) for a draft.")
 
-(defun dsh-emacs--new-session-project-workspace (dir)
-  "Workspace-id for the project containing DIR, or nil.
-When `dsh-emacs-new-session-auto-project' is on and the server is the
-local loopback one (only then do its workspace paths share this
-filesystem), detect the Emacs project root of DIR and resolve the
-workspace registered for it — creating it when the server has none.
-Else nil (the session keeps plain cwd semantics)."
-  (when (and dsh-emacs-new-session-auto-project
-             (dsh-emacs--server-local-host-p))
-    (let ((root (dsh-emacs--project-root dir)))
-      (when root
-        (or (dsh-emacs--workspace-id-by-path root dsh-emacs--workspaces)
-            (let ((ws (dsh-emacs--workspace-create-resolve root)))
-              (and ws (dsh-protocol-workspace-workspace-id ws))))))))
+(defvar-local dsh-emacs--creation-pending nil
+  "Identity of the pending creation attempt, or nil after failure.")
+
+(defvar dsh-emacs-draft-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'dsh-emacs-retry-session-creation)
+    map)
+  "Keymap for a draft awaiting session creation.")
+
+(define-derived-mode dsh-emacs-draft-mode text-mode "DSH Draft"
+  "Edit a draft while its session is being created.
+Sending and session commands are unavailable until creation succeeds.
+After failure, `\\[dsh-emacs-retry-session-creation]' retries without
+clearing the draft or changing the requested session identity."
+  (setq-local header-line-format nil))
+
+(defun dsh-emacs-retry-session-creation ()
+  "Create the current draft's session, or retry after a failed attempt."
+  (interactive)
+  (unless (and (derived-mode-p 'dsh-emacs-draft-mode)
+               dsh-emacs--creation-context)
+    (user-error "Not in a pending session draft"))
+  (when dsh-emacs--creation-pending
+    (user-error "Session is still being created; draft preserved"))
+  (pcase-let* ((`(,dir ,workspace ,preset ,server ,id)
+                dsh-emacs--creation-context)
+               (context dsh-emacs--creation-context)
+               (buf (current-buffer))
+               (attempt (list id)))
+    (setq dsh-emacs--creation-pending attempt
+          header-line-format nil)
+    (cl-labels
+        ((fail (reason)
+           (setq dsh-emacs--creation-pending nil
+                 header-line-format
+                 (concat "Creation failed — C-c C-c retries: "
+                         (replace-regexp-in-string "%" "%%" reason t t)))
+           (message "Failed to create session: %s" reason))
+         (step (fn &rest args)
+           ;; Every continuation belongs to this draft and this attempt.
+           (when (buffer-live-p buf)
+             (with-current-buffer buf
+               (when (and (derived-mode-p 'dsh-emacs-draft-mode)
+                          (eq attempt dsh-emacs--creation-pending))
+                 (condition-case err
+                     (if (equal server (dsh-emacs--server-base-url))
+                         (apply fn args)
+                       (fail "Server changed; restore the original server to retry"))
+                   ((error quit) (fail (error-message-string err))))))))
+         (created (ok value)
+           (if (not ok)
+               (fail (format "%S" value))
+             (widen)
+             (let* ((session (dsh-protocol-session--from-alist value))
+                    (sid (dsh-protocol-session-session-id session))
+                    (text (buffer-substring-no-properties (point-min) (point-max)))
+                    (offset (- (point) (point-min)))
+                    (windows (mapcar
+                              (lambda (win)
+                                (cons win (- (window-point win) (point-min))))
+                              (get-buffer-window-list buf nil t))))
+               (unless (equal sid id)
+                 (error "Server returned a different session identity"))
+               (when-let* ((other (gethash sid dsh-emacs--chat-buffers))
+                           ((buffer-live-p other))
+                           ((not (eq other buf))))
+                 (user-error "Session already opened elsewhere; draft preserved"))
+               (dsh-emacs--cache-new-session
+                sid workspace (dsh-protocol-session-agent-preset session))
+               ;; Activation replaces the draft layout.  Recover its text even
+               ;; if a user mode hook or connection setup signals an error.
+               (condition-case err
+                   (progn
+                     (dsh-emacs--activate-chat-buffer sid buf)
+                     (dsh-emacs--replace-input text)
+                     (goto-char (+ dsh-emacs--input-marker offset))
+                     (dolist (entry windows)
+                       (when (and (window-live-p (car entry))
+                                  (eq (window-buffer (car entry)) buf))
+                         (set-window-point
+                          (car entry) (+ dsh-emacs--input-marker (cdr entry)))))
+                     (when (eq (window-buffer (selected-window)) buf)
+                       (setq dsh-emacs--current-session sid
+                             dsh-emacs--current-buffer buf)))
+                 ((error quit)
+                  (remhash sid dsh-emacs--chat-buffers)
+                  (let ((inhibit-read-only t))
+                    (dsh-emacs-draft-mode)
+                    (setq-local dsh-emacs--buffer-session nil
+                                dsh-emacs--creation-context context
+                                dsh-emacs--creation-pending attempt)
+                    (erase-buffer)
+                    (insert text)
+                    (goto-char (1+ offset)))
+                  (signal (car err) (cdr err)))))))
+         (create ()
+           (dsh-emacs--rpc-async
+            "session/create"
+            (dsh-protocol-session-create-request id dir workspace preset)
+            (lambda (ok value) (step #'created ok value))))
+         (workspace-created (ok value)
+           (if (not ok)
+               (fail (format "Workspace creation: %S" value))
+             (let ((ws (dsh-protocol-workspace-result-workspace
+                        (dsh-protocol-workspace-result--from-alist value))))
+               (unless ws (error "Workspace creation returned no workspace"))
+               (setq workspace (dsh-protocol-workspace-workspace-id ws))
+               (dsh-emacs-events--host-upsert-workspace ws)
+               (create))))
+         (ready (reason)
+           (if reason
+               (fail reason)
+             (let ((root (and (not workspace)
+                              dsh-emacs-new-session-auto-project
+                              (dsh-emacs--server-local-host-p)
+                              (dsh-emacs--project-root dir))))
+               (when root
+                 (setq workspace
+                       (dsh-emacs--workspace-id-by-path
+                        root dsh-emacs--workspaces)))
+               (if (and root (not workspace))
+                   (dsh-emacs--rpc-async
+                    "workspace/create" `((request . ((path . ,root))))
+                    (lambda (ok value) (step #'workspace-created ok value)))
+                 (create))))))
+      (step (lambda ()
+              (dsh-emacs-server-ensure-async
+               (lambda (reason) (step #'ready reason))))))))
 
 ;;;###autoload
 (defun dsh-emacs-new-session (&optional cwd workspace-id preset)
-  "Create a new session.
-CWD is the working directory; with WORKSPACE-ID the session is created
-inside that workspace (`session/create' takes workspaceId rather than
-cwd).  PRESET is the agentPreset id the session starts on; nil lets the
-host pick its default preset.
+  "Open an editable draft and create its session asynchronously.
+CWD defaults to the current buffer's directory.  WORKSPACE-ID takes
+precedence; otherwise a local project's workspace is resolved when
+`dsh-emacs-new-session-auto-project' is non-nil.  PRESET is the agent
+preset, or nil for the host default.
 
-Interactively, when point sits on a workspace header or its empty
-New Session row (in the session list), the session is created in that
-workspace; inside a chat buffer, it is created in the current session's
-workspace.  Otherwise the session is created in CWD — the current
-buffer's `default-directory' (e.g. the directory a dired buffer is
-browsing) when CWD is nil — unless that directory belongs to a detected
-Emacs project, in which case the session goes into the workspace
-registered for the project root (created on first use; disable with
-`dsh-emacs-new-session-auto-project').  With a
-prefix argument, first choose the agent preset from the live
-`agentPresets/list' roster (falling back to the built-in presets before
-the first roster arrives); without one the session uses
-`dsh-emacs-default-preset'."
+Interactively use the workspace under point or of the current chat.
+A prefix argument selects a preset; otherwise use
+`dsh-emacs-default-preset'.  Sending is unavailable until creation
+succeeds.  Failures preserve the draft; C-c C-c retries.  Closing the
+draft never reopens it, but a creation already accepted by the server
+may still appear in the session list.  Return the draft buffer."
   (interactive
-   (let ((ws (dsh-emacs--new-session-workspace)))
-     (list nil ws
-           (if current-prefix-arg
-               (dsh-emacs--read-preset dsh-emacs-default-preset)
-             dsh-emacs-default-preset))))
-  (dsh-emacs-server-ensure)
-  (let* ((dir (dsh-emacs--absolute-cwd cwd))
-         (ws (or workspace-id
-                 (dsh-emacs--new-session-project-workspace dir))))
-    (dsh-emacs--rpc-async
-     "session/create"
-     `((request . ,(append (if ws
-                               `((workspaceId . ,ws))
-                             `((cwd . ,dir)))
-                           (and preset `((agentPreset . ,preset))))))
-                          (lambda (ok value)
-                            (if ok
-                                (let ((session-id (cdr (assq 'sessionId value))))
-                                  ;; Cache the new session: sessions list +
-                                  ;; workspace session-ids (group membership)
-                                  ;; — otherwise it lands in ungrouped and
-                                  ;; `session/title' events find no cached item,
-                                  ;; so live auto-rename never takes effect.
-                                  ;; Cache the create response's agentPreset
-                                  ;; too, so list details and the footer show
-                                  ;; the preset at once.
-                                  (dsh-emacs--cache-new-session
-                                   session-id ws
-                                   (cdr (assq 'agentPreset value)))
-                                  (dsh-emacs-open-session session-id)
-                                  ;; A newly created workspace session is not
-                                  ;; yet in the session/list cache (the event
-                                  ;; stream does not carry it), so
-                                  ;; `--chat-buffer-sync' finds no cwd; align
-                                  ;; default-directory with the workspace path
-                                  ;; right away so magit-status etc. locate the
-                                  ;; project.  Reopening uses the refreshed
-                                  ;; cache and takes the `--chat-cwd' branch.
-                                  (when ws
-                                    (let ((ws-struct (cl-find-if
-                                                      (lambda (w)
-                                                        (equal ws
-                                                               (dsh-protocol-workspace-workspace-id w)))
-                                                      dsh-emacs--workspaces)))
-                                      (when ws-struct
-                                        (let ((dir (dsh-protocol-workspace-path ws-struct)))
-                                          (when (and dir (not (string-empty-p dir))
-                                                     (buffer-live-p
-                                                      dsh-emacs--current-buffer))
-                                            (with-current-buffer dsh-emacs--current-buffer
-                                              (setq-local default-directory
-                                                          (file-name-as-directory
-                                                           (expand-file-name dir))))))))))
-                              (message "Failed to create session: %S" value))))))
+   (list nil (dsh-emacs--new-session-workspace)
+         (if current-prefix-arg
+             (dsh-emacs--read-preset dsh-emacs-default-preset)
+           dsh-emacs-default-preset)))
+  (let ((dir (dsh-emacs--absolute-cwd cwd))
+        (buf (generate-new-buffer "dsh-new-session"))
+        (server (dsh-emacs--server-base-url))
+        (id (concat "session-emacs-"
+                    (secure-hash 'sha256
+                                 (format "%s:%s:%s" (float-time)
+                                         (emacs-pid) (random))))))
+    (with-current-buffer buf
+      (dsh-emacs-draft-mode)
+      (setq-local default-directory (file-name-as-directory dir)
+                  dsh-emacs--creation-context
+                  (list dir workspace-id preset server id)))
+    (pop-to-buffer buf)
+    (with-current-buffer buf (dsh-emacs-retry-session-creation))
+    buf))
 
 ;;;###autoload
 (defun dsh-emacs-new-session-choose-preset ()
@@ -1107,7 +1166,6 @@ the session list, next to `c' which creates immediately with
 `dsh-emacs-default-preset'.  C-g during the preset prompt cancels the
 creation."
   (interactive)
-  (dsh-emacs-server-ensure)
   (dsh-emacs-new-session nil (dsh-emacs--new-session-workspace)
                          (dsh-emacs--read-preset dsh-emacs-default-preset)))
 
@@ -1438,68 +1496,74 @@ realtime)."
                 (get-buffer-create
                  (generate-new-buffer-name
                   (dsh-emacs--chat-buffer-name session-id))))))
-    (puthash session-id buf dsh-emacs--chat-buffers)
     (setq dsh-emacs--current-buffer buf)
-    (with-current-buffer buf
-      (setq-local dsh-emacs--buffer-session session-id
-                  dsh-emacs--buffer-subagent (or address dsh-emacs--buffer-subagent))
-      ;; The cache may have drifted (auto summary/rename/workspace
-      ;; move): align the list title and point the buffer's
-      ;; default-directory at the session workspace (magit etc.
-      ;; locate the project from it).  Must run after setq-local:
-      ;; sync's guard requires buffer-session to match, and a
-      ;; first-open buffer has no such local variable yet (it would
-      ;; be silently skipped).
-      (dsh-emacs--chat-buffer-sync session-id)
-      (dsh-emacs-mode)
-      (dsh-emacs-modeline-setup)
-      ;; Show the default model immediately as a segment-level
-      ;; fallback only; the authoritative (provider, model, effort)
-      ;; comes from the session row's modelSelection projection
-      ;; (`dsh-emacs--chat-buffer-model-sync', arriving with list/
-      ;; projection frames) — trusting the default was the root
-      ;; cause of the mode-line showing the wrong model.
-      (dsh-emacs-modeline-set-model dsh-emacs-default-model)
-      (dsh-emacs--chat-buffer-model-sync session-id buf)
-      ;; Feed the server contextPressure snapshot to the mode-line
-      ;; segment on open.  Must come after `dsh-emacs-mode' (whose
-      ;; define-derived-mode runs kill-all-local-variables) and
-      ;; `dsh-emacs-modeline-setup': a snapshot fed in earlier is
-      ;; wiped by the mode switch, so ctx% never appears (the
-      ;; classic first-open symptom).
-      (dsh-emacs--chat-buffer-context-sync session-id buf)
-      ;; The agent preset (agentPreset) comes from the session
-      ;; list cache; fetch session/list once when it is missing.
-      (unless dsh-emacs--buffer-subagent
-        (dsh-emacs--link-session-preset session-id))
-      ;; Reopening an already-live chat buffer resumes its realtime stream
-      ;; without re-rendering what is on screen: the follow snapshot is the
-      ;; catch-up (its records carry original seqs, so the
-      ;; `dsh-emacs--anchor-seq' gate drops everything already rendered);
-      ;; fresh buffers start at anchor 0 and the snapshot seeds the whole
-      ;; window.  No separate history fetch precedes the connect.
-      (unless dsh-emacs--buffer-subagent
-        (dsh-emacs-command-catalog-prefetch session-id))
-      ;; Pre-warm the skill catalog (`skills/list') too: the same "/" popup
-      ;; lists commands and skills, so its first trigger should not block on
-      ;; two synchronous round trips (see dsh-emacs-skill.el).
-      (unless dsh-emacs--buffer-subagent
-        (dsh-emacs-skill-prefetch session-id))
-      ;; Pre-warm the @ reference candidate cache (files + session roster) so
-      ;; the first "@" popup reads warm cache.  Buffer-local cache, so it must
-      ;; run in the chat buffer (see dsh-emacs-reference.el).
-      (unless dsh-emacs--buffer-subagent
-        (dsh-emacs-reference-prefetch session-id))
-      ;; Mode-line setup appends its anchor newline at point-max.  Return point
-      ;; to the editable prompt so the cursor stays on the `❯' line.
-      (goto-char dsh-emacs--input-marker)
-      ;; Connect: the first `session/follow' item is the snapshot that seeds
-      ;; the transcript (see `dsh-emacs-events--follow-snapshot'), followed by
-      ;; gapless live event frames — no history/stream hand-off gap exists.
-      (dsh-emacs--subagent-input-update)
-      (dsh-emacs-events-connect dsh-emacs--current-buffer))
-    (pop-to-buffer dsh-emacs--current-buffer
+    (dsh-emacs--activate-chat-buffer session-id buf address)
+    (pop-to-buffer buf
                    (when other-window '(display-buffer-pop-up-window)))))
+
+(defun dsh-emacs--activate-chat-buffer (session-id buf &optional address)
+  "Initialize BUF and connect it to SESSION-ID, optionally at ADDRESS.
+The caller owns server readiness and window selection."
+  (puthash session-id buf dsh-emacs--chat-buffers)
+  (with-current-buffer buf
+    (setq-local dsh-emacs--buffer-session session-id
+                dsh-emacs--buffer-subagent (or address dsh-emacs--buffer-subagent))
+    ;; The cache may have drifted (auto summary/rename/workspace
+    ;; move): align the list title and point the buffer's
+    ;; default-directory at the session workspace (magit etc.
+    ;; locate the project from it).  Must run after setq-local:
+    ;; sync's guard requires buffer-session to match, and a
+    ;; first-open buffer has no such local variable yet (it would
+    ;; be silently skipped).
+    (dsh-emacs--chat-buffer-sync session-id)
+    (dsh-emacs-mode)
+    (dsh-emacs-modeline-setup)
+    ;; Show the default model immediately as a segment-level
+    ;; fallback only; the authoritative (provider, model, effort)
+    ;; comes from the session row's modelSelection projection
+    ;; (`dsh-emacs--chat-buffer-model-sync', arriving with list/
+    ;; projection frames) — trusting the default was the root
+    ;; cause of the mode-line showing the wrong model.
+    (dsh-emacs-modeline-set-model dsh-emacs-default-model)
+    (dsh-emacs--chat-buffer-model-sync session-id buf)
+    ;; Feed the server contextPressure snapshot to the mode-line
+    ;; segment on open.  Must come after `dsh-emacs-mode' (whose
+    ;; define-derived-mode runs kill-all-local-variables) and
+    ;; `dsh-emacs-modeline-setup': a snapshot fed in earlier is
+    ;; wiped by the mode switch, so ctx% never appears (the
+    ;; classic first-open symptom).
+    (dsh-emacs--chat-buffer-context-sync session-id buf)
+    ;; The agent preset (agentPreset) comes from the session
+    ;; list cache; fetch session/list once when it is missing.
+    (unless dsh-emacs--buffer-subagent
+      (dsh-emacs--link-session-preset session-id))
+    ;; Reopening an already-live chat buffer resumes its realtime stream
+    ;; without re-rendering what is on screen: the follow snapshot is the
+    ;; catch-up (its records carry original seqs, so the
+    ;; `dsh-emacs--anchor-seq' gate drops everything already rendered);
+    ;; fresh buffers start at anchor 0 and the snapshot seeds the whole
+    ;; window.  No separate history fetch precedes the connect.
+    (unless dsh-emacs--buffer-subagent
+      (dsh-emacs-command-catalog-prefetch session-id))
+    ;; Pre-warm the skill catalog (`skills/list') too: the same "/" popup
+    ;; lists commands and skills, so its first trigger should not block on
+    ;; two synchronous round trips (see dsh-emacs-skill.el).
+    (unless dsh-emacs--buffer-subagent
+      (dsh-emacs-skill-prefetch session-id))
+    ;; Pre-warm the @ reference candidate cache (files + session roster) so
+    ;; the first "@" popup reads warm cache.  Buffer-local cache, so it must
+    ;; run in the chat buffer (see dsh-emacs-reference.el).
+    (unless dsh-emacs--buffer-subagent
+      (dsh-emacs-reference-prefetch session-id))
+    ;; Mode-line setup appends its anchor newline at point-max.  Return point
+    ;; to the editable prompt so the cursor stays on the `❯' line.
+    (goto-char dsh-emacs--input-marker)
+    ;; Connect: the first `session/follow' item is the snapshot that seeds
+    ;; the transcript (see `dsh-emacs-events--follow-snapshot'), followed by
+    ;; gapless live event frames — no history/stream hand-off gap exists.
+    (dsh-emacs--subagent-input-update)
+    (dsh-emacs-events-connect buf))
+  buf)
 
 (defun dsh-emacs-open-subagent (parent entry &optional other-window)
   "Open catalog ENTRY through its direct PARENT, optionally in OTHER-WINDOW."
@@ -2654,10 +2718,9 @@ Resolves in this order:
 Interactive commands (send, interrupt, refresh, model picker) must resolve
 here rather than reading the global directly: with several session buffers
 open, the global points at the last-opened session while the user may be
-editing inside an earlier one."
-  (or (and (boundp 'dsh-emacs--buffer-session)
-           dsh-emacs--buffer-session)
-      dsh-emacs--current-session))
+editing inside an earlier one.  Pending drafts never use that fallback."
+  (unless (derived-mode-p 'dsh-emacs-draft-mode)
+    (or dsh-emacs--buffer-session dsh-emacs--current-session)))
 
 (defun dsh-emacs--busy-p ()
   "Return non-nil when this chat buffer is generating.
@@ -2725,6 +2788,8 @@ uploaded when the send starts, so the send completes after that round
 trip.  A prompt carrying attachments is never recorded for `M-p' recall —
 replaying it as text would drop them."
   (interactive)
+  (when (derived-mode-p 'dsh-emacs-draft-mode)
+    (user-error "Session is not ready; draft preserved"))
   (when dsh-emacs--buffer-subagent
     (when (or (dsh-emacs-shell-parse (dsh-emacs--get-input))
               (dsh-emacs-command-parse (dsh-emacs--get-input)))

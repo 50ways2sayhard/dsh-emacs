@@ -321,6 +321,14 @@ creating its workspace on first use. This detection is controlled by
 `dsh-emacs-new-session-auto-project` and does not run for remote servers.
 Otherwise the new session uses the current buffer's directory.
 
+New session commands immediately open an editable **DSH Draft** buffer while
+server readiness, workspace creation and session creation run asynchronously.
+When ready, the same buffer becomes a chat and keeps your text and cursor.
+Sending is unavailable while creating. On failure, the header shows the error;
+`C-c C-c` retries with the draft intact and does not send it. Closing a draft
+prevents it from reopening, but an already accepted session can still appear
+in the session list.
+
 ### Local shell commands
 
 Enter `!git status` and press `C-c C-c` to run a command locally in the

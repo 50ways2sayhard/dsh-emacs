@@ -1,5 +1,8 @@
 # 006 — New Session Auto-Attach to the Project Workspace
 
+Workspace creation and failure handling superseded by
+[111 — Asynchronous session drafts](111-asynchronous-session-drafts.md).
+
 ## Background
 
 `dsh-emacs-new-session` resolved its creation context only from UI state:
