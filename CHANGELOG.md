@@ -29,6 +29,14 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Load history by complete rounds**: `C-c C-o` loads 3 earlier rounds;
+  a numeric prefix selects the count. Long rounds are fetched across bounded
+  batches; the loaded round range appears only in the completion message. Press
+  the same key again to cancel. Other windows and readers who moved while
+  waiting keep their positions. `C-c >` returns to the draft and resumes
+  following, and the question directory (`M-x imenu`) refreshes as pages load.
+  (rationale: postmortem/110)
+
 - **Inspect render work offline**: `scripts/render-report.el` reports fragment
   reconstruction, session row visits, character edits and requested property
   writes, with separate uninstrumented timing samples. It runs on synthetic
@@ -292,6 +300,12 @@ minor) and stay undated until the release is cut.
   (rationale: postmortem/085)
 
 ### Fixed
+
+- **Keep older history readable**: loading a page preserves every window's
+  text even at the insertion boundary. Tool cards use the same following
+  rule as streaming replies, and transcript trimming waits while a displayed
+  window is scrolled away from the bottom. Newly fetched pages survive the
+  size cap. (rationale: postmortem/109)
 
 - **Keep your reading position when cards above it change**: a tool, job or
   subagent card growing or shrinking above the visible text no longer scrolls

@@ -82,6 +82,7 @@
 (require 'dsh-emacs-markdown)
 (require 'dsh-emacs-plan)
 (require 'dsh-emacs-render)
+(require 'dsh-emacs-history)
 (declare-function dsh-emacs-render--cancel-markdown "dsh-emacs-render" ())
 (declare-function dsh-emacs-render--insert-user-block "dsh-emacs-render"
                   (event references))
@@ -150,9 +151,9 @@ is ~hundreds of incremental events, so parse and GC costs rise linearly:
 with the default no-argument window of ~30k raw events, the main thread needs
 0.7s+ to parse them).  The default of 30 messages ≈ the latest 1~2 turns,
 bringing the open cost down to 0.2~0.4s; increase it (e.g. 100) when a fuller
-history is needed, at the cost of a slower open.  The same size is the page
-`dsh-emacs-load-older-history' (`C-c C-o') fetches per press, so a larger
-window also means fewer presses to reach the start of a long session."
+history is needed, at the cost of a slower open.  This also bounds each
+network batch used by `dsh-emacs-load-older-history'; a long round may need
+several batches.  `dsh-emacs-history-rounds' controls rounds per invocation."
   :type 'integer
   :group 'dsh-emacs)
 
@@ -2155,6 +2156,7 @@ repaints)."
     (define-key map (kbd "C-c C-p") #'dsh-emacs-answer-question)
     (define-key map (kbd "C-c C-r") #'dsh-emacs-refresh)
     (define-key map (kbd "C-c C-o") #'dsh-emacs-load-older-history)
+    (define-key map (kbd "C-c >") #'dsh-emacs-goto-latest)
     (define-key map (kbd "C-c C-l") #'dsh-emacs-list-sessions-display)
     (define-key map (kbd "C-c C-s") #'dsh-emacs-switch-workspace-session)
     (define-key map (kbd "C-c M-s") #'dsh-emacs-switch-session)
@@ -2198,34 +2200,6 @@ some tab/window managers query `buffer-modified-p' before closing a buffer
 and prompt \"save?\".  Restore the flag without invalidating the mode line
 after every text or property edit; session statistics refresh separately."
   (restore-buffer-modified-p nil))
-
-(defun dsh-emacs-imenu-create-user-index ()
-  "Build an imenu index of user messages in the current buffer.
-Each entry maps a human-readable label to the message's start position.
-Users can jump to any historical input via `M-x imenu' (or consult-imenu,
-vertico, etc.)."
-  (let ((index '()))
-    (save-excursion
-      (goto-char (point-min))
-      (while (< (point) (point-max))
-        (let ((pos (next-single-property-change (point) 'dsh-emacs-user-message nil (point-max))))
-          (if (>= pos (point-max))
-              (goto-char (point-max))
-            (goto-char pos)
-            (when (get-text-property pos 'dsh-emacs-user-message)
-              (let* ((line-num (line-number-at-pos pos))
-                     (line-end (line-end-position))
-                     (raw (buffer-substring-no-properties pos line-end))
-                     (content (if (string-prefix-p "\u276f " raw)
-                                  (substring raw 2)
-                                raw))
-                     (preview (if (> (length content) 60)
-                                  (concat (substring content 0 57) "...")
-                                content))
-                     (label (format "%d: %s" line-num preview)))
-                (push (cons label pos) index)))
-            (goto-char (1+ pos))))))
-    (nreverse index)))
 
 ;;; ---------------------------------------------------------------------------
 ;;;  Undo (scoped to the input area)
@@ -2547,8 +2521,16 @@ metadata preserves nearest-first ordering for display and cycling."
   ;; dsh-emacs-reference.el), the way a package is meant to; nothing is set
   ;; buffer-locally here, so `completion-category-overrides' stays the user's
   ;; knob and a user override for either category wins.
-  ;; imenu: index by user message, so M-x imenu jumps to any past input
+  ;; imenu: index by user message, so M-x imenu jumps to any past input.
+  ;; Auto-rescan rebuilds that directory once a history page has landed.  No
+  ;; `require' of imenu is needed: the command is autoloaded and both variables
+  ;; it owns take buffer-local values set here.
   (setq-local imenu-create-index-function #'dsh-emacs-imenu-create-user-index)
+  (setq-local imenu-auto-rescan t)
+  ;; Cards and fragments answer "is this window following new output?" through
+  ;; the renderer's input-anchor policy, not the UI's generic bottom check.
+  (setq-local dsh-emacs-ui--following-windows-function
+              #'dsh-emacs-render--following-windows)
 
   ;; Mode-line assembly is done by `dsh-emacs-modeline-setup'
   ;; (called on session creation); do not override
@@ -4553,137 +4535,6 @@ removed it from the list and cleared its markers."
           (delete-region start end))))
     (when (markerp start) (set-marker start nil))
     (when (markerp end) (set-marker end nil))))
-
-(defvar-local dsh-emacs--history-loading nil
-  "Non-nil while a `session/page' request for this buffer is in flight.
-Blocks a second load-more before the first page lands.")
-
-(defun dsh-emacs--history-record-list (records)
-  "Return RECORDS, a `session/page' or snapshot record vector, as a list."
-  (cond ((vectorp records) (append records nil))
-        ((listp records) records)
-        (t nil)))
-
-(defun dsh-emacs--history-oldest-seq (entries)
-  "Return the oldest event seq in ENTRIES, or nil.
-ENTRIES is a `session/page' batch of message-aligned records in ascending
-seq order, so the first event carrying a numeric seq is the exclusive
-`beforeSeq' cursor for the next page."
-  (catch 'found
-    (dolist (entry entries)
-      (let* ((ev (and entry (dsh-emacs-render--aget "event" entry)))
-             (seq (and ev (dsh-emacs-render--event-seq ev))))
-        (when (integerp seq)
-          (throw 'found seq))))))
-
-(defun dsh-emacs--load-older-history-page (buffer page-value)
-  "Prepend one older history page, described by PAGE-VALUE, to BUFFER.
-Runs as the `session/page' callback: renders the page above the currently
-loaded transcript, keeps the loaded window viewport in place, extends the
-pagination frontier, and seeds `M-p' recall from the page's user messages."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (setq dsh-emacs--history-loading nil)
-      (let* ((entries (delq nil
-                            (mapcar (lambda (record)
-                                      (and (equal (dsh-emacs-render--aget
-                                                   "type" record)
-                                                  "event")
-                                           record))
-                                    (dsh-emacs--history-record-list
-                                     (dsh-emacs-render--aget "records"
-                                                             page-value)))))
-             (rendered 0)
-             (cursor (dsh-emacs--history-oldest-seq entries)))
-        (when (and entries (integerp cursor))
-          ;; The prepend marker must exist before the first render: every
-          ;; renderer resolves its insertion position through it.  The page
-          ;; sits below the live frontier, and the renderer leaves
-          ;; `dsh-emacs--anchor-seq' alone for a prepend, so a live frame
-          ;; cannot replay the loaded page.
-          (setq dsh-emacs--history-insert-marker
-                (dsh-emacs-render--history-prepend-marker))
-          (unwind-protect
-              (save-window-excursion
-                ;; Bind the page flag around the render: it is what tells the
-                ;; renderers this batch is settled history (the insertion
-                ;; marker is positional and may legitimately be nil).
-                (let ((dsh-emacs--history-page t))
-                  (setq rendered
-                        (dsh-emacs-render-history-events
-                         entries nil dsh-emacs--history-earliest-seq
-                         :insert-before
-                         (and dsh-emacs--history-insert-marker
-                              (marker-position dsh-emacs--history-insert-marker))
-                         :follow-p nil))))
-            (when (markerp dsh-emacs--history-insert-marker)
-              (set-marker dsh-emacs--history-insert-marker nil))
-            (setq dsh-emacs--history-insert-marker nil)))
-        (if (and entries (integerp cursor))
-            (progn
-              (setq dsh-emacs--history-earliest-seq cursor)
-              (setq dsh-emacs--history-has-more
-                    (dsh-emacs-render--json-boolean
-                     (dsh-emacs-render--aget "hasMore" page-value)))
-              (when (fboundp 'dsh-emacs--seed-input-history)
-                (dsh-emacs--seed-input-history
-                 entries (or dsh-emacs--buffer-session
-                             (dsh-emacs--active-session-id)) t))
-              (message "Loaded %d older message%s%s"
-                       rendered (if (= rendered 1) "" "s")
-                       (if dsh-emacs--history-has-more " (more available)" "")))
-          (setq dsh-emacs--history-has-more nil)
-          (message "No older messages remain"))))))
-
-(defun dsh-emacs-load-older-history ()
-  "Load the next older page of this session's history into the transcript.
-Reads one `session/page' window (`dsh-emacs-history-window' messages) before
-the earliest event currently rendered and inserts it above the existing
-transcript, keeping the visible text where it was.  `dsh-emacs--anchor-seq'
-stays on the live frontier, so a reconnect's snapshot cannot replay the
-newly loaded page.  The server's `hasMore' flag stops the command at the
-beginning of the session."
-  (interactive)
-  (cond
-   ((not (and (boundp 'dsh-emacs--buffer-session)
-              dsh-emacs--buffer-session))
-    (user-error "Older history is only available inside a chat buffer"))
-   ((not (and (boundp 'dsh-emacs--input-marker)
-              (markerp dsh-emacs--input-marker)))
-    (message "This chat buffer has no transcript to extend"))
-   (dsh-emacs--history-loading
-    (message "Already loading older messages…"))
-   ((null dsh-emacs--history-earliest-seq)
-    (message "No earlier history is known for this session yet"))
-   ((not dsh-emacs--history-has-more)
-    (message "No older messages remain"))
-   ((null dsh-emacs--history-cursor)
-    (message "This session has no history cursor yet"))
-   (t
-    (setq dsh-emacs--history-loading t)
-    (let ((session-id dsh-emacs--buffer-session)
-          (before dsh-emacs--history-earliest-seq)
-          (through dsh-emacs--history-cursor)
-          (limit dsh-emacs-history-window)
-          (buffer (current-buffer)))
-      (message "Loading older messages…")
-      (dsh-emacs--rpc-async
-       "session/page"
-       `((request . ((address . ,(dsh-protocol-session-address-json
-                                  session-id dsh-emacs--buffer-subagent))
-                     ;; `throughSeq' must be a real seq: the wire's -1 reads an
-                     ;; empty page because the server slices
-                     ;; events[0 .. min(throughSeq + 1, beforeSeq)).
-                     (throughSeq . ,through)
-                     (beforeSeq . ,before)
-                     (maxMessages . ,limit))))
-       (lambda (ok value)
-         (if (and ok (listp value))
-             (dsh-emacs--load-older-history-page buffer value)
-           (when (buffer-live-p buffer)
-             (with-current-buffer buffer
-               (setq dsh-emacs--history-loading nil)))
-           (message "Failed to load older messages: %S" value))))))))
 
 (defun dsh-emacs-refresh ()
   "Refresh the current chat buffer's event stream.

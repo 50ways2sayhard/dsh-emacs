@@ -1,5 +1,9 @@
 # 044 — Loading older history into an open transcript
 
+_Loading interaction is superseded by [110](110-load-complete-rounds.md), and
+viewport/browsing policy by [109](109-history-browsing.md); the `session/page`
+cursors, the `-1` pitfall and the bounded page rendering below remain in use._
+
 ## Background
 
 A chat buffer seeds from the `session/follow` snapshot, which carries a

@@ -463,6 +463,9 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
                 (dsh-e2e--check "subagent-settled-cold-projections"
                                 (and identity (dsh-protocol-subagent-cell-value identity))))
               (switch-to-buffer parent-chat)
+              ;; One message per batch: the child's opening tail must leave a
+              ;; second page, and the round loader then necessarily crosses
+              ;; several bounded `session/page' requests instead of one.
               (let ((dsh-emacs-history-window 1)
                     (departure (point-marker)))
                 (dsh-e2e--choose-subagent parent-chat one)

@@ -11,6 +11,7 @@ dsh-emacs/
 ├── dsh-emacs-tokens.el       # Token tracking and formatting
 ├── dsh-emacs-markdown.el     # Markdown syntax highlighting
 ├── dsh-emacs-render.el       # Event renderer (user/assistant/tool/thinking)
+├── dsh-emacs-history.el      # Round-based history loading and Imenu index
 ├── dsh-emacs-events.el       # Event stream: native WebSocket + reconnect
 ├── dsh-emacs-modeline.el     # Mode-line stats and whale-tail playback
 ├── dsh-emacs-queue.el        # Pending-input queue mirror (queue/steer)
@@ -80,12 +81,14 @@ render and compare the whole card.
 
 Changed updates leave each window's start to move with the text, like a
 marker, for every window showing the buffer. Only two cases adjust it: a
-window whose screen-row view reached `point-max` before the write
-(`dsh-emacs-ui--window-at-bottom-p`, shared with the renderer's stream
-following) is recentered on `point-max` with native `recenter`, then left
-unforced so redisplay still keeps point visible; a start that was at a line
-beginning and collapsed into the replaced span is moved back to that line's
-start. See [decision record 107](../postmortem/107-fragment-viewport-markers.md).
+following window is recentered on `point-max` with native `recenter`, then
+left unforced so redisplay still keeps point visible; a start that was at a
+line beginning and collapsed into the replaced span moves back to that line's
+start. Generic buffers follow when their screen-row view reaches the bottom;
+chat buffers supply the renderer's shared input-anchor policy, described
+under history browsing below. See decision records
+[107](../postmortem/107-fragment-viewport-markers.md) and
+[109](../postmortem/109-history-browsing.md).
 
 Identity is the separate `:namespace-id` / `:block-id` pair, compared with
 `equal`; do not join these strings. Lookup and deletion both take two
@@ -995,19 +998,49 @@ or an alternate parser. See [036](../postmortem/036-bounded-stream-markdown.md).
   approval/question waterfalls.  This connection is scoped to the list buffer's
   lifecycle and is also self-healing (reconnect + re-baseline).
 
-## Older history (`C-c C-o`)
+## History browsing (`dsh-emacs-history.el`)
 
-A chat opens on a bounded tail of the session, so
-`dsh-emacs-load-older-history` reads the page before the earliest message on
-screen and prepends it. The command sends `session/page` with `beforeSeq` = the
-snapshot's earliest rendered seq, `throughSeq` = the snapshot's recorded cursor
-and `maxMessages` = `dsh-emacs-history-window`; both pagination cursors come
-from the follow snapshot (`dsh-emacs-render--note-history-window`), and the
-frontier only moves EARLIER so a reconnect cannot push it past pages already on
-screen. `throughSeq` must be a real seq: the wire's `-1` convention reads an
-empty page, because the server slices
-`events[0 .. min(throughSeq + 1, beforeSeq))`. The command is gated by the
-snapshot's `hasMore`, so it never requests a page that cannot exist.
+The history module owns round loading and the existing Imenu question index.
+It uses user-message text properties rather than maintaining another message
+index. Imenu targets are advancing markers and auto-rescan refreshes loaded
+questions. Previous/next question commands are not added.
+
+`C-c C-o` requests `dsh-emacs-history-rounds` complete rounds (default 3),
+overridable by a numeric prefix. The protocol constructor decodes records,
+oldest/newest sequence numbers, `hasMore`, and `(ROUND SEQ RECORD)` boundaries.
+`session/page` receives `turnWindow` with `minMessages: 1` and the remaining
+round count. `maxMessages` stays bounded by `dsh-emacs-history-window`.
+A partial oldest round counts as the first round to complete. This uses
+original server round numbers, including autonomous continuations.
+
+One buffer-local request plist stages records across bounded RPCs. Before
+publishing, the loader checks request identity, session/address, the original
+frontier, and strict backwards cursor progress. The opening snapshot cursor
+is the stable `throughSeq` for the whole operation. Cancellation (invoking
+`C-c C-o` again) invalidates the token; late callbacks cannot publish it.
+Errors leave the old pagination cursor unchanged. Once enough `turn/start`
+boundaries arrive, any extra prefix is discarded at the requested oldest
+start, retaining the correct next cursor. Exhaustion publishes the available
+range with its actual count. No unbounded single RPC or whole-session index
+is needed. See [110](../postmortem/110-load-complete-rounds.md).
+
+History insertion saves every window's point and start as advancing markers
+plus horizontal/vertical scroll offsets, restoring only windows still showing
+the same buffer. During insertion, fragments receive an empty following set.
+Round numbers appear only in the completion message; `turn/start` events
+add no transcript rows. After publication,
+only the initiating, still-selected window visits the new range, and only
+when its point still matches its request-time marker. The prior position
+goes on the mark ring. Waiting readers who moved and other windows keep
+their current views. The live event frontier is never advanced by this load.
+
+In live chat, `dsh-emacs-ui--following-windows-function` delegates to the
+stream renderer: every following window must have point at the input and
+be geometrically near the bottom. Non-chat fragments retain their generic
+bottom-of-buffer policy. The size cap is deferred during older-history
+insertion, while a displayed window is not following, and when the input
+boundary cannot be located; a cut never lands in the input area. See
+[109](../postmortem/109-history-browsing.md).
 
 `dsh-emacs--history-insert-marker` — a marker at the oldest transcript block,
 insertion type `t` — takes priority in

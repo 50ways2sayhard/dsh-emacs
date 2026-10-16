@@ -1550,6 +1550,42 @@ Synthetic fork endings have no usable elapsed-time endpoint."
         (mode . ,(dsh-protocol-subagent-address-mode address)))
     `((kind . "session") (sessionId . ,session-id))))
 
+;; Backwards history pages retain raw event records for the transcript renderer;
+;; pagination and round metadata are decoded here for the history controller.
+(cl-defstruct (dsh-protocol-history-page
+               (:constructor dsh-protocol--make-history-page))
+  records oldest newest has-more rounds)
+
+(defun dsh-protocol-history-page--from-alist (value)
+  "Decode VALUE into records, an oldest cursor and (ROUND SEQ RECORD) starts."
+  (let (records rounds oldest previous)
+    (dolist (record (dsh-protocol--objects (dsh-protocol--field 'records value)))
+      (when (equal (dsh-protocol--field 'type record) "event")
+        (let* ((event (dsh-protocol--field 'event record))
+               (seq (dsh-protocol--field 'seq event))
+               (turn (dsh-protocol--field
+                      'turn (dsh-protocol--field 'data event))))
+          (unless (and (natnump seq) (or (null previous) (> seq previous)))
+            (error "History page has invalid or unordered event sequence: %S" seq))
+          (unless oldest (setq oldest seq))
+          (setq previous seq)
+          (push record records)
+          (when (and (equal (dsh-protocol--field 'type event) "turn/start")
+                     (natnump turn))
+            (push (list turn seq record) rounds)))))
+    (dsh-protocol--make-history-page
+     :records (nreverse records) :oldest oldest :newest previous
+     :rounds (nreverse rounds)
+     :has-more (dsh-protocol--boolean (dsh-protocol--field 'hasMore value)))))
+
+(defun dsh-protocol-history-page-request (session address through before limit rounds)
+  "Serialize a backwards SESSION/ADDRESS request through THROUGH, before BEFORE.
+LIMIT bounds messages in one response; ROUNDS is the remaining round target."
+  `((request . ((address . ,(dsh-protocol-session-address-json session address))
+                (throughSeq . ,through) (beforeSeq . ,before)
+                (maxMessages . ,limit)
+                (turnWindow . ((minMessages . 1) (minTurns . ,rounds)))))))
+
 (defun dsh-protocol-subagent-projections-request (session-id)
   "Cold-read request for SESSION-ID."
   `((request . ((sessionId . ,session-id)))))

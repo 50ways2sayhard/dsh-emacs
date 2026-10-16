@@ -24,6 +24,11 @@
 (require 'map)
 (require 'text-property-search)
 
+(defvar-local dsh-emacs-ui--following-windows-function nil
+  "Optional function returning this buffer's windows that follow new output.
+When nil, fragments use their generic bottom-of-buffer check.  Chat buffers
+share the stream renderer's input-anchor policy instead.")
+
 ;;; ---------------------------------------------------------------------------
 ;;; Customization faces
 ;;; ---------------------------------------------------------------------------
@@ -444,14 +449,18 @@ Rendering completes before editing; failed replacements roll back and signal."
             ;; Each reader's start is a marker that moves with the text: only
             ;; following windows and starts collapsed into the replaced span
             ;; need adjustment after the write.
-            (setq views (cl-loop for window in (get-buffer-window-list
-                                                (current-buffer) nil t)
-                                 collect (list window
-                                               (dsh-emacs-ui--window-at-bottom-p
-                                                window (point-max))
-                                               (save-excursion
-                                                 (goto-char (window-start window))
-                                                 (bolp)))))
+            (let ((followers (when dsh-emacs-ui--following-windows-function
+                               (funcall dsh-emacs-ui--following-windows-function))))
+              (setq views (cl-loop for window in (get-buffer-window-list
+                                                  (current-buffer) nil t)
+                                   collect (list window
+                                                 (if dsh-emacs-ui--following-windows-function
+                                                     (memq window followers)
+                                                   (dsh-emacs-ui--window-at-bottom-p
+                                                    window (point-max)))
+                                                 (save-excursion
+                                                   (goto-char (window-start window))
+                                                   (bolp))))))
             (let ((range (atomic-change-group
                            (if block
                                (let* ((start (car block))

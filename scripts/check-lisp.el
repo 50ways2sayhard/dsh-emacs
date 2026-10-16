@@ -43,7 +43,7 @@
     "dsh-emacs-server.el" "dsh-emacs-provider.el"
     "dsh-emacs-plan.el" "dsh-emacs-subagent.el"
     "dsh-emacs-command.el" "dsh-emacs-skill.el" "dsh-emacs-reference.el"
-    "dsh-emacs-composer.el"
+    "dsh-emacs-composer.el" "dsh-emacs-history.el"
     "dsh-emacs-shell.el"
     "test/dsh-test.el" "test/dsh-e2e.el" "test/dsh-gui.el"
     "test/check-lisp-test.el" "scripts/render-report.el")

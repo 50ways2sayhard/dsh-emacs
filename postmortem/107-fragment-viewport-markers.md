@@ -1,5 +1,9 @@
 # 107 — Fragment updates keep window starts as markers
 
+_Following-window policy is superseded by [109](109-history-browsing.md); saving
+each window's start as a marker and re-anchoring a start collapsed into the
+replaced span remain in use._
+
 ## Background
 
 `dsh-emacs-ui-update-fragment` (UI layer) has saved `window-start` as an

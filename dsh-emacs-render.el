@@ -194,9 +194,11 @@ Refresh existing conversations after changing this option."
 
 (defcustom dsh-emacs-max-buffer-size 200000
   "Maximum character count of the chat transcript buffer.
-When the buffer exceeds this size old content is silently trimmed from the
-top to prevent unbounded memory growth and redisplay slowdown in long
-sessions.  Set to nil to disable trimming."
+When the buffer exceeds this size old content is trimmed from the top, never
+past the editable input area.  Trimming is deferred while loading an older
+page, while a displayed window is not following new output, and when the
+input area's position cannot be located, so the limit is soft during history
+browsing.  Set to nil to disable trimming."
   :type '(choice integer (const nil))
   :group 'dsh-emacs-render)
 
@@ -724,8 +726,8 @@ message is inserted strictly above it."
   (let ((pos (point-max))
         (found nil))
     (while (and (not found) pos (> pos (point-min)))
-      (setq pos (previous-single-property-change pos 'face))
-      (when (and pos (> pos (point-min)))
+      (setq pos (previous-single-property-change pos 'face nil (point-min)))
+      (when pos
         (when (dsh-emacs-render--face-matches-prompt-p
                (get-text-property pos 'face))
           (setq found pos))))
@@ -739,8 +741,7 @@ a following window look manually scrolled away.  No state survives the edit."
               (anchor (dsh-emacs-render--input-anchor-pos)))
     (cl-loop for window in windows
              when (and (window-live-p window)
-                       (or (not (eq window (selected-window)))
-                           (>= (window-point window) anchor))
+                       (>= (window-point window) anchor)
                        (dsh-emacs-ui--window-at-bottom-p window anchor))
              collect window)))
 
@@ -3858,7 +3859,7 @@ unfold preserve the styling."
 ;;; ---------------------------------------------------------------------------
 
 (defun dsh-emacs-render-turn-start (event)
-  "Record a `turn/start' event without adding visual chrome.
+  "Record a `turn/start' EVENT without adding visual chrome.
 The event stream is the authoritative source for turn liveness: a replayed
 or re-fetched history whose tail is a `turn/start' without a matching
 `turn/end' means the turn is still in flight, so re-light the mode-line
@@ -4761,12 +4762,20 @@ render twice."
 
 (defun dsh-emacs-render--trim-buffer ()
   "Trim old transcript content when the buffer exceeds `dsh-emacs-max-buffer-size'.
-Deletes the earliest content while preserving the input prompt area."
+Defer while loading older history, while any displayed window is reading
+above the input anchor, or when the editable input area cannot be located:
+without a known boundary there is no cut point that provably spares the
+draft.  The size limit is soft in all three cases."
   (when (and dsh-emacs-max-buffer-size
-             (> (buffer-size) dsh-emacs-max-buffer-size))
+             (> (buffer-size) dsh-emacs-max-buffer-size)
+             (not (dsh-emacs-render--history-page-p))
+             (let ((followers (dsh-emacs-render--following-windows)))
+               (cl-every (lambda (window) (memq window followers))
+                         (get-buffer-window-list (current-buffer) nil t))))
     (let* ((limit dsh-emacs-max-buffer-size)
-           (trim-to (- (point-max) (/ limit 2))))
-      (when (> trim-to (point-min))
+           (input (dsh-emacs-render--input-insert-point))
+           (trim-to (and input (min (- (point-max) (/ limit 2)) input))))
+      (when (and trim-to (> trim-to (point-min)))
         (let ((inhibit-read-only t)
               (buffer-undo-list t))
           (delete-region (point-min) trim-to))

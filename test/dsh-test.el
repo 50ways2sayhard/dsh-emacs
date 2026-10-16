@@ -18562,6 +18562,24 @@ input-area draft (which carries no such property) is not counted."
                (string-match-p "second" (car (cadr index))))
       (dsh-test-pass "imenu-user-index"))))
 
+;; A question at point-min belongs in the directory, and menu targets must
+;; continue pointing at that question after a page is prepended.
+(with-temp-buffer
+  (insert (propertize "❯ FIRST QUESTION\n" 'dsh-emacs-user-message t)
+          "answer\n"
+          (propertize "❯ SECOND QUESTION\n" 'dsh-emacs-user-message t))
+  (let ((index (dsh-emacs-imenu-create-user-index)))
+    (dsh-test-assert "history-index-includes-buffer-start"
+      (and (= (length index) 2)
+           (string-match-p "FIRST QUESTION" (caar index))))
+    (goto-char (point-min))
+    (insert "older page\n")
+    (dsh-test-assert "history-index-targets-follow-insertions"
+      (and (markerp (cdar index))
+           (save-excursion
+             (goto-char (cdar index))
+             (looking-at "❯ FIRST QUESTION"))))))
+
 ;; --- Test 102: dsh-emacs--workspace-sessions ---
 (let ((s1 (dsh-protocol-session--from-alist
          (list (cons 'sessionId "s1") (cons 'title "First")
@@ -24588,6 +24606,278 @@ messages (e.g. `command/done')."
            (dsh-test--history-text-pos "TAIL-REPLY")))
       (set-marker draft-point nil)
       (set-marker reading-point nil))))
+
+;; Each history reader keeps its own text, including at the prepend boundary.
+(save-window-excursion
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs--buffer-session "history-readers")
+    (let ((dsh-emacs-max-buffer-size nil))
+      (dsh-emacs-render-history-events
+       (list (dsh-test--history-fixture "user/message" 20 "CURRENT QUESTION")
+             (dsh-test--history-fixture
+              "assistant/message" 21
+              (mapconcat (lambda (n) (format "retained line %d" n))
+                         (number-sequence 1 100) "\n")))))
+    (setq dsh-emacs--history-earliest-seq 20)
+    (switch-to-buffer (current-buffer))
+    (delete-other-windows)
+    (let* ((first (selected-window))
+           (second (split-window-below))
+           (boundary (dsh-emacs-render--history-prepend-marker))
+           (inside (copy-marker (dsh-test--history-text-pos "retained line 20") t)))
+      (set-window-start first boundary t)
+      (set-window-point first boundary)
+      (set-window-buffer second (current-buffer))
+      (set-window-start second inside t)
+      (set-window-point second inside)
+      (dsh-emacs--load-older-history-page
+       (current-buffer)
+       `((records . ,(vector (dsh-test--history-fixture "user/message" 10 "OLDER")
+                             (dsh-test--history-fixture "assistant/message" 11 "OLD REPLY")))
+         (hasMore . t)))
+      (dsh-test-assert "history-prepend-preserves-boundary-and-second-reader"
+        (= (window-start first) boundary)
+        (= (window-point first) boundary)
+        (= (window-start second) inside)
+        (= (window-point second) inside))
+      (set-marker boundary nil)
+      (set-marker inside nil))))
+
+;; Explicitly requested history must survive the normal transcript size cap.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (setq-local dsh-emacs--buffer-session "history-over-cap")
+  (let ((dsh-emacs-max-buffer-size nil))
+    (dsh-emacs-render-history-events
+     (list (dsh-test--history-fixture "user/message" 20 "NEWER QUESTION"))))
+  (setq dsh-emacs--history-earliest-seq 20)
+  (let ((dsh-emacs-max-buffer-size 80))
+    (dsh-emacs--load-older-history-page
+     (current-buffer)
+     `((records . ,(vector (dsh-test--history-fixture
+                            "user/message" 10 (concat "OLDER QUESTION " (make-string 150 ?x)))))
+       (hasMore . t))))
+  (dsh-test-assert "history-prepend-does-not-trim-requested-page"
+    (dsh-test--history-text-pos "OLDER QUESTION")
+    (dsh-test--history-text-pos "NEWER QUESTION")))
+
+(save-window-excursion
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (let ((dsh-emacs-max-buffer-size nil))
+      (dsh-emacs-render-history-events
+       (list (dsh-test--history-fixture "user/message" 10 "READING HERE")
+             (dsh-test--history-fixture "assistant/message" 11 (make-string 500 ?x)))))
+    (switch-to-buffer (current-buffer))
+    (goto-char (dsh-test--history-text-pos "READING HERE"))
+    (set-window-start (selected-window) (line-beginning-position) t)
+    (let ((before (buffer-string)) (dsh-emacs-max-buffer-size 80))
+      (dsh-emacs-render--trim-buffer)
+      (dsh-test-assert "history-reader-defers-destructive-trimming"
+        (equal-including-properties before (buffer-string))))))
+
+(save-window-excursion
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (switch-to-buffer (current-buffer))
+    (delete-other-windows)
+    (dsh-emacs-render-history-events
+     (list (dsh-test--history-fixture "user/message" 10 "FIRST")
+           (dsh-test--history-fixture "assistant/message" 11 "FIRST ANSWER")
+           (dsh-test--history-fixture "user/message" 20 "SECOND")))
+    (goto-char (point-max))
+    (insert "KEEP DRAFT")
+    (let* ((index (dsh-emacs-imenu-create-user-index))
+           (first (cdar index))
+           (reader (split-window-below)))
+      (set-window-buffer reader (current-buffer))
+      (set-window-point reader first)
+      (set-window-start reader first t)
+      (goto-char first)
+      (call-interactively (key-binding (kbd "C-c >")))
+      (dsh-test-assert "history-latest-resumes-only-this-window"
+        (= (point) (point-max))
+        (equal (dsh-emacs-render--following-windows) (list (selected-window)))
+        (= (window-point reader) first)
+        (= (window-start reader) first)
+        (equal (buffer-substring-no-properties dsh-emacs--input-marker
+                                               (point-max)) "KEEP DRAFT"))
+      (dsh-test-assert "history-imenu-index-installed"
+        (eq imenu-create-index-function #'dsh-emacs-imenu-create-user-index)
+        imenu-auto-rescan)
+      ;; Even a reader close enough to see the bottom must not follow cards.
+      (let ((start (copy-marker (window-start reader) t)))
+        (dsh-emacs-ui-update-fragment
+         '((:namespace-id . "test") (:block-id . "live-card")
+           (:label-left . "Tool") (:body . "new output"))
+         :create-new t :insert-before (dsh-emacs-render--input-insert-point))
+        (dsh-test-assert "history-secondary-reader-does-not-follow-cards"
+          (= (window-start reader) start)
+          (= (window-point reader) first))
+        (set-marker start nil)))))
+
+;; Deferral must not accidentally disable the cap once the reader returns.
+(save-window-excursion
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (switch-to-buffer (current-buffer))
+    (delete-other-windows)
+    (let ((dsh-emacs-max-buffer-size nil))
+      (dsh-emacs-render-history-events
+       (list (dsh-test--history-fixture "user/message" 10 "OLD QUESTION")
+             (dsh-test--history-fixture "assistant/message" 11 (make-string 500 ?x)))))
+    (goto-char (point-max))
+    (insert (make-string 100 ?d))
+    (dsh-emacs-goto-latest)
+    (let ((before (buffer-size)) (dsh-emacs-max-buffer-size 80))
+      (dsh-emacs-render--trim-buffer)
+      (dsh-test-assert "history-trimming-resumes-and-protects-long-draft"
+        (< (buffer-size) before)
+        (equal (buffer-substring-no-properties dsh-emacs--input-marker
+                                               (point-max)) (make-string 100 ?d))
+        (dsh-emacs-render--input-anchor-pos)))))
+
+;; A buffer whose input boundary cannot be located is left alone: without a
+;; known cut point, trimming could destroy the draft instead of signalling.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (let ((dsh-emacs-max-buffer-size nil))
+    (dsh-emacs-render-history-events
+     (list (dsh-test--history-fixture "assistant/message" 10 (make-string 500 ?x)))))
+  (goto-char (point-max))
+  (insert (make-string 100 ?d))
+  (let ((before (buffer-string)) (dsh-emacs-max-buffer-size 80) failure)
+    (condition-case err
+        (cl-letf (((symbol-function 'dsh-emacs-render--input-insert-point)
+                   (lambda () nil)))
+          (dsh-emacs-render--trim-buffer))
+      (error (setq failure err)))
+    (dsh-test-assert "history-trimming-defers-without-input-anchor"
+      (null failure)
+      (equal-including-properties before (buffer-string)))))
+
+;; A long round must cross transport pages without exposing a partial batch.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (setq-local dsh-emacs--buffer-session "round-loading")
+  (dsh-emacs-render-history-events
+   (list (dsh-test--history-fixture "assistant/message" 90 "ROUND-9 TAIL")))
+  (setq dsh-emacs--history-earliest-seq 90
+        dsh-emacs--history-cursor 95 dsh-emacs--history-has-more t)
+  (let ((before (buffer-string)) requests callbacks feedback)
+    (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+               (lambda (_method params callback)
+                 (push (alist-get 'request params) requests)
+                 (setq callbacks (append callbacks (list callback)))))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (setq feedback (apply #'format format-string args)))))
+      (dsh-emacs-load-older-history)
+      (dsh-test-assert "history-round-request-target-and-budget"
+        (= (alist-get 'minTurns (alist-get 'turnWindow (car requests))) 3)
+        (= (alist-get 'maxMessages (car requests)) dsh-emacs-history-window))
+      (funcall (pop callbacks) t
+               `((records . ,(vector (dsh-test--history-fixture
+                                     "assistant/message" 80 "ROUND-9 MIDDLE")))
+                 (hasMore . t)))
+      (dsh-test-assert "history-round-partial-page-is-staged"
+        (equal-including-properties before (buffer-string))
+        (= dsh-emacs--history-earliest-seq 90)
+        (= (alist-get 'beforeSeq (car requests)) 80)
+        (= (alist-get 'minTurns (alist-get 'turnWindow (car requests))) 3))
+      (funcall (pop callbacks) t
+               `((records . ,(vector
+                              (dsh-test--history-event-record "turn/start" 60 '((turn . 8)))
+                              (dsh-test--history-fixture "user/message" 61 "ROUND-8 QUESTION")
+                              (dsh-test--history-event-record "turn/start" 70 '((turn . 9)))
+                              (dsh-test--history-fixture "user/message" 71 "ROUND-9 QUESTION")))
+                 (hasMore . t)))
+      (dsh-test-assert "history-round-request-remaining-count"
+        (equal-including-properties before (buffer-string))
+        (= (alist-get 'beforeSeq (car requests)) 60)
+        (= (alist-get 'minTurns (alist-get 'turnWindow (car requests))) 1))
+      (funcall (pop callbacks) t
+               `((records . ,(vector
+                              (dsh-test--history-event-record "turn/start" 50 '((turn . 7)))
+                              (dsh-test--history-fixture "user/message" 51 "ROUND-7 QUESTION")))
+                 (hasMore . t)))
+      (dsh-test-assert "history-rounds-complete-range-is-rendered-once"
+        (null callbacks) (null dsh-emacs--history-loading)
+        (= (length requests) 3) (= dsh-emacs--history-earliest-seq 50)
+        (= dsh-emacs--anchor-seq 90) dsh-emacs--history-has-more
+        (string-match-p "Loaded rounds 7–9 (3 rounds)" feedback)
+        (not (string-match-p "^Round [0-9]+" (buffer-string)))
+        (< (dsh-test--history-text-pos "ROUND-7 QUESTION")
+           (dsh-test--history-text-pos "ROUND-8 QUESTION")
+           (dsh-test--history-text-pos "ROUND-9 QUESTION")
+           (dsh-test--history-text-pos "ROUND-9 MIDDLE")
+           (dsh-test--history-text-pos "ROUND-9 TAIL"))))))
+
+;; A smaller requested range discards the server's extra prefix, so it can
+;; be fetched next time; exhaustion reports the actual number of rounds.
+(dolist (target '(1 3))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs--buffer-session "round-count")
+    (setq dsh-emacs--history-earliest-seq 90
+          dsh-emacs--history-cursor 95 dsh-emacs--history-has-more t)
+    (let (feedback captured)
+      (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (_method params callback)
+                   (setq captured params)
+                   (funcall callback t
+                            `((records . ,(vector
+                                           (dsh-test--history-event-record "turn/start" 10 '((turn . 1)))
+                                           (dsh-test--history-fixture "user/message" 11 "FIRST ROUND")
+                                           (dsh-test--history-event-record "turn/start" 20 '((turn . 2)))
+                                           (dsh-test--history-fixture "user/message" 21 "SECOND ROUND")))
+                              (hasMore . :json-false)))))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq feedback (apply #'format format-string args)))))
+        (dsh-emacs-load-older-history target)
+        (dsh-test-assert (format "history-round-count-%d" target)
+          (= (alist-get 'minTurns (alist-get 'turnWindow (alist-get 'request captured))) target)
+          (= dsh-emacs--history-earliest-seq (if (= target 1) 20 10))
+          (eq (not (null dsh-emacs--history-has-more)) (= target 1))
+          (eq (not (null (dsh-test--history-text-pos "FIRST ROUND"))) (= target 3))
+          (string-match-p (if (= target 1) "Loaded rounds 2–2 (1 round)"
+                            "Loaded rounds 1–2 (2 rounds).*beginning") feedback))))))
+
+;; Cancellation and errors never advance the cursor or publish staged pages.
+(dolist (finish '(cancel failure stalled changed))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs--buffer-session "round-cancel")
+    (setq dsh-emacs--history-earliest-seq 90
+          dsh-emacs--history-cursor 95 dsh-emacs--history-has-more t)
+    (let ((before (buffer-string)) callbacks request feedback)
+      (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (_method _params callback)
+                   (setq callbacks (append callbacks (list callback)))))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq feedback (apply #'format format-string args)))))
+        (dsh-emacs-load-older-history)
+        (setq request dsh-emacs--history-loading)
+        (funcall (pop callbacks) t
+                 `((records . ,(vector (dsh-test--history-fixture "user/message" 80 "STAGED")))
+                   (hasMore . t)))
+        (pcase finish
+          ('cancel (dsh-emacs-load-older-history))
+          ('changed (setq dsh-emacs--history-earliest-seq 70)))
+        (funcall (pop callbacks) (not (eq finish 'failure))
+                 (if (eq finish 'stalled)
+                     `((records . ,(vector (dsh-test--history-fixture "user/message" 80 "DUPLICATE")))
+                       (hasMore . t))
+                   '((records . []) (hasMore . :json-false))))
+        (dsh-test-assert (format "history-round-%s-keeps-frontier" finish)
+          (null dsh-emacs--history-loading)
+          (null (marker-buffer (plist-get request :point)))
+          (= dsh-emacs--history-earliest-seq (if (eq finish 'changed) 70 90))
+          (equal-including-properties before (buffer-string))
+          (string-match-p (if (eq finish 'cancel) "canceled" "Could not load") feedback))))))
 
 ;; Automatic summaries are inspectable transcript events, not user messages or
 ;; proof that checkpoint application succeeded.  Counts describe old context.

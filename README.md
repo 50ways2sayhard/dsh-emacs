@@ -136,7 +136,8 @@ See [subagent integration](docs/subagents.md) for protocol and test details.
 | `s-v` | Paste a clipboard image, else yank text |
 | `C-c C-s` / `C-c M-s` | Switch session in this workspace / across all |
 | `C-c C-r` | Refresh |
-| `C-c C-o` | Load older messages above the current transcript |
+| `C-c C-o` | Load 3 complete earlier rounds; prefix chooses the count; press again to cancel |
+| `C-c >` | Return this window to the draft and follow new output |
 | `C-c C-w` | Copy (region → code block → message at point → last reply) |
 | `C-c C-y` | Fork into a new conversation through the assistant reply at point |
 | `C-c C-f` | Toggle mode-line stats |
@@ -144,6 +145,19 @@ See [subagent integration](docs/subagents.md) for protocol and test details.
 | `M-p` / `M-n` | Previous / next input |
 | `C-/` / `C-_` / `C-x u` | Undo input editing; redo with `C-g C-/`, or `undo-redo` on Emacs 28+ (the transcript is never undone) |
 | `TAB` | Complete a slash command or skill |
+
+**Reading history:** `C-c C-o` loads the previous 3 complete rounds.
+Use `C-u 1 C-c C-o` for one round or `C-u 5 C-c C-o` for five.
+A partly loaded oldest round is completed first and counts toward the total.
+Long rounds are fetched across as many bounded requests as needed. When done,
+the initiating window shows the newly loaded range, with a completion message
+such as “Loaded rounds 7–9 (3 rounds)”. If you moved point while
+waiting, your new position is kept; other windows always keep their place.
+Press `C-c C-o` again while loading to cancel. `M-x imenu` opens the normal
+Imenu question directory; `C-c >` returns to your draft and follows output.
+These controls work while a reply is running. History is not trimmed while a
+displayed window is scrolled away from the bottom. See
+[history controls](docs/customization.md#reading-history).
 
 Background-job status appears in the tool rows. Use `C-c C-j` to inspect
 retained output or stop a job; the mode line has no separate job count.
