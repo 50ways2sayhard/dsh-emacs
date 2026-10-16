@@ -71,6 +71,25 @@
 (require 'cl-lib)
 (require 'json)
 
+(defun dsh-protocol-read-json (&optional string)
+  "Decode wire JSON from STRING, or the current buffer at point.
+Objects use symbol-keyed alists, arrays use vectors, null is nil and
+false is `:json-false'.  Use native JSON support when available, with
+the Lisp reader as a fallback for builds without it.  Errors propagate
+to the transport boundary.  Input must already be decoded from UTF-8."
+  (if (and (fboundp 'json-available-p) (json-available-p))
+      (if string
+          (json-parse-string string :object-type 'alist :array-type 'array
+                             :null-object nil :false-object :json-false)
+        (json-parse-buffer :object-type 'alist :array-type 'array
+                           :null-object nil :false-object :json-false))
+    (let ((json-object-type 'alist)
+          (json-key-type 'symbol)
+          (json-array-type 'vector)
+          (json-null nil)
+          (json-false :json-false))
+      (if string (json-read-from-string string) (json-read)))))
+
 (defun dsh-protocol--list (value)
   "JSON VALUE (list or vector) as a proper list."
   (cond ((vectorp value) (append value nil))

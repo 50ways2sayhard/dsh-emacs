@@ -523,3 +523,36 @@ fold/removal pruning, buffer isolation, failed publication and repair of externa
 text/property edits. Existing regrouping and per-window focus tests still run.
 See [106](../postmortem/106-session-row-cache.md) for the decision and measurement
 limits.
+
+## Native wire JSON decoding (112)
+
+The first-open investigation measured the live host's 655 sessions across 17
+workspaces in the running GUI Emacs 31.1.50. Only durations, payload size, counts
+and equality results were recorded; session contents and credentials stayed in
+Emacs. The normalized list value encoded to 530,785 UTF-8 bytes. Initial samples
+attributed 64–93 ms to Lisp JSON decoding, 9–10 ms to struct conversion and
+19–31 ms to rendering into a fresh undisplayed buffer.
+
+A second trial alternated three Lisp and three native reads on real HTTP
+responses, with a 64 MiB GC threshold matching the asynchronous RPC path. Each
+response was then parsed by the other reader outside its timed section; all six
+results were equal, including nested values. Requests used the existing server
+and authentication. Numbers include GC and exclude GUI redisplay.
+
+| Reader | Parse samples (ms) | Median (ms) |
+|---|---|---:|
+| Lisp | 102.74, 89.76, 99.49 | 99.49 |
+| Native | 3.57, 7.02, 5.86 | 5.86 |
+
+This is about 94% less time in the measured parsing stage. Response arrival
+varied from 257–437 ms for Lisp samples and 243–301 ms for native samples;
+request-through-buffer-render times were 397–568 ms and 301–339 ms respectively.
+Those totals include server/network variation and do not isolate the parser's
+contribution or measure a cold GUI first paint.
+
+HTTP RPC/upload responses and WebSocket envelopes now use
+`dsh-protocol-read-json`. It preserves the existing wire shapes with native
+JSON support or a forced-shape Lisp fallback. List fetching, grouping, refresh
+replay and publication are unchanged. No improvement is claimed for server
+processing or builds without native JSON. See
+[112](../postmortem/112-native-wire-json.md) for the decision and limitations.

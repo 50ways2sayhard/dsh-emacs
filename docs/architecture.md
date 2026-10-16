@@ -431,6 +431,13 @@ gates each run behind `y-or-n-p` (see docs/shell-commands.md).
 
 ## Protocol layer (`dsh-emacs-protocol.el`)
 
+`dsh-protocol-read-json` owns JSON decoding for HTTP responses and WebSocket
+frames. It uses native JSON support when available and the Lisp reader otherwise.
+Both paths return symbol-keyed alists, vector arrays, nil for null and
+`:json-false` for false, independent of user json.el options. Transport code
+still owns UTF-8 decoding and error reporting. See
+[112](../postmortem/112-native-wire-json.md).
+
 dsh server responses arrive as decoded JSON alists (arrays as vectors). Their
 common shapes are normalized into `cl-defstruct` types here, and business code
 reads fields exclusively through generated accessors (e.g.
@@ -1097,13 +1104,12 @@ these renderer remnants are recorded as follow-up debt in decision 022.
 
 ## Chinese encoding
 
-The dsh service returns UTF-8 JSON. The `url` library inserts the response body
-as unibyte raw bytes, and `decode-coding-region` is a no-op in unibyte buffers
-(bytes are kept as-is), so a direct `json-read` would interpret each UTF-8 byte
-as a Latin-1 character, garbling Chinese text. This package therefore extracts
-the response body and decodes it with `decode-coding-string` as UTF-8 into a
-multibyte string, which is then parsed with `json-read-from-string` — Chinese
-titles, messages, and tool results all display correctly.
+The dsh service returns UTF-8 JSON. The `url` library can leave its response
+body in a unibyte buffer, where a direct Lisp JSON read would interpret UTF-8
+bytes as separate characters. `dsh-emacs--decode-response-body` decodes those
+bytes as UTF-8 and switches the response buffer to multibyte before inserting
+the decoded text. `dsh-protocol-read-json` then parses that buffer. This keeps
+Chinese titles, messages and tool results intact with either JSON reader.
 
 The outbound direction has the mirror hazard: the raw-socket requests in
 `dsh-emacs-server.el` (liveness probe, auth probe, launch-token exchange) are

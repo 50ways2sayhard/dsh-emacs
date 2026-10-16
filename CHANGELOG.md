@@ -248,6 +248,11 @@ minor) and stay undated until the release is cut.
 
 ### Changed
 
+- **Decode large session lists faster**: HTTP responses and event-stream frames
+  use native JSON parsing when available, reducing client-side work on first
+  open. Builds without native JSON keep the Lisp reader.
+  (rationale: postmortem/112)
+
 - **Faster Markdown rendering with less garbage collection**: code blocks
   set up each language's major mode once and reuse it, table rows are
   assembled without repeated string copies, and streamed flushes no longer

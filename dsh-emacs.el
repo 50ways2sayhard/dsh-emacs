@@ -529,7 +529,7 @@ methods).  Returns (ok-p . value) or nil."
                 (delete-region (point) (point-min))
                 (dsh-emacs--decode-response-body)
                 (goto-char (point-min))
-                (dsh-emacs--unwrap-response (json-read)))
+                (dsh-emacs--unwrap-response (dsh-protocol-read-json)))
             (kill-buffer buf)))
       (error
        ;; A 401 while we sent a cookie means the cached cookie is stale (an
@@ -629,7 +629,7 @@ which is what makes the octet-stream upload byte-exact."
                               (progn
                                 (dsh-emacs--decode-response-body)
                                 (goto-char (point-min))
-                                (json-read))
+                                (dsh-protocol-read-json))
                             (error
                              ;; Body cannot be parsed (non-JSON, cut stream,
                              ;; ...): print the reason but still dispatch the

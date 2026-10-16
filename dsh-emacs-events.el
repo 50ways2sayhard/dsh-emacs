@@ -79,7 +79,7 @@ following the server frame vocabulary (`item' carries :value, `error'
 carries :error, `cancel'/`end'/`ready'/`emit'/`waterfall' their own
 fields), or nil when JSON is not an object.  Only the shared envelope
 keys are read; frame-specific payloads stay on the caller."
-  (let ((msg (condition-case nil (json-read-from-string json)
+  (let ((msg (condition-case nil (dsh-protocol-read-json json)
                (error nil))))
     (when (and msg (listp msg))
       (let ((type (dsh-emacs-render--aget "type" msg))
@@ -446,7 +446,7 @@ is dropped."
       (if (and (processp process)
                (process-get process 'dsh-emacs-host-stream))
           (dsh-emacs-events--host-dispatch process json)
-        (let* ((message (condition-case nil (json-read-from-string json)
+        (let* ((message (condition-case nil (dsh-protocol-read-json json)
                           (error nil)))
                (stream-id (and (listp message)
                                (dsh-emacs-render--aget "streamId" message))))

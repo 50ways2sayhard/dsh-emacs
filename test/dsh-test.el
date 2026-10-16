@@ -1775,6 +1775,41 @@ candidates as the UI would via `all-completions', not by destructuring."
              (equal (cdr (assq 'code (cdr unwrapped))) "bad-request"))
     (dsh-test-pass "rpc-false-result-is-error")))
 
+;; Native and Lisp wire readers must preserve the same protocol shapes,
+;; independently of a user's json.el customization.
+(dolist (native (if (and (fboundp 'json-available-p) (json-available-p))
+                    '(t nil) '(nil)))
+  (let ((json-object-type 'hash-table)
+        (json-array-type 'list)
+        (json-key-type 'string)
+        (json-null :custom-null)
+        (json-false :custom-false)
+        (json (concat "{\"items\":[{\"sessionId\":\"s\",\"title\":\"中文 😊\","
+                      "\"blank\":false,\"running\":true,\"value\":null,"
+                      "\"array\":[],\"object\":{},\"count\":42,\"ratio\":1.25}]}"))
+        (expected '((items . [((sessionId . "s") (title . "中文 😊")
+                              (blank . :json-false) (running . t) (value)
+                              (array . []) (object) (count . 42)
+                              (ratio . 1.25))]))))
+    (cl-letf (((symbol-function 'json-available-p) (lambda () native)))
+      (dsh-test-assert (format "wire-json-string-shapes-native-%s" native)
+        (equal expected (dsh-protocol-read-json json)))
+      (with-temp-buffer
+        (insert "prefix " json)
+        (goto-char 8)
+        (dsh-test-assert (format "wire-json-buffer-shapes-native-%s" native)
+          (equal expected (dsh-protocol-read-json))
+          (eobp)))
+      (dolist (bad '("{\"items\":[" "{\"ok\":tru}" "\"unterminated"))
+        (dsh-test-assert (format "wire-json-rejects-malformed-native-%s" native)
+          (condition-case nil (progn (dsh-protocol-read-json bad) nil)
+            (error t))
+          (with-temp-buffer
+            (insert bad)
+            (goto-char (point-min))
+            (condition-case nil (progn (dsh-protocol-read-json) nil)
+              (error t))))))))
+
 ;; --- Test 15: JSON arrays and working directory ---
 (when (and (equal '(a b) (dsh-emacs--sequence-list [a b]))
            (equal "assistant/message"
