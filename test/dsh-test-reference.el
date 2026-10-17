@@ -10,6 +10,8 @@
 ;; ---------------------------------------------------------------------------
 (defun dsh-test-reference-reset ()
   "Reset the buffer-local @ reference cache state (current buffer)."
+  (when (timerp dsh-emacs--reference-fetch-timer)
+    (cancel-timer dsh-emacs--reference-fetch-timer))
   (setq-local dsh-emacs--reference-candidates nil
               dsh-emacs--reference-query nil
               dsh-emacs--reference-requested nil
@@ -17,6 +19,7 @@
               dsh-emacs--reference-fetch-gen 0
               dsh-emacs--reference-files nil
               dsh-emacs--reference-sessions nil
+              dsh-emacs--reference-fetch-timer nil
               dsh-emacs--reference-pop-token nil))
 
 ;; A short @ token must not copy the entire preceding draft on each keypress.
@@ -187,50 +190,46 @@
         (should (equal (dsh-test-completion-items collection)
                        '("file.txt" "dir/" "Session")))))))
 
-;; --- Corfu active popup: async refresh must not restart native completion ---
-(ert-deftest dsh-emacs-test-reference-reference-refresh-leaves-active-corfu-alone ()
+(ert-deftest dsh-emacs-test-reference-refresh-updates-only-current-corfu ()
   :tags '(dsh-unit)
-  (let ((buf (generate-new-buffer " *t-ref-corfu-refresh*"))
-        (completed nil)
-        (native-refreshed nil))
-    (unwind-protect
-        (with-current-buffer buf
-          (insert "@")
-          (setq-local dsh-emacs--input-marker (copy-marker (point-min))
-                      dsh-emacs--reference-requested ""
-                      dsh-emacs--reference-query "")
-          (cl-letf (((symbol-function 'get-buffer-window)
-                     (lambda (&rest _args) t))
-                    ((symbol-function 'run-with-idle-timer)
-                     (lambda (_delay _repeat function &rest _args)
-                       (funcall function)))
-                    ((symbol-function 'completion-at-point)
-                     (lambda () (setq completed t)))
-                    ((symbol-function 'corfu-auto--complete-deferred)
-                     (lambda (&optional _tick) (setq native-refreshed t))))
-            (let ((corfu-auto t)
-                  (completion-in-region-mode t))
-              (dsh-emacs-reference--schedule-popup-refresh))
-            (ert-info ((format "%s" "reference-refresh-leaves-active-corfu-alone"))
-              (should (null completed))
-              (should (null native-refreshed)))
-            (let ((corfu-auto t)
-                  (completion-in-region-mode nil))
-              (dsh-emacs-reference--schedule-popup-refresh))
-            (ert-info ((format "%s" "reference-refresh-does-not-reopen-nondirectory-corfu"))
-              (should (null native-refreshed))
-              (should (null completed)))
-            (let ((corfu-auto nil)
-                  (completion-in-region-mode nil))
-              (dsh-emacs-reference--schedule-popup-refresh))
-            ;; Non-corfu has no auto channel (cooperative, like slash): an async
-            ;; refresh never opens the completion UI itself — that stays on TAB.
-            (ert-info ((format "%s" "reference-refresh-never-opens-noncorfu"))
-              (should (null completed)))))
-      (when (buffer-live-p buf) (kill-buffer buf)))))
+  (save-window-excursion
+    (with-temp-buffer
+      (switch-to-buffer (current-buffer))
+      (insert "@")
+      (setq-local dsh-emacs--input-marker (point-min-marker)
+                  dsh-emacs--reference-requested ""
+                  dsh-emacs--reference-query "")
+      (let ((corfu-auto t)
+            (completion-in-region-mode t)
+            (completion-in-region--data
+             (list (point-min) (point-max)
+                   (lambda (_string _pred action)
+                     (when (eq action 'metadata)
+                       '(metadata (category . dsh-emacs-reference))))))
+            (last-command 'self-insert-command)
+            (refreshed 0) (opened 0))
+        (cl-letf (((symbol-function 'run-with-idle-timer)
+                   (lambda (_delay _repeat fn &rest args) (apply fn args)))
+                  ((symbol-function 'corfu--exhibit)
+                   (lambda (&rest _) (cl-incf refreshed)))
+                  ((symbol-function 'corfu-auto--complete-deferred)
+                   (lambda (&rest _) (cl-incf opened))))
+          (dsh-emacs-reference--schedule-popup-refresh)
+          (should (= refreshed 1))
+          (should (= opened 0))
+          (setq completion-in-region-mode nil)
+          (dsh-emacs-reference--schedule-popup-refresh)
+          (should (= opened 1))
+          (let ((last-command 'keyboard-quit))
+            (dsh-emacs-reference--schedule-popup-refresh))
+          (let ((corfu-auto nil))
+            (dsh-emacs-reference--schedule-popup-refresh))
+          (insert "new")
+          (dsh-emacs-reference--schedule-popup-refresh)
+          (should (= opened 1))
+          (should (= refreshed 1)))))))
 
-;; --- Corfu native table: edit/backspace only filters current candidates, does
-;; not start a remote refresh ---
+;; The watcher delegates to shared query scheduling, without opening a popup.
 (ert-deftest dsh-emacs-test-reference-reference-corfu-refreshes-query-without-restarting ()
   :tags '(dsh-unit)
   (let ((buf (generate-new-buffer " *t-ref-corfu-native-table*"))
@@ -249,8 +248,6 @@
                       dsh-emacs--reference-pop-token nil)
           (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
                      (lambda () "sess"))
-                    ((symbol-function 'dsh-emacs-reference--require-cache)
-                     (lambda (_session _query) t))
                     ((symbol-function 'dsh-emacs-reference--fetch-query)
                      (lambda (session-id query)
                        (setq fetched (list session-id query))))
@@ -270,7 +267,7 @@
               (should (equal fetched '("sess" "")))
               (should (null opened))
               (should (null prefetched)))
-            ;; A trailing slash is the one Corfu edit that drills remotely.
+            ;; A trailing slash skips the ordinary query debounce.
             (goto-char (point-max))
             (insert "src/")
             (dsh-emacs-reference--auto-complete)
@@ -278,6 +275,102 @@
               (should (equal fetched '("sess" "src/")))
               (should (= delay-seen 0)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
+
+;; Pre-fetch is shared by every frontend, Corfu included; a query the user has
+;; already requested still wins.
+(ert-deftest dsh-emacs-test-reference-prefetch-warms-every-frontend ()
+  :tags '(dsh-unit)
+  (let ((buf (generate-new-buffer " *t-ref-prefetch*"))
+        (corfu-auto t)
+        (dsh-emacs-reference-prefetch-delay 0.25))
+    (unwind-protect
+        (with-current-buffer buf
+          (let (timers fetched)
+            (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                       (lambda () "sess"))
+                      ((symbol-function 'run-with-idle-timer)
+                       (lambda (delay _repeat function &rest _args)
+                         (push (cons delay function) timers)
+                         (timer-create)))
+                      ((symbol-function 'dsh-emacs-reference--fetch-query)
+                       (lambda (session-id query)
+                         (setq fetched (list session-id query)))))
+              (dsh-emacs-reference-prefetch "sess")
+              (ert-info ((format "%s" "prefetch-warms-corfu-buffers"))
+                (should (equal (mapcar #'car timers) '(0.25))))
+              (funcall (cdar timers))
+              (ert-info ((format "%s" "prefetch-fetches-the-bare-query"))
+                (should (equal fetched '("sess" "")))
+                (should (equal dsh-emacs--reference-requested "")))
+              ;; A query the user already started takes precedence.
+              (setq timers nil fetched nil)
+              (setq dsh-emacs--reference-requested "src")
+              (dsh-emacs-reference-prefetch "sess")
+              (ert-info ((format "%s" "prefetch-yields-to-a-started-query"))
+                (should-not timers)
+                (should-not fetched)))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest dsh-emacs-test-reference-fetch-waits-for-both-slices ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-test-reference-reset)
+    (let (callbacks)
+      (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (method _params callback)
+                   (push (cons method callback) callbacks)))
+                ((symbol-function 'dsh-emacs-reference--schedule-popup-refresh)
+                 #'ignore))
+        (setq dsh-emacs--reference-requested "read")
+        (dsh-emacs-reference--fetch-query "sess" "read")
+        (funcall (cdr (assoc "fileReferences/list" callbacks))
+                 t [((path . "README.md") (kind . "file"))])
+        (should dsh-emacs--reference-inflight)
+        (should-not dsh-emacs--reference-query)
+        (funcall (cdr (assoc "sessionReferenceResolver/candidates" callbacks))
+                 t [])
+        (should-not dsh-emacs--reference-inflight)
+        (should (equal dsh-emacs--reference-query "read"))
+        (should (equal (mapcar #'car dsh-emacs--reference-candidates)
+                       '("@README.md")))))))
+
+(ert-deftest dsh-emacs-test-reference-native-matching-and-live-results ()
+  :tags '(dsh-unit)
+  (dolist (case '(("@re" "" (("@README.md" :kind file :path "README.md")))
+                  ("@workspace" "workspace"
+                   (("@[Design](dsh-session:cw)" :kind session
+                     :label "Design" :session-id "s1" :cwd "/workspace")))
+                  ("@\"src/a" "src/a"
+                   (("@src/a.ts" :kind file :path "src/a.ts")))))
+    (with-temp-buffer
+      (pcase-let ((`(,input ,query ,entries) case))
+        (insert input)
+        (setq-local dsh-emacs--input-marker (point-min-marker)
+                    dsh-emacs--reference-query query
+                    dsh-emacs--reference-candidates entries)
+        (let ((completion-styles '(basic))
+              (completion-category-overrides nil))
+          (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                     (lambda () "sess"))
+                    ((symbol-function 'dsh-emacs-reference--require-cache)
+                     (lambda (_session _query) t)))
+            (let* ((capf (dsh-emacs-reference-completion-at-point))
+                   (table (nth 2 capf))
+                   (matches (completion-all-completions
+                             input table nil (length input))))
+              (should (stringp (car matches)))
+              (should (equal (cdr (last matches)) 0))
+              (should (equal (substring-no-properties (car matches))
+                             (cond ((equal input "@re") "@README.md")
+                                   ((equal input "@workspace") "@Design")
+                                   (t "@\"src/a.ts\""))))
+              (setq dsh-emacs--reference-query "button"
+                    dsh-emacs--reference-candidates
+                    '(("@src/button.ts" :kind file :path "src/button.ts")))
+              (setq matches (completion-all-completions "@button" table nil 7))
+              (should (equal (substring-no-properties (car matches))
+                             (if (string-prefix-p "@\"" input)
+                                 "@\"src/button.ts\"" "@src/button.ts"))))))))))
 
 ;; --- fetch-query: two remotes concurrently, install the cache after both
 ;; slices land ---
@@ -315,66 +408,60 @@
         (should (equal (mapcar #'car dsh-emacs--reference-candidates)
                        '("@README.md" "@[T](dsh-session:cyJpZCI6InMxIn0)")))))))
 
-;; --- require-cache: first sync fetch; a stale cache keeps answering and does not
-;; fetch again ---
-(ert-deftest dsh-emacs-test-reference-require-cache-first-trigger-sync ()
+(ert-deftest dsh-emacs-test-reference-require-cache-is-nonblocking ()
   :tags '(dsh-unit)
-  (let ((rpc-requests nil))
-    (with-temp-buffer
-      (dsh-test-reference-reset)
+  (with-temp-buffer
+    (dsh-test-reference-reset)
+    (let (calls callbacks)
       (cl-letf (((symbol-function 'dsh-emacs--rpc-request)
-                 (lambda (method params)
-                   (push (list method params) rpc-requests)
-                   (cond
-                    ((string= method "fileReferences/list")
-                     (cons t [((path . "F") (kind . "file"))]))
-                    ((string= method "sessionReferenceResolver/candidates")
-                     (cons t []))
-                    (t (cons nil nil))))))
-        (let ((ok (dsh-emacs-reference--require-cache "sess" "")))
-          (ert-info ((format "%s" "require-cache-first-trigger-sync"))
-            (should ok)
-            (should (= 2 (length rpc-requests)))
-            (should (equal dsh-emacs--reference-query ""))
-            (should (equal (mapcar #'car dsh-emacs--reference-candidates) '("@F")))
-            (should (equal (cadr (assoc "fileReferences/list" rpc-requests))
-                           '((agentId . "sess") (query . ""))))))
-        (setq dsh-emacs--reference-requested "F2")
-        (let ((stale-len (length rpc-requests)))
-          (ert-info ((format "%s" "require-cache-stale-answers-without-fetch"))
-            (should (dsh-emacs-reference--require-cache "sess" "F2"))
-            (should (= (length rpc-requests) stale-len))))))))
+                 (lambda (&rest _) (ert-fail "Synchronous reference request")))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (_delay _repeat function &rest args)
+                   (apply function args)))
+                ((symbol-function 'dsh-emacs-reference--schedule-popup-refresh)
+                 #'ignore)
+                ((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (method params cb)
+                   (push (list method params) calls)
+                   (push (cons method cb) callbacks))))
+        (should-not (dsh-emacs-reference--require-cache "sess" ""))
+        (should (= (length calls) 2))
+        (should dsh-emacs--reference-inflight)
+        (funcall (cdr (assoc "fileReferences/list" callbacks))
+                 t [((path . "F") (kind . "file"))])
+        (funcall (cdr (assoc "sessionReferenceResolver/candidates" callbacks)) t [])
+        (should (equal dsh-emacs--reference-query ""))
+        (should (dsh-emacs-reference--require-cache "sess" "F2"))
+        (should (= (length calls) 4))
+        (should (equal dsh-emacs--reference-requested "F2"))
+        (should (equal (mapcar #'car dsh-emacs--reference-candidates) '("@F")))))))
 
 ;; --- after finishing a reference (fetch state already reset), typing @ again: no
 ;; longer eats the narrowed cache, re-fetches the full set. Otherwise the next @
 ;; would only see the single candidate left by the previous query.
 (ert-deftest dsh-emacs-test-reference-post-completion-reopen-refetches-full-list ()
   :tags '(dsh-unit)
-  (let ((rpc-requests nil))
-    (with-temp-buffer
-      (dsh-test-reference-reset)
-      ;; Simulate "just finished a reference": query/requested have been cleared by the
-      ;; reset, but the cache still holds the result of the previous narrowed query
-      ;; (just one freshly selected candidate).
-      (setq-local dsh-emacs--reference-query nil
-                  dsh-emacs--reference-requested nil
-                  dsh-emacs--reference-candidates
-                  (list (cons "@just-picked.ts"
-                              '(:kind file :path "just-picked.ts"))))
-      (cl-letf (((symbol-function 'dsh-emacs--rpc-request)
-                 (lambda (method _params)
-                   (push method rpc-requests)
-                   (cond
-                    ((string= method "fileReferences/list")
-                     (cons t [((path . "a.ts") (kind . "file"))
-                              ((path . "b.ts") (kind . "file"))]))
-                    ((string= method "sessionReferenceResolver/candidates")
-                     (cons t []))
-                    (t (cons nil nil))))))
-        (ert-info ((format "%s" "post-completion-reopen-refetches-full-list"))
-          (should (dsh-emacs-reference--require-cache "sess" ""))
-          (should (equal (mapcar #'car dsh-emacs--reference-candidates)
-                         '("@a.ts" "@b.ts"))))))))
+  (with-temp-buffer
+    (dsh-test-reference-reset)
+    (setq dsh-emacs--reference-candidates
+          '(("@just-picked.ts" :kind file :path "just-picked.ts")))
+    (let (calls)
+      (cl-letf (((symbol-function 'run-with-idle-timer)
+                 (lambda (_delay _repeat fn &rest args) (apply fn args)))
+                ((symbol-function 'dsh-emacs-reference--schedule-popup-refresh)
+                 #'ignore)
+                ((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (method _params callback)
+                   (push method calls)
+                   (funcall callback t
+                            (if (equal method "fileReferences/list")
+                                [((path . "a.ts") (kind . "file"))
+                                 ((path . "b.ts") (kind . "file"))]
+                              [])))))
+        (should (dsh-emacs-reference--require-cache "sess" ""))
+        (should (= (length calls) 2))
+        (should (equal (mapcar #'car dsh-emacs--reference-candidates)
+                       '("@a.ts" "@b.ts")))))))
 
 ;; --- require-cache: a stale cache keeps answering while in-flight (the popup does
 ;; not disappear) ---
@@ -420,12 +507,13 @@
 ;; style) ---
 (ert-deftest dsh-emacs-test-reference-affixate-icon-column-shape ()
   :tags '(dsh-unit)
-  (let ((dsh-emacs--reference-candidates
-         (list (cons "@a.ts" '(:kind file :path "src/a.ts"))
-               (cons "@sub/" '(:kind directory :path "sub"))
-               (cons "@[T](dsh-session:x)"
-                     '(:kind session :label "T" :cwd "/w"
-                             :same-workspace t)))))
+  (let* ((entries (list (cons "@a.ts" '(:kind file :path "src/a.ts"))
+                        (cons "@sub/" '(:kind directory :path "sub"))
+                        (cons "@[T](dsh-session:x)"
+                              '(:kind session :label "T" :cwd "/w"
+                                      :same-workspace t))))
+         (map (dsh-emacs-reference--snapshot-affix
+               entries (dsh-emacs-reference--session-rows entries))))
     (cl-letf (((symbol-function 'dsh-emacs-reference--row-icon)
                (lambda (path kind)
                  (pcase kind
@@ -434,47 +522,38 @@
                    ('session "R")
                    (_ nil)))))
       (ert-info ((format "%s" "affixate-icon-column-shape"))
-        (should (equal (dsh-emacs-reference--affixate
-                        '("@a.ts" "@sub/" "@[T](dsh-session:x)"))
+        (should (equal (dsh-emacs-reference--affixate-with
+                        map '("@a.ts" "@sub/" "@[T](dsh-session:x)"))
                        '(("@a.ts" "F " "")
                          ("@sub/" "D " "")
                          ("@[T](dsh-session:x)" "R " ""))))))
     (ert-info ((format "%s" "affixate-without-provider-text-only"))
       (should (cl-letf (((symbol-function 'dsh-emacs-reference--row-icon)
                          (lambda (_path _kind) nil)))
-                (equal (dsh-emacs-reference--affixate '("@a.ts" "@sub/"))
+                (equal (dsh-emacs-reference--affixate-with
+                        map '("@a.ts" "@sub/"))
                        '(("@a.ts" "" "")
                          ("@sub/" "" ""))))))
     (ert-info ((format "%s" "affixate-inline-icons-off"))
       (should (let ((dsh-emacs-reference-inline-icons nil))
-                (equal (dsh-emacs-reference--affixate '("@a.ts"))
+                (equal (dsh-emacs-reference--affixate-with map '("@a.ts"))
                        '(("@a.ts" "" ""))))))
     ;; --row-icon: a non-graphical frame outputs no nerd-font PUA glyphs (terminal
     ;; tofu blocks); a graphical frame with the provider available returns the
     ;; file/directory/session icon by kind
     (ert-info ((format "%s" "row-icon-gated-off-on-non-graphic"))
-      (should (cl-letf (((symbol-function 'display-graphic-p) (lambda () nil))
-                        ((symbol-function 'featurep)
-                         (lambda (f &optional _sub) (eq f 'nerd-icons)))
-                        ((symbol-function 'fboundp)
-                         (lambda (s)
-                           (memq s '(nerd-icons-icon-for-file nerd-icons-icon-for-dir)))))
+      (should (cl-letf (((symbol-function 'display-graphic-p) (lambda () nil)))
                 (and (null (dsh-emacs-reference--row-icon "src/a.ts" 'file))
                      (null (dsh-emacs-reference--row-icon nil 'session))))))
     (ert-info ((format "%s" "row-icon-graphic-uses-provider"))
-      (should (cl-letf (((symbol-function 'display-graphic-p) (lambda () t))
-                        ((symbol-function 'featurep)
-                         (lambda (f &optional _sub) (eq f 'nerd-icons)))
-                        ((symbol-function 'fboundp)
-                         (lambda (s)
-                           (memq s '(nerd-icons-icon-for-file nerd-icons-icon-for-dir))))
-                        ((symbol-function 'nerd-icons-icon-for-file) (lambda (_f) "F"))
-                        ((symbol-function 'nerd-icons-icon-for-dir) (lambda (_d) "D"))
-                        ((symbol-function 'nerd-icons-codicon) (lambda (_n) "R")))
-                (and (string= (dsh-emacs-reference--row-icon "src/a.ts" 'file) "F")
-                     (string= (dsh-emacs-reference--row-icon "src" 'directory) "D")
-                     ;; Session rows use codicon references glyphs (path ignored)
-                     (string= (dsh-emacs-reference--row-icon nil 'session) "R")))))))
+      (cl-progv '(features) (list (cons 'nerd-icons features))
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda () t))
+                  ((symbol-function 'nerd-icons-icon-for-file) (lambda (_f) "F"))
+                  ((symbol-function 'nerd-icons-icon-for-dir) (lambda (_d) "D"))
+                  ((symbol-function 'nerd-icons-codicon) (lambda (_n) "R")))
+          (should (equal (dsh-emacs-reference--row-icon "src/a.ts" 'file) "F"))
+          (should (equal (dsh-emacs-reference--row-icon "src" 'directory) "D"))
+          (should (equal (dsh-emacs-reference--row-icon nil 'session) "R")))))))
 
 ;; --- icon data is snapshotted when the completion table is built: a background
 ;; fetch then replaces `dsh-emacs--reference-candidates' with the results of a
@@ -484,11 +563,11 @@
 ;; filtering)
 (ert-deftest dsh-emacs-test-reference-affix-snapshot-survives-cache-swap ()
   :tags '(dsh-unit)
-  (let* ((dsh-emacs--reference-candidates
-          (list (cons "@a.ts" '(:kind file :path "src/a.ts"))
-                (cons "@sub/" '(:kind directory :path "sub"))))
-         (rows (dsh-emacs-reference--session-rows))
-         (map (dsh-emacs-reference--snapshot-affix '("@a.ts" "@sub/") rows)))
+  (let* ((entries (list (cons "@a.ts" '(:kind file :path "src/a.ts"))
+                        (cons "@sub/" '(:kind directory :path "sub"))))
+         (dsh-emacs--reference-candidates entries)
+         (rows (dsh-emacs-reference--session-rows entries))
+         (map (dsh-emacs-reference--snapshot-affix entries rows)))
     ;; A narrower fetch lands, replacing the global cache
     (setq dsh-emacs--reference-candidates
           (list (cons "@fresh.md" '(:kind file :path "fresh.md"))))
@@ -1024,6 +1103,354 @@
           (ert-info ((format "%s" "active-token-in-progress-still-triggers"))
             (should (equal (dsh-emacs-reference--active-token) '("@re" "re" nil)))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
+
+;; Async regressions retain real callback ordering without a server or timers.
+(ert-deftest dsh-emacs-test-reference-regression-reset-rejects-old-generation ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (let (calls)
+      (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (method params callback)
+                   (push (list method (cdr (assq 'query params)) callback) calls)))
+                ((symbol-function 'dsh-emacs-reference--schedule-popup-refresh)
+                 #'ignore))
+        (setq dsh-emacs--reference-requested "old")
+        (dsh-emacs-reference--fetch-query "sess" "old")
+        (let ((old-file (nth 2 (cadr calls)))
+              (old-session (nth 2 (car calls))))
+          (funcall old-file t [((path . "old.txt") (kind . "file"))])
+          (should dsh-emacs--reference-inflight)
+          (should-not dsh-emacs--reference-query)
+          (dsh-emacs-reference--reset-fetch)
+          (setq dsh-emacs--reference-requested "new")
+          (dsh-emacs-reference--fetch-query "sess" "new")
+          (funcall old-session t [])
+          (funcall old-file t [((path . "obsolete.txt") (kind . "file"))])
+          (should (eq dsh-emacs--reference-files 'pending))
+          (should (eq dsh-emacs--reference-sessions 'pending))
+          (should dsh-emacs--reference-inflight)
+          (funcall (nth 2 (car calls)) t [])
+          (should dsh-emacs--reference-inflight)
+          (should-not dsh-emacs--reference-query)
+          (funcall (nth 2 (cadr calls))
+                   t [((path . "new.txt") (kind . "file"))])
+          (should-not dsh-emacs--reference-inflight)
+          (should (equal dsh-emacs--reference-query "new"))
+          (should (equal (mapcar #'car dsh-emacs--reference-candidates)
+                         '("@new.txt"))))))))
+
+(ert-deftest dsh-emacs-test-reference-regression-superseded-query-coalesces ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (let (calls timers)
+      (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (method params callback)
+                   (push (list method (cdr (assq 'query params)) callback) calls)))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (_delay _repeat function &rest _args)
+                   (let ((timer (timer-create)))
+                     (push (cons timer function) timers)
+                     timer)))
+                ((symbol-function 'dsh-emacs-reference--schedule-popup-refresh)
+                 #'ignore))
+        (setq dsh-emacs--reference-requested "a")
+        (dsh-emacs-reference--fetch-query "sess" "a")
+        (dsh-emacs-reference--require-cache "sess" "ab")
+        (dsh-emacs-reference--require-cache "sess" "abc")
+        (should (= (length calls) 2))
+        (should-not timers)
+        (funcall (nth 2 (cadr calls))
+                 t [((path . "a.txt") (kind . "file"))])
+        (should dsh-emacs--reference-inflight)
+        (should-not timers)
+        (funcall (nth 2 (car calls)) t [])
+        (should-not dsh-emacs--reference-query)
+        (should-not dsh-emacs--reference-candidates)
+        (should (= (length timers) 1))
+        (funcall (cdar timers))
+        (should (equal (mapcar #'cadr (reverse calls))
+                       '("a" "a" "abc" "abc")))
+        (funcall (nth 2 (car calls)) t [])
+        (should dsh-emacs--reference-inflight)
+        (funcall (nth 2 (cadr calls))
+                 t [((path . "abc.txt") (kind . "file"))])
+        (should (equal dsh-emacs--reference-query "abc"))
+        (should (equal (mapcar #'car dsh-emacs--reference-candidates)
+                       '("@abc.txt")))))))
+
+(ert-deftest dsh-emacs-test-reference-regression-debounce-cancels-old-timer ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (let ((dsh-emacs-reference-fetch-delay 0.25)
+          timers cancelled calls)
+      (setq dsh-emacs--reference-query "")
+      (cl-letf (((symbol-function 'run-with-idle-timer)
+                 (lambda (delay _repeat function &rest _args)
+                   (let ((timer (timer-create)))
+                     (push (list timer function delay) timers)
+                     timer)))
+                ((symbol-function 'cancel-timer)
+                 (lambda (timer) (push timer cancelled)))
+                ((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (_method params _callback)
+                   (push (cdr (assq 'query params)) calls))))
+        (dsh-emacs-reference--require-cache "sess" "a")
+        (let ((old (car timers)))
+          (dsh-emacs-reference--require-cache "sess" "ab")
+          (dsh-emacs-reference--require-cache "sess" "ab")
+          (should (= (length timers) 2))
+          (should (equal cancelled (list (car old))))
+          (should (equal (mapcar #'caddr timers) '(0.25 0.25)))
+          ;; Even an already-queued cancelled callback cannot start its query.
+          (funcall (cadr old))
+          (should-not calls)
+          (should (eq dsh-emacs--reference-fetch-timer (caar timers)))
+          (funcall (cadar timers))
+          (should (equal calls '("ab" "ab")))
+          (should-not dsh-emacs--reference-fetch-timer)
+          (should dsh-emacs--reference-inflight))))))
+
+;; Exercise the style protocol with real input, not empty table enumeration.
+(ert-deftest dsh-emacs-test-reference-regression-fresh-matches-and-predicate ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "@read")
+    (setq-local dsh-emacs--input-marker (point-min-marker)
+                dsh-emacs--reference-query "read"
+                dsh-emacs--reference-candidates
+                '(("@README.md" :kind file :path "README.md")
+                  ("@[Design](dsh-session:InMxIg)" :kind session
+                   :label "Design" :session-id "s1" :cwd "/work/read")))
+    (let ((completion-category-overrides nil)
+          (completion-styles '(basic))
+          (completion-ignore-case nil))
+      (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                 (lambda () "sess"))
+                ((symbol-function 'dsh-emacs-reference--require-cache)
+                 (lambda (&rest _args) t)))
+        (let ((table (nth 2 (dsh-emacs-reference-completion-at-point))))
+          (should (equal (completion-all-completions "@read" table nil 5)
+                         '("@README.md" "@Design" . 0)))
+          (should (equal (completion-all-completions
+                          "@read" table (lambda (row) (equal row "@Design")) 5)
+                         '("@Design" . 0)))
+          (should (equal (completion-try-completion
+                          "@read" table (lambda (row) (equal row "@Design")) 5)
+                         '("@Design" . 7)))
+          (should-not (completion-all-completions
+                       "@read" table (lambda (_row) nil) 5)))))))
+
+;; A settled query belongs to the host: a row it returned stays offered even
+;; when the client-side search fields could not have found it, while the same
+;; row is filtered out as soon as the cache no longer answers this query.
+(ert-deftest dsh-emacs-test-reference-regression-fresh-results-trust-the-host ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "@zzz")
+    (setq-local dsh-emacs--input-marker (point-min-marker)
+                dsh-emacs--reference-query "zzz"
+                dsh-emacs--reference-candidates
+                '(("@README.md" :kind file :path "README.md")))
+    (let ((completion-category-overrides nil)
+          (completion-styles '(basic)))
+      (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                 (lambda () "sess"))
+                ((symbol-function 'dsh-emacs-reference--require-cache)
+                 (lambda (&rest _args) t)))
+        (let ((table (nth 2 (dsh-emacs-reference-completion-at-point))))
+          (ert-info ((format "%s" "fresh-results-trust-the-host"))
+            (should (equal (completion-all-completions "@zzz" table nil 4)
+                           '("@README.md" . 0))))
+          (setq dsh-emacs--reference-query "other")
+          (ert-info ((format "%s" "stale-results-filter-by-search-fields"))
+            (should-not (completion-all-completions "@zzz" table nil 4))))))))
+
+(ert-deftest dsh-emacs-test-reference-regression-cached-search-fields ()
+  :tags '(dsh-unit)
+  (dolist (case '(("@read" "@README.md")
+                  ("@source-123" "@Design")
+                  ("@workspace" "@Design")
+                  ("@src\\read" "@src/readme.md")))
+    (with-temp-buffer
+      (insert (car case))
+      (setq-local dsh-emacs--input-marker (point-min-marker)
+                  dsh-emacs--reference-query ""
+                  dsh-emacs--reference-candidates
+                  '(("@README.md" :kind file :path "README.md")
+                    ("@src/readme.md" :kind file :path "src/readme.md")
+                    ("@[Design](dsh-session:InMxIg)" :kind session
+                     :label "Design" :session-id "source-123"
+                     :cwd "/work/workspace")))
+      (let ((completion-category-overrides nil)
+            (completion-styles '(basic))
+            (completion-ignore-case nil))
+        (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                   (lambda () "sess"))
+                  ((symbol-function 'dsh-emacs-reference--require-cache)
+                   (lambda (&rest _args) t)))
+          (let* ((table (nth 2 (dsh-emacs-reference-completion-at-point)))
+                 (matches (completion-all-completions
+                           (car case) table nil (length (car case)))))
+            (should (equal matches
+                           (if (equal (car case) "@read")
+                               '("@README.md" "@src/readme.md" . 0)
+                             (cons (cadr case) 0))))))))))
+
+(ert-deftest dsh-emacs-test-reference-regression-user-basic-override ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "@r")
+    (setq-local dsh-emacs--input-marker (point-min-marker)
+                dsh-emacs--reference-query "r"
+                dsh-emacs--reference-candidates
+                '(("@src/readme.md" :kind file :path "src/readme.md")
+                  ("@README.md" :kind file :path "README.md")
+                  ("@root.txt" :kind file :path "root.txt")))
+    (let ((completion-category-overrides
+           '((dsh-emacs-reference (styles basic))))
+          (completion-styles '(basic))
+          (completion-ignore-case nil))
+      (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                 (lambda () "sess"))
+                ((symbol-function 'dsh-emacs-reference--require-cache)
+                 (lambda (&rest _args) t)))
+        (let ((table (nth 2 (dsh-emacs-reference-completion-at-point))))
+          (should (equal (completion-all-completions "@r" table nil 2)
+                         '("@root.txt" . 0))))))))
+
+(ert-deftest dsh-emacs-test-reference-regression-live-table-foreign-buffer ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "@old")
+    (setq-local dsh-emacs--input-marker (point-min-marker)
+                dsh-emacs--reference-query "old"
+                dsh-emacs--reference-candidates
+                '(("@old.txt" :kind file :path "old.txt")))
+    (let ((origin (current-buffer))
+          (completion-category-overrides nil)
+          (completion-styles '(basic)))
+      (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                 (lambda () "sess"))
+                ((symbol-function 'dsh-emacs-reference--require-cache)
+                 (lambda (&rest _args) t)))
+        (let ((table (nth 2 (dsh-emacs-reference-completion-at-point))))
+          (with-temp-buffer
+            (setq-local dsh-emacs--reference-query "old"
+                        dsh-emacs--reference-candidates
+                        '(("@foreign.txt" :kind file :path "foreign.txt")))
+            (should (equal (completion-all-completions "@old" table nil 4)
+                           '("@old.txt" . 0)))
+            (with-current-buffer origin
+              (setq dsh-emacs--reference-query "new"
+                    dsh-emacs--reference-candidates
+                    '(("@new.txt" :kind file :path "new.txt"))))
+            (should (equal (completion-all-completions "@new" table nil 4)
+                           '("@new.txt" . 0)))
+            (should (equal dsh-emacs--reference-query "old"))))))))
+
+(ert-deftest dsh-emacs-test-reference-regression-quoted-directory-pick ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "@\"sr")
+    (setq-local dsh-emacs--input-marker (point-min-marker)
+                dsh-emacs--reference-query "sr"
+                dsh-emacs--reference-candidates
+                '(("@src/" :kind directory :path "src")))
+    (let ((completion-category-overrides nil)
+          (completion-styles '(basic))
+          requested)
+      (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                 (lambda () "sess"))
+                ((symbol-function 'dsh-emacs-reference--require-cache)
+                 (lambda (&rest _args) t))
+                ((symbol-function 'dsh-emacs-reference--fetch-query)
+                 (lambda (session query) (setq requested (list session query)))))
+        (let* ((capf (dsh-emacs-reference-completion-at-point))
+               (table (nth 2 capf))
+               (exit (plist-get (nthcdr 3 capf) :exit-function))
+               (result (completion-try-completion "@\"sr" table nil 4)))
+          (should (equal result '("@\"src/" . 6)))
+          (delete-region (nth 0 capf) (nth 1 capf))
+          (insert (car result))
+          (funcall exit (car result) 'finished)
+          (should (equal (buffer-string) "@\"src/"))
+          (should (equal requested '("sess" "src/")))
+          (should-not (get-text-property (point-min) 'dsh-emacs-reference-chip))
+          (should (equal (dsh-emacs-reference--active-token)
+                         '("@\"src/" "src/" t))))))))
+
+(ert-deftest dsh-emacs-test-reference-regression-snapshot-file-pick ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "@old")
+    (setq-local dsh-emacs--input-marker (point-min-marker)
+                dsh-emacs--reference-query "old"
+                dsh-emacs--reference-candidates
+                '(("@old.txt" :kind file :path "old.txt")))
+    (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+               (lambda () "sess"))
+              ((symbol-function 'dsh-emacs-reference--require-cache)
+               (lambda (&rest _args) t)))
+      (let* ((capf (dsh-emacs-reference-completion-at-point))
+             (exit (plist-get (nthcdr 3 capf) :exit-function)))
+        (setq dsh-emacs--reference-query "new"
+              dsh-emacs--reference-candidates
+              '(("@new.txt" :kind file :path "new.txt")))
+        (delete-region (nth 0 capf) (nth 1 capf))
+        (insert "@old.txt")
+        (funcall exit "@old.txt" 'finished)
+        (should (equal (get-text-property (point-min) 'dsh-emacs-reference-ref)
+                       '(file . "old.txt")))
+        (should (get-text-property (point-min) 'dsh-emacs-reference-chip))
+        (should-not dsh-emacs--reference-query)))))
+
+(ert-deftest dsh-emacs-test-reference-regression-stock-exact-stays-editable ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "@a")
+    (setq-local dsh-emacs--input-marker (point-min-marker)
+                dsh-emacs--reference-query "a"
+                dsh-emacs--reference-candidates
+                '(("@a" :kind file :path "a")
+                  ("@ab" :kind file :path "ab"))
+                completion-at-point-functions
+                '(dsh-emacs-reference-completion-at-point))
+    (let ((completion-category-overrides nil)
+          (completion-styles '(basic))
+          (completion-cycle-threshold nil)
+          (completion-in-region-function #'completion--in-region))
+      (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                 (lambda () "sess"))
+                ((symbol-function 'dsh-emacs-reference--require-cache)
+                 (lambda (&rest _args) t)))
+        (completion-at-point)
+        (should (equal (buffer-string) "@a"))
+        (should-not (get-text-property (point-min) 'dsh-emacs-reference-chip))
+        (should (equal dsh-emacs--reference-query "a"))
+        (should (equal (dsh-emacs-reference--active-token) '("@a" "a" nil)))
+        (insert "b")
+        (completion-at-point)
+        (should (equal (buffer-string) "@ab"))
+        (should (equal (get-text-property (point-min) 'dsh-emacs-reference-ref)
+                       '(file . "ab")))))))
+
+(ert-deftest dsh-emacs-test-reference-table-outlives-source-buffer ()
+  :tags '(dsh-unit)
+  (let ((table
+         (with-temp-buffer
+           (insert "@a")
+           (setq-local dsh-emacs--input-marker (point-min-marker)
+                       dsh-emacs--reference-query "a"
+                       dsh-emacs--reference-candidates
+                       '(("@a.txt" :kind file :path "a.txt")))
+           (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                      (lambda () "sess"))
+                     ((symbol-function 'dsh-emacs-reference--require-cache)
+                      (lambda (&rest _) t)))
+             (nth 2 (dsh-emacs-reference-completion-at-point))))))
+    (should (equal (completion-metadata "" table nil) '(metadata)))
+    (should-not (all-completions "" table nil))
+    (should-not (completion-all-completions "@a" table nil 2))))
 
 (provide 'dsh-test-reference)
 ;;; dsh-test-reference.el ends here

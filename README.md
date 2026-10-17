@@ -207,7 +207,10 @@ attachment-bearing item into a running turn, but refuses it while idle and
 leaves it queued; idle resubmission supports text-only items.
 
 Type **`@`** to choose file, directory or session references: `@src/` drills
-into a directory and `@session-title` mentions another session. See
+into a directory and `@session-title` mentions another session. Discovery runs
+in the background; matching ignores case and searches paths or session metadata,
+not just the displayed label. Corfu updates as results arrive; with other
+frontends, press `TAB` again if the first request is still loading. See
 [@ references](docs/reference.md).
 
 Type **`/`**, then press **`TAB`** to complete a slash command. Automatic

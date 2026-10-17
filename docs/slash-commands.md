@@ -107,8 +107,8 @@ instead of falling back silently. `/plan off` still changes the mode directly.
   input start stays with command completion even when the catalog is empty.
   The catalog is handed to the front-end whole and matching is Emacs's: this
   source's completion category defaults to ordinary prefix matching plus the
-  built-in `flex` style, registered in `completion-category-defaults` (the
-  same place `@` references get their `flex`).  So a word inside a long name
+  built-in `flex` style, registered in `completion-category-defaults`. So a word
+  inside a long name
   completes — `/probe` → `/dsh-emacs-skill-probe` — while an ambiguous prefix
   (`/p`) still just lists.  Your own `completion-styles` apply after those
   defaults, and setting `completion-category-overrides` for

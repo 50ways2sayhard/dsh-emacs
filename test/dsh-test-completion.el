@@ -499,7 +499,7 @@
 
 ;; --- Test 100c: the "/" catalog matches with the flex style by category ---
 ;; A chat buffer maps the `dsh-emacs-command' completion category to the
-;; built-in `flex' style, the way `@' references do, so a word inside a long
+;; built-in `flex' style, so a word inside a long
 ;; skill name completes even though the user's own `completion-styles' are only
 ;; `basic'.  The category rides the candidate table, and the capf's claim gate
 ;; reads that same table — which is what lets a mid-sentence `/probe' claim the
@@ -662,7 +662,7 @@
     (should (and (equal '(basic flex)
                         (cdr (assq 'styles (cdr (assq 'dsh-emacs-command
                                                       completion-category-defaults)))))
-                 (equal '(flex)
+                 (equal '(dsh-emacs-reference-search)
                         (cdr (assq 'styles (cdr (assq 'dsh-emacs-reference
                                                       completion-category-defaults)))))))))
 

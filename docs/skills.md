@@ -24,7 +24,7 @@ the normal send path delivers it.
   command actually matches, which leaves prose and paths to their own
   completion. A long name matches by word — `/probe` finds
   `dsh-emacs-skill-probe` (the `/` list defaults to prefix matching plus the
-  built-in `flex` style, like `@` references). A user-only skill is marked
+  built-in `flex` style). A user-only skill is marked
   `user-only` in the annotation.
 - **Pick it**: `M-x dsh-emacs-command` is the one slash menu — it offers the
   session's commands *and* skills with their descriptions. Picking a skill

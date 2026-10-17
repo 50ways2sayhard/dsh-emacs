@@ -341,6 +341,18 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **@ reference discovery never blocks**: both host queries run in the
+  background, even on a cold cache, so completion answers immediately and Corfu
+  refreshes its open popup as results arrive; other frontends read the new table
+  on their next completion. Prefetch now warms Corfu buffers too.
+  (rationale: postmortem/119)
+
+- **@ reference matching follows the host**: while a query loads, cached paths
+  and session label/ID/workspace match case-insensitively; settled host results
+  are offered as returned, quoted paths keep their quotes, and an ambiguous
+  exact prefix stays editable instead of becoming a chip. Late replies cannot
+  replace a newer query. (rationale: postmortem/119)
+
 - **Keep the cursor on row headers when folding**: pressing `RET` on a
   header, including its end, expands or collapses the same row without
   jumping below it. Consecutive presses keep targeting that row.

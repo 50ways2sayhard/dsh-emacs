@@ -41,19 +41,12 @@
 ;; containing control characters or quotes are unrepresentable and are skipped;
 ;; `@' inside another token (an email address, say) is not a trigger.
 ;;
-;; Cache semantics (stale-while-revalidate, matching web's "keep answering from
-;; the stale index" decision): the first request for a query synchronously
-;; fetches both remotes (the same single round trip as slash's first-TAB
-;; catalog-sync).  Completion is cooperative (also like slash): dsh-emacs only
-;; registers the capf and contributes "@" to the corfu-auto trigger the user
-;; already enabled; it never drives the completion UI itself.  Corfu uses the
-;; native completion table to filter on each edit/backspace;
-;; `dsh-emacs-reference--auto-complete' (the post-command hooked by
-;; `dsh-emacs-mode') fetches host data in the background when the @ token
-;; changes, letting directory drill-down and friends refresh/reopen the popup
-;; through corfu's own deferred path.  Non-Corfu front-ends (stock / vertico /
-;; icomplete) have no auto channel and complete on TAB.  Input never blocks on a
-;; network round trip.
+;; Discovery never blocks completion: both remotes run asynchronously while
+;; the live completion table filters the last settled cache.  A shared debounce
+;; coalesces query changes for every frontend.  Fresh host results are matched
+;; by search fields, not by their display labels or mention punctuation.
+;; Corfu refreshes its active table in place, or opens cold results through its
+;; own deferred path; other frontends read new results on the next TAB.
 ;;
 ;; Provides:
 ;;   - `dsh-emacs-reference--at-token'      input-area `@path' / `@"path' token parsing
@@ -71,14 +64,12 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'subr-x)
 (require 'dsh-emacs-protocol)
 
 (declare-function dsh-emacs--rpc-async "dsh-emacs.el" (method params callback))
-(declare-function dsh-emacs--rpc-request "dsh-emacs.el" (method params))
 (declare-function dsh-emacs--completing-read-ordered
                   "dsh-emacs.el" (prompt collection &rest args))
-(declare-function dsh-emacs--completion-table-with-metadata
-                  "dsh-emacs.el" (collection metadata))
 ;; Corfu's native auto path is the same integration seam installed by
 ;; `dsh-emacs-mode'; use it for async refreshes instead of generic CAPF
 ;; dispatch, which treats a sole non-exact candidate differently.
@@ -89,11 +80,14 @@
 
 ;; dsh-emacs.el's input-area anchor (buffer-local), borrowed read-only here
 (defvar dsh-emacs--input-marker)
+(defvar dsh-emacs--archived-sessions)
 ;; Optional corfu variables (corfu-auto-trigger is defined by corfu-auto.el).
 ;; The forward declarations only keep byte-compile quiet; at runtime they are
 ;; gated with `bound-and-true-p' / `boundp'.
 (defvar corfu-auto)
 (defvar corfu-auto-trigger)
+(defvar corfu--input)
+(declare-function corfu--exhibit "corfu" ())
 
 (defgroup dsh-emacs-reference nil
   "@ file/session references (fileReferences.list /
@@ -115,15 +109,10 @@ TAB and `M-x dsh-emacs-reference' always work regardless."
   :group 'dsh-emacs-reference)
 
 (defcustom dsh-emacs-reference-prefetch t
-  "Whether opening a non-Corfu chat session pre-fetches its bare-query @
-candidate lists (files under the session cwd + the session roster).
-
-The fetch runs on a short idle timer after the chat buffer opens, so
-the first \"@\" completion already reads a warm cache instead of the
-synchronous first-trigger round trip.  Corfu buffers skip this pre-fetch:
-corfu pops on the \"@\" trigger and drives its own first fetch through
-the capf / data-fetch watcher, so the cache warms on demand there.  The
-pre-fetch is a no-op when the cache is already populated."
+  "Whether opening a chat pre-fetches its bare-query @ candidate lists.
+Files and sessions load asynchronously after a short idle delay for every
+completion frontend, including Corfu.  A query the user has already
+started takes precedence over pre-fetching."
   :type 'boolean
   :group 'dsh-emacs-reference)
 
@@ -137,8 +126,8 @@ starts when the chat buffer opens."
 (defcustom dsh-emacs-reference-fetch-delay 0.15
   "Idle delay (seconds) before a typed @ token triggers its async fetch.
 A short debounce: fast typing re-arms the timer instead of stacking
-one remote round trip per keystroke (stale timers drop out because
-the timer re-checks the token before firing)."
+one remote round trip per keystroke.  A newer query cancels the previous
+timer; a running fetch hands off to the latest query when it settles."
   :type 'number
   :group 'dsh-emacs-reference)
 
@@ -200,7 +189,7 @@ Nil means nothing has been fetched into this buffer yet.")
   "The query the UI currently wants (nil = none yet).
 Settle paths install a fetch only when it matches this value, and a
 superseded fetch re-arms for it, so fast typing catches up to the
-latest query exactly once per intermediate keystroke.")
+latest query without replaying intermediate keystrokes.")
 
 (defvar-local dsh-emacs--reference-inflight nil
   "Non-nil while a reference fetch is running.
@@ -213,10 +202,13 @@ A newer fetch bumps it; callbacks from an older generation are
 dropped instead of overwriting the newer slices out of order.")
 
 (defvar-local dsh-emacs--reference-files nil
-  "File slice of the in-flight fetch (nil until the remote settles).")
+  "File slice: pending, failed, or a settled candidate list (possibly nil).")
 
 (defvar-local dsh-emacs--reference-sessions nil
-  "Session slice of the in-flight fetch (nil until the remote settles).")
+  "Session slice: pending, failed, or a settled candidate list (possibly nil).")
+
+(defvar-local dsh-emacs--reference-fetch-timer nil
+  "Pending debounce timer for the latest reference query.")
 
 (defvar-local dsh-emacs--reference-pop-token nil
   "The @ token that last drove a background reference fetch.
@@ -352,30 +344,28 @@ Each group keeps its host order; a non-nil configured cap truncates it."
 ;; ---------------------------------------------------------------------------
 
 (defun dsh-emacs-reference--fetch-query (session-id query)
-  "Asynchronously fetch reference candidates for QUERY in SESSION-ID.
-Runs `fileReferences/list' and `sessionReferenceResolver/candidates'
-concurrently (each fails independently); when both settle the
-combined list is installed into the buffer-local cache if QUERY is
-still the requested one, otherwise a newer fetch is re-armed for the
-latest requested query.  Returns non-nil when this call started (or
-reused) a fetch."
-  (cond
-   ((equal query dsh-emacs--reference-query) nil)
-   (dsh-emacs--reference-inflight nil)
-   ((null session-id) nil)
-   (t
-    (setq dsh-emacs--reference-inflight t
-          dsh-emacs--reference-files nil
-          dsh-emacs--reference-sessions nil)
-    (let ((gen (1+ dsh-emacs--reference-fetch-gen)))
-      (setq dsh-emacs--reference-fetch-gen gen)
+  "Fetch both reference slices for SESSION-ID and QUERY asynchronously.
+Only one generation runs at a time; obsolete callbacks cannot alter a
+newer generation.  Empty and failed replies are distinct from pending."
+  (when (and session-id query
+             (not (equal query dsh-emacs--reference-query))
+             (not dsh-emacs--reference-inflight))
+    (when (timerp dsh-emacs--reference-fetch-timer)
+      (cancel-timer dsh-emacs--reference-fetch-timer))
+    (setq dsh-emacs--reference-fetch-timer nil
+          dsh-emacs--reference-inflight t
+          dsh-emacs--reference-files 'pending
+          dsh-emacs--reference-sessions 'pending)
+    (let ((gen (cl-incf dsh-emacs--reference-fetch-gen)))
       (dsh-emacs--rpc-async
        "fileReferences/list"
        `((agentId . ,session-id) (query . ,query))
        (lambda (ok value)
          (when (= gen dsh-emacs--reference-fetch-gen)
            (setq dsh-emacs--reference-files
-                 (and ok (dsh-emacs-reference--collect-files value)))
+                 (if ok (dsh-emacs-reference--collect-files value)
+                   (message "Reference file discovery failed: %s" value)
+                   'failed))
            (dsh-emacs-reference--fetch-settle session-id query))))
       (dsh-emacs--rpc-async
        "sessionReferenceResolver/candidates"
@@ -383,102 +373,106 @@ reused) a fetch."
        (lambda (ok value)
          (when (= gen dsh-emacs--reference-fetch-gen)
            (setq dsh-emacs--reference-sessions
-                 (and ok (dsh-emacs-reference--collect-sessions value)))
+                 (if ok (dsh-emacs-reference--collect-sessions value)
+                   (message "Reference session discovery failed: %s" value)
+                   'failed))
            (dsh-emacs-reference--fetch-settle session-id query)))))
-    t)))
+    t))
 
 (defun dsh-emacs-reference--fetch-settle (session-id query)
-  "Finish one fetch generation for QUERY: install the cache or re-arm.
-Both slices must have landed (nil counts as a settled empty/failed
-slice, listp distinguishes it from an un-arrived one).  Installs only
-when QUERY is still `dsh-emacs--reference-requested'; a superseded
-fetch re-arms once for the newer query so typing never dead-ends."
-  (when (and (listp dsh-emacs--reference-files)
-             (listp dsh-emacs--reference-sessions))
+  "Install QUERY only after both slices settle, or request the latest query.
+A total failure keeps the old cache and allows the next trigger to retry."
+  (unless (or (eq dsh-emacs--reference-files 'pending)
+              (eq dsh-emacs--reference-sessions 'pending))
     (setq dsh-emacs--reference-inflight nil)
     (if (equal query dsh-emacs--reference-requested)
-        (progn
+        (when (or (listp dsh-emacs--reference-files)
+                  (listp dsh-emacs--reference-sessions))
           (setq dsh-emacs--reference-query query
                 dsh-emacs--reference-candidates
-                (dsh-emacs-reference--combine dsh-emacs--reference-files
-                                              dsh-emacs--reference-sessions))
+                (dsh-emacs-reference--combine
+                 (and (listp dsh-emacs--reference-files)
+                      dsh-emacs--reference-files)
+                 (and (listp dsh-emacs--reference-sessions)
+                      dsh-emacs--reference-sessions)))
           (dsh-emacs-reference--schedule-popup-refresh))
-      (unless (equal dsh-emacs--reference-requested dsh-emacs--reference-query)
-        (dsh-emacs-reference--fetch-query session-id
-                                          dsh-emacs--reference-requested)))))
+      (when dsh-emacs--reference-requested
+        (dsh-emacs-reference--require-cache
+         session-id dsh-emacs--reference-requested)))))
 
 (defun dsh-emacs-reference--schedule-popup-refresh ()
-  "Refresh the completion popup once an async fetch lands.
-Runs on a zero-delay idle timer (the settle callback itself may run
-inside a process filter, where driving completion UI directly is not
-safe).  Re-checks that an @ token is still active and that the cache
-really holds the requested query, so a superseded fetch never opens
-the popup with a stale table.
-
-Cooperative, like the slash completion: dsh-emacs never opens the
-completion UI itself.  When Corfu auto-completion is active it stays
-responsible for the current popup (a live popup is left alone; only a
-settled *directory* query re-enters Corfu's own deferred path to open
-the freshly fetched next level).  Non-Corfu setups have no auto channel
-and complete on TAB, so nothing is opened here."
+  "Let Corfu display newly settled results for the still-active @ token.
+Refresh an existing reference table in place, retaining selection when
+possible.  Cold results use Corfu's deferred path, never generic CAPF
+insertion.  Other frontends see the new table on their next completion."
   (let ((buf (current-buffer)))
     (run-with-idle-timer
      0 nil
      (lambda ()
-       (condition-case nil
-           (when (and (buffer-live-p buf)
-                      (get-buffer-window buf)
-                      (with-current-buffer buf
-                        (and (dsh-emacs-reference--active-token)
-                             (equal dsh-emacs--reference-requested
-                                    dsh-emacs--reference-query))))
-             (with-current-buffer buf
-               (cond
-                ((and (boundp 'corfu-auto) corfu-auto
-                      (bound-and-true-p completion-in-region-mode)) nil)
-                ((and (boundp 'corfu-auto) corfu-auto
-                      (string-suffix-p "/" dsh-emacs--reference-requested)
-                      (fboundp 'corfu-auto--complete-deferred))
-                 (corfu-auto--complete-deferred)))))
-         (error nil))))))
+       (when (and (buffer-live-p buf)
+                  (eq (window-buffer (selected-window)) buf)
+                  (not (active-minibuffer-window))
+                  (not (memq last-command
+                             '(keyboard-quit keyboard-escape-quit corfu-quit))))
+         (with-current-buffer buf
+           (when-let* (((and dsh-emacs-reference-auto-complete
+                             (bound-and-true-p corfu-auto)))
+                       (token (dsh-emacs-reference--active-token))
+                       ((equal (nth 1 token) dsh-emacs--reference-requested))
+                       ((equal dsh-emacs--reference-query
+                               dsh-emacs--reference-requested)))
+             (if (bound-and-true-p completion-in-region-mode)
+                 (when (and (fboundp 'corfu--exhibit)
+                            (eq (completion-metadata-get
+                                 (completion-metadata
+                                  "" (nth 2 completion-in-region--data)
+                                  (nth 3 completion-in-region--data))
+                                 'category)
+                                'dsh-emacs-reference))
+                   ;; Corfu otherwise skips recomputation when text is unchanged.
+                   (setq corfu--input nil)
+                   (corfu--exhibit))
+               (when (fboundp 'corfu-auto--complete-deferred)
+                 (corfu-auto--complete-deferred))))))))))
 
 (defun dsh-emacs-reference--require-cache (session-id query)
-  "Make the candidate cache answer QUERY, synchronously when needed.
-Returns non-nil when the cache can answer now:
-- already current for QUERY;
-- a cache from a previous query is present: kept answering (the
-  completion UI filters it by the new input text) even while a
-  background refresh for QUERY is in flight — stale-while-revalidate,
-  so an in-flight fetch never shuts the popup mid-typing;
-- the very first trigger (empty cache): fetched synchronously, the
-  same one-time round trip the slash catalog makes on first TAB.
-Returns nil only when there is nothing to show yet (no cache and a
-fetch already building one — the settle path installs and refreshes
-the popup instead).  On a total sync failure the cache is left empty
-so the next trigger retries."
-  (cond
-   ((equal query dsh-emacs--reference-query) t)
-   (dsh-emacs--reference-query t)
-   (dsh-emacs--reference-inflight nil)
-   (session-id
-    (let ((files (dsh-emacs--rpc-request
-                  "fileReferences/list"
-                  `((agentId . ,session-id) (query . ,query))))
-          (sessions (dsh-emacs--rpc-request
-                     "sessionReferenceResolver/candidates"
-                     `((agentId . ,session-id) (query . ,query)))))
-      (if (or (car files) (car sessions))
-          (progn
-            (setq dsh-emacs--reference-query query
-                  dsh-emacs--reference-candidates
-                  (dsh-emacs-reference--combine
-                   (and (car files)
-                        (dsh-emacs-reference--collect-files (cdr files)))
-                   (and (car sessions)
-                        (dsh-emacs-reference--collect-sessions (cdr sessions)))))
-            t)
-        nil)))
-   (t nil)))
+  "Request QUERY for SESSION-ID without blocking; return cache availability.
+Keep serving the previous results while both remotes run asynchronously.
+Repeated reads share one timer or in-flight request, independent of the
+completion frontend.  Empty queries and directory drills start immediately."
+  (unless (equal query dsh-emacs--reference-requested)
+    (when (timerp dsh-emacs--reference-fetch-timer)
+      (cancel-timer dsh-emacs--reference-fetch-timer))
+    (setq dsh-emacs--reference-fetch-timer nil
+          dsh-emacs--reference-requested query))
+  (when (and session-id query
+             (not (equal query dsh-emacs--reference-query))
+             (not dsh-emacs--reference-inflight)
+             (not dsh-emacs--reference-fetch-timer))
+    (let* ((buf (current-buffer))
+           (gen dsh-emacs--reference-fetch-gen)
+           (timer nil))
+      (setq timer
+            (run-with-idle-timer
+             (if (or (null dsh-emacs--reference-query)
+                     (string-empty-p query) (string-suffix-p "/" query))
+                 0
+               dsh-emacs-reference-fetch-delay)
+             nil
+             (lambda ()
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   ;; Only this timer may drop the handle: a superseded
+                   ;; callback must not unhook the timer that replaced it,
+                   ;; and a live one must never leave a dead handle behind.
+                   (when (eq timer dsh-emacs--reference-fetch-timer)
+                     (setq dsh-emacs--reference-fetch-timer nil)
+                     (when (and (= gen dsh-emacs--reference-fetch-gen)
+                                (equal query dsh-emacs--reference-requested))
+                       (dsh-emacs-reference--fetch-query session-id query)))))
+               nil)))
+      (setq dsh-emacs--reference-fetch-timer timer)))
+  (not (null dsh-emacs--reference-query)))
 
 ;; ---------------------------------------------------------------------------
 ;; corfu data-fetch watcher: @ candidates come from the host dynamically per
@@ -528,61 +522,27 @@ QUOTED), see `dsh-emacs-reference--at-token'."
            token))))
 
 (defun dsh-emacs-reference--auto-complete ()
-  "Corfu data-fetch watcher for an in-progress @ token.
-`post-command-hook' entry (installed by `dsh-emacs-mode').  @ candidates
-are host/query-dynamic, so while corfu-auto is active and an @ token is
-in progress this issues a debounced background host fetch for the
-token's query; a settled fetch re-enters corfu's native popup via
-`dsh-emacs-reference--schedule-popup-refresh'.  It never opens a
-completion UI itself — corfu owns the popup (opened by the \"@\"
-trigger), and non-corfu buffers complete on TAB and do nothing here.
-Text that merely contains an `@' inside another token (email addresses)
-does not match the grammar and keeps typing uninterrupted.  A trailing
-slash is an explicit directory boundary, fetched without the typing
-debounce."
-  (when-let* ((token (and dsh-emacs-reference-auto-complete
-                         (bound-and-true-p corfu-auto)
-                         (dsh-emacs-reference--active-token)))
-              ((not (equal token dsh-emacs--reference-pop-token))))
-    (setq dsh-emacs--reference-pop-token token)
-    (let* ((buf (current-buffer))
-           (delay (if (string-suffix-p "/"
-                                       (nth 1 dsh-emacs--reference-pop-token))
-                      0
-                    dsh-emacs-reference-fetch-delay)))
-      (run-with-idle-timer
-       delay nil
-       (lambda ()
-         (when (buffer-live-p buf)
-           (with-current-buffer buf
-             (when (equal (dsh-emacs-reference--active-token)
-                          dsh-emacs--reference-pop-token)
-               (let* ((token dsh-emacs--reference-pop-token)
-                      (query (nth 1 token))
-                      (session-id (dsh-emacs--active-session-id)))
-                 (setq dsh-emacs--reference-requested query)
-                 (dsh-emacs-reference--require-cache session-id query)
-                 (dsh-emacs-reference--fetch-query session-id query))))))))))
+  "Keep the current Corfu @ query warm through the shared async cache path."
+  (when (and dsh-emacs-reference-auto-complete (bound-and-true-p corfu-auto))
+    (let ((token (dsh-emacs-reference--active-token)))
+      (unless (equal token dsh-emacs--reference-pop-token)
+        (setq dsh-emacs--reference-pop-token token)
+        (if token
+            (dsh-emacs-reference--require-cache
+             (dsh-emacs--active-session-id) (nth 1 token))
+          (when (timerp dsh-emacs--reference-fetch-timer)
+            (cancel-timer dsh-emacs--reference-fetch-timer))
+          (setq dsh-emacs--reference-fetch-timer nil
+                dsh-emacs--reference-requested nil))))))
 
 (defun dsh-emacs-reference-prefetch (session-id)
-  "Pre-fetch the bare-query @ candidate lists of SESSION-ID lazily.
-Called when a chat buffer opens: the file list and the session roster
-are fetched on a short idle timer (see
-`dsh-emacs-reference-prefetch-delay') so the first \"@\" completion
-reads a warm cache instead of the synchronous first-trigger round
-trip.  It is disabled for Corfu buffers, where corfu pops on the \"@\"
-trigger and drives its own first fetch through the capf / data-fetch
-watcher.  No-op unless
-`dsh-emacs-reference-prefetch' is enabled, the cache is empty and the
-buffer still owns SESSION-ID.  Returns nil."
-  (when (and dsh-emacs-reference-prefetch
-             session-id
+  "Warm SESSION-ID's bare-query references after a short idle delay.
+All completion frontends share this cache.  Do not supersede a query the
+user has already started or a cache that is already populated."
+  (when (and dsh-emacs-reference-prefetch session-id
              (null dsh-emacs--reference-query)
-             (not dsh-emacs--reference-inflight)
-             ;; Corfu performs its own first fetch from the "@" trigger path;
-             ;; a prefetch racing that path leaves no table for the trigger to
-             ;; re-open after the request settles.
-             (not (and (boundp 'corfu-auto) corfu-auto)))
+             (null dsh-emacs--reference-requested)
+             (not dsh-emacs--reference-inflight))
     (let ((buf (current-buffer)))
       (run-with-idle-timer
        dsh-emacs-reference-prefetch-delay nil
@@ -591,6 +551,7 @@ buffer still owns SESSION-ID.  Returns nil."
            (with-current-buffer buf
              (when (and (equal (dsh-emacs--active-session-id) session-id)
                         (null dsh-emacs--reference-query)
+                        (null dsh-emacs--reference-requested)
                         (not dsh-emacs--reference-inflight))
                (setq dsh-emacs--reference-requested "")
                (dsh-emacs-reference--fetch-query session-id "")))))))))
@@ -599,12 +560,13 @@ buffer still owns SESSION-ID.  Returns nil."
 ;; Completion UI side
 ;; ---------------------------------------------------------------------------
 
-(defun dsh-emacs-reference--session-rows ()
+(defun dsh-emacs-reference--session-rows (&optional entries)
   "Alist (ROW . MENTION) for every session cache entry, in cache order.
-ROW is the short completion row (`@label'; a repeated label gains a
-` #n' suffix so every session stays reachable and the exit lookup
-stays unambiguous); MENTION is the canonical text the pick inserts.
-File/directory entries are their own row and never appear here."
+ENTRIES defaults to the current cache.  ROW is the short completion row
+(`@label'; a repeated label gains a ` #n' suffix so every session stays
+reachable and the exit lookup stays unambiguous); MENTION is the
+canonical text the pick inserts.  File/directory entries are their own
+row and never appear here."
   (let ((seen (make-hash-table :test 'equal)))
     (delq nil
           (mapcar
@@ -620,7 +582,7 @@ File/directory entries are their own row and never appear here."
                            base
                          (format "%s #%d" base n))
                        (car entry)))))
-           dsh-emacs--reference-candidates))))
+           (or entries dsh-emacs--reference-candidates)))))
 
 (defun dsh-emacs-reference--entry-for (text)
   "The cache entry (MENTION . PROPS) behind completion row TEXT.
@@ -664,33 +626,29 @@ when no icon provider is loaded."
                  path)))
      (t nil))))
 
-(defun dsh-emacs-reference--snapshot-affix (cands rows)
-  "Capture (TEXT . (KIND . PATH)) for completion rows CANDS.
-ROWS is the session (ROW . MENTION) alist of the current cache.  Taken
-once at completion-table build time so the icon column is decided for
-exactly the rows the table exposes and never reverse-looked-up against
-`dsh-emacs--reference-candidates' later — a background fetch replaces
-that cache while a corfu popup still shows its older snapshot, and
-re-affixating those rows against the swapped cache would drop their
-icons (see `dsh-emacs-reference--affixate-with').  Rows the cache does
-not resolve (nothing to draw) map to nil."
-  (let ((cache dsh-emacs--reference-candidates))
-    (mapcar
-     (lambda (text)
-       (cons text
-             (let ((entry (or (assoc text cache)
-                              (let ((mention (cdr (assoc text rows))))
-                                (and mention (assoc mention cache))))))
-               (and entry
-                    (cons (plist-get (cdr entry) :kind)
-                          (plist-get (cdr entry) :path))))))
-     cands)))
+(defun dsh-emacs-reference--snapshot-affix (entries rows)
+  "Map completion rows to their (KIND . PATH) icon metadata.
+ENTRIES is the cache snapshot the table renders, ROWS the session rows
+that alias canonical mentions.  The returned hash owns its copy, so a
+later cache reply cannot change it; building it is linear in the rows
+instead of scanning the full cache for each one."
+  (let ((map (make-hash-table :test 'equal)))
+    (dolist (entry entries)
+      (unless (gethash (car entry) map)
+        (puthash (car entry)
+                 (cons (plist-get (cdr entry) :kind)
+                       (plist-get (cdr entry) :path))
+                 map)))
+    (dolist (row rows)
+      (unless (gethash (car row) map)
+        (puthash (car row) (gethash (cdr row) map) map)))
+    map))
 
 (defun dsh-emacs-reference--affixate-with (map cands)
   "Build the (CAND PREFIX SUFFIX) rows the popup renders.
 PREFIX is the per-type icon (consult-buffer style, see
 `dsh-emacs-reference--row-icon') resolved from MAP, the captured
-(TEXT . (KIND . PATH)) snapshot `dsh-emacs-reference--snapshot-affix'
+TEXT -> (KIND . PATH) snapshot `dsh-emacs-reference--snapshot-affix'
 took when the table was built: a file's extension glyph, the folder
 glyph for directories, the `references'/link glyph for session rows.
 Prefixes are empty on non-graphic frames, when
@@ -703,7 +661,7 @@ completion rows show no annotation.  The icon column is display-only:
 completion inserts the plain candidate regardless."
   (mapcar
    (lambda (cand)
-     (let* ((kp (cdr (assoc cand map)))
+     (let* ((kp (gethash cand map))
             (kind (car kp))
             (icon (and dsh-emacs-reference-inline-icons
                        kind
@@ -713,33 +671,18 @@ completion inserts the plain candidate regardless."
              "")))
    cands))
 
-(defun dsh-emacs-reference--affixate (cands)
-  "Affixate CANDS against the current cache.
-`dsh-emacs-reference--affixate-with' over a live
-`dsh-emacs-reference--snapshot-affix'; callers that build a completion
-table (corfu/vertico/company-capf) must capture the map once instead,
-so a mid-popup cache refresh cannot strip icons.  This live variant is
-kept for the completion UIs that only query the cache synchronously and
-for tests."
-  (dsh-emacs-reference--affixate-with
-   (dsh-emacs-reference--snapshot-affix
-    cands (dsh-emacs-reference--session-rows))
-   cands))
-
 (defun dsh-emacs-reference--reset-fetch ()
-  "Forget the last @ reference fetch so the next trigger starts fresh.
-Called after a completed (non-drilling) reference is inserted.  Without it a
-later bare `@' answers from the previous host query's cache — which typing
-narrowed (often to the single just-picked item) — and corfu never widens that
-already-open popup (it only re-opens for directory drills), so the next `@'
-looks like it lost all but the previous candidate until the popup is
-dismissed and retriggered."
-  (setq dsh-emacs--reference-requested nil
+  "Invalidate requests after a pick so the next @ can broaden its results."
+  (when (timerp dsh-emacs--reference-fetch-timer)
+    (cancel-timer dsh-emacs--reference-fetch-timer))
+  (cl-incf dsh-emacs--reference-fetch-gen)
+  (setq dsh-emacs--reference-fetch-timer nil
+        dsh-emacs--reference-requested nil
         dsh-emacs--reference-query nil
         dsh-emacs--reference-inflight nil
         dsh-emacs--reference-pop-token nil))
 
-(defun dsh-emacs-reference--exit (cand _status rows)
+(defun dsh-emacs-reference--exit (cand status rows)
   "Finish a picked @ candidate CAND in the composer.
 The completion UI already inserted CAND's row text; ROWS maps session rows to
 their canonical mention.  A session row is kept as its short `@label' text and
@@ -748,12 +691,14 @@ wrapped as an atomic composer chip that stores the canonical mention in a
 (`dsh-emacs-reference--expanded-text') expands the span back to the wire form.
 A file row stays editable but is styled as a composer link (RET/mouse opens
 it); a directory row keeps its `@dir/' token and its children are fetched so
-drilling can continue.  STATUS is ignored."
+drilling can continue.  Only accepted STATUS values `finished' and
+`sole' finalize a reference; an ambiguous `exact' remains editable."
   (let* ((entry (dsh-emacs-reference--entry-for cand))
          (props (cdr entry))
          (mention (cdr (assoc cand rows)))
          (start (- (point) (length cand))))
-    (when (and (>= start (point-min))
+    (when (and (memq status '(finished sole))
+               (>= start (point-min))
                (string= (buffer-substring-no-properties start (point)) cand))
       ;; A picked directory already ends in "/".  Fetch its children now, so
       ;; the settled callback re-enters the active @dir/ token for the next
@@ -781,120 +726,149 @@ drilling can continue.  STATUS is ignored."
            start (point) (plist-get props :path))
           (dsh-emacs-reference--reset-fetch))))))
 
-;; The `@' category's styles are registered the standard way for a package:
-;; defaults go in `completion-category-defaults' at load time, so
-;; `completion-category-overrides' stays the user's knob and a user override
-;; for this category wins.  Flex matches across the whole path regardless of
-;; the user's global `completion-styles', so typing a mid-path word narrows to
-;; files like @src/…/button.tsx.
+(defconst dsh-emacs-reference--table-action 'dsh-emacs-reference--search-fields
+  "Completion-table action returning rows matched by reference search fields.
+The `dsh-emacs-reference-search' style asks for it; the table built by
+`dsh-emacs-reference-completion-at-point' owns the answering branch.")
+
+(defun dsh-emacs-reference--all-completions (string table pred _point)
+  "Complete STRING using TABLE's reference search fields and PRED."
+  (let ((matches (funcall table string pred dsh-emacs-reference--table-action)))
+    (when matches (nconc matches 0))))
+
+(defun dsh-emacs-reference--try-completion (string table pred point)
+  "Try STRING against reference TABLE with PRED, preserving POINT.
+A multi-row answer is returned unchanged, so matching rows stay
+visible instead of being expanded into a partial token."
+  (let ((matches (funcall table string pred dsh-emacs-reference--table-action)))
+    (cond
+     ((null matches) nil)
+     ((cdr matches) (cons string point))
+     ((equal string (car matches)) t)
+     (t (cons (car matches) (length (car matches)))))))
+
+(defun dsh-emacs-reference--search-rows (string pred candidates snapshot
+                                                session-id)
+  "Rows of CANDIDATES matching the @ token STRING is completing.
+PRED is the completion predicate, SNAPSHOT the cache entries parallel
+to CANDIDATES whose search fields are matched, and SESSION-ID the
+buffer session.  The table refreshes its snapshot before dispatching,
+so the live cache query says whether the host already answered STRING:
+when it did, its matches are returned unchanged; otherwise each query
+character must appear in order in the path, label, session id or
+workspace.  An @ token also requests a background fetch."
+  (let* ((query (cond ((string-prefix-p "@\"" string)
+                       (substring string 2))
+                      ((string-prefix-p "@" string)
+                       (substring string 1))
+                      (t string)))
+         (normalized (downcase (subst-char-in-string ?\\ ?/ query)))
+         (fresh (equal query dsh-emacs--reference-query))
+         (regexp (mapconcat
+                  (lambda (char)
+                    (regexp-quote (char-to-string char)))
+                  normalized ".*"))
+         (case-fold-search t))
+    (when (string-prefix-p "@" string)
+      (dsh-emacs-reference--require-cache session-id query))
+    (all-completions
+     ""
+     (cl-loop for row in candidates
+              for entry in snapshot
+              for props = (cdr entry)
+              when (or fresh (string-empty-p query)
+                       (cl-some
+                        (lambda (value)
+                          (and (stringp value)
+                               (string-match-p
+                                regexp
+                                (subst-char-in-string ?\\ ?/ value))))
+                        (list (plist-get props :path)
+                              (plist-get props :label)
+                              (plist-get props :session-id)
+                              (plist-get props :cwd))))
+              collect row)
+     pred)))
+
+;; Match search fields, not mention syntax.  User category overrides still win.
+(add-to-list 'completion-styles-alist
+             '(dsh-emacs-reference-search
+               dsh-emacs-reference--try-completion
+               dsh-emacs-reference--all-completions
+               "Host-ranked references with case-insensitive cached matching."))
 (add-to-list 'completion-category-defaults
-             '(dsh-emacs-reference (styles flex)))
+             '(dsh-emacs-reference (styles dsh-emacs-reference-search)))
 
 (defun dsh-emacs-reference-completion-at-point ()
-  "`completion-at-point-functions' entry for @ file/session references.
-Completes the active `@path' / `@\"path' token in the editable input
-area over the combined candidate cache (files, then directories, then
-sessions):
-a bare \"@\" names every candidate, a partial query filters it.  The
-first trigger synchronously fetches both reference remotes (the same
-one-time round trip the slash catalog makes); later keystrokes answer
-from the cache for the previous query while the data-fetch watcher
-refreshes it in the background, so typing never blocks on the
-network.
-
-Rows are the texts the popup shows and filters: file/directory rows
-are the formatted mention (`@path', `@path/', `@\"path with spaces\"'),
-session rows the short `@label' (web-style) instead of the long
-canonical mention — picking either replaces the whole token; a picked
-session row is rewritten to its canonical `@[label](dsh-session:...)'
-mention by the completion `:exit-function', so the wire text stays
-canonical and the popup width is not stretched by the opaque session
-ids.  File/directory rows carry a per-type icon column
-(`:affixation-function', consult-buffer style) when
-`dsh-emacs-reference-inline-icons' finds an icon provider.  Returns
-nil outside the input area or when the token is not an @ reference."
-  (let* ((marker (and (boundp 'dsh-emacs--input-marker)
-                      dsh-emacs--input-marker))
-         (pos (point)))
-    (when (and marker
-               (markerp marker)
-               (eq (marker-buffer marker) (current-buffer))
-               (>= pos (marker-position marker)))
-      (let* ((token (dsh-emacs-reference--at-token (marker-position marker) pos))
-             (session-id (dsh-emacs--active-session-id)))
-        (when (and token session-id)
-          (let* ((query (nth 1 token))
-                 (start (- pos (length (nth 0 token)))))
-            (setq dsh-emacs--reference-requested query)
-            (when (dsh-emacs-reference--require-cache session-id query)
-              (let* ((rows (dsh-emacs-reference--session-rows))
-                     (mention->row
-                      (let ((m (make-hash-table :test 'equal)))
-                        (dolist (row rows m)
-                          (puthash (cdr row) (car row) m))))
-                     (candidates
-                      (mapcar (lambda (entry)
-                                (or (gethash (car entry) mention->row)
-                                    (car entry)))
-                              dsh-emacs--reference-candidates)))
-                (when candidates
-                  ;; Corfu's in-region backend reads sorting metadata from the
-                  ;; completion table, not from CAPF extra properties.  Keep
-                  ;; both forms: the table metadata covers corfu, while the
-                  ;; plist covers stock completion and other CAPF consumers.
-                  (let ((table (dsh-emacs--completion-table-with-metadata
-                                candidates
-                                '((category . dsh-emacs-reference)
-                                  ;; Match @ references flexibly across the whole
-                                  ;; path regardless of the user's global
-                                  ;; completion-styles: this category's default
-                                  ;; is the built-in `flex' style (registered
-                                  ;; above, see `completion-category-defaults'),
-                                  ;; so typing a mid-path word narrows to files
-                                  ;; like @src/…/button.tsx.
-                                  (display-sort-function . identity)
-                                  (cycle-sort-function . identity))))
-                        (props (list :affixation-function
-                                     ;; Snapshot the icon data when the table
-                                     ;; is built: affixating later against the
-                                     ;; live cache would drop icons once a
-                                     ;; background fetch replaces it while a
-                                     ;; corfu popup still shows its older
-                                     ;; snapshot (see
-                                     ;; `dsh-emacs-reference--snapshot-affix').
-                                     (let ((map (dsh-emacs-reference--snapshot-affix
-                                                 candidates rows)))
-                                       (lambda (cands)
-                                         (dsh-emacs-reference--affixate-with
-                                          map cands)))
-                                     ;; Let Corfu's trigger reopen the menu at
-                                     ;; a bare @ after backspace, even though
-                                     ;; its normal prefix threshold is longer.
-                                     :company-prefix-length t
-                                     ;; Keep the host-ranked group order in
-                                     ;; stock completion and in completion
-                                     ;; UIs such as vertico/corfu.
-                                     :display-sort-function
-                                     #'identity)))
-                    ;; `:company-kind' is deliberately not provided: for
-                    ;; `:fn'-style entries (file/folder) the margin formatter of
-                    ;; nerd-icons-corfu / kind-icon does
-                    ;; (propertize icon 'face mapped-face), stripping the
-                    ;; nerd-font family out of the `face' property (only
-                    ;; font-lock-face survives, and display resolves via `face')
-                    ;; — PUA glyphs then fall back to the default font →
-                    ;; mojibake; static codicon entries (the slash menu's
-                    ;; command, say) are unaffected.  Icons are always drawn by
-                    ;; this module's own `:affixation-function' column (the font
-                    ;; family is preserved); without a kind the margin formatter
-                    ;; is disabled wholesale and the prefix column is not
-                    ;; overridden.
-                    (apply #'list start pos table
-                           (append props
-                                   (list :exit-function
-                                         (lambda (cand status)
-                                           (dsh-emacs-reference--exit
-                                            cand status rows)))))))))))))))
+  "Complete the active @ token without waiting for the network.
+The table follows asynchronous cache replacements.  Fresh host matches
+are authoritative; while a query is loading, match cached paths and
+session labels, IDs and directories case-insensitively.  Formatting
+and quoting affect insertion only, not matching."
+  (when-let* ((token (dsh-emacs-reference--active-token))
+              (session-id (dsh-emacs--active-session-id)))
+    (let* ((buf (current-buffer))
+           (pos (point))
+           (start (- pos (length (car token))))
+           (quoted (nth 2 token))
+           (source 'uninitialized)
+           source-query source-archives snapshot rows candidates affix
+           (table
+            (lambda (string pred action)
+              (when (buffer-live-p buf)
+                (with-current-buffer buf
+                  (unless (and (eq source dsh-emacs--reference-candidates)
+                               (eq source-archives dsh-emacs--archived-sessions)
+                               (equal source-query dsh-emacs--reference-query))
+                    (setq source dsh-emacs--reference-candidates
+                          source-query dsh-emacs--reference-query
+                          source-archives dsh-emacs--archived-sessions
+                          snapshot
+                          (mapcar
+                           (lambda (entry)
+                             (let* ((props (cdr entry))
+                                    (kind (plist-get props :kind)))
+                               (cons (if (memq kind '(file directory))
+                                         (dsh-emacs-reference--format-file-mention
+                                          (plist-get props :path)
+                                          (symbol-name kind) quoted)
+                                       (car entry))
+                                     props)))
+                           dsh-emacs--reference-candidates))
+                    (let ((mention-to-row (make-hash-table :test 'equal)))
+                      (setq rows (dsh-emacs-reference--session-rows snapshot))
+                      (dolist (row rows)
+                        (puthash (cdr row) (car row) mention-to-row))
+                      (setq candidates
+                            (mapcar (lambda (entry)
+                                      (or (gethash (car entry) mention-to-row)
+                                          (car entry)))
+                                    snapshot)
+                            affix (dsh-emacs-reference--snapshot-affix
+                                   snapshot rows))))
+                  (cond
+                   ((eq action 'metadata)
+                    '(metadata (category . dsh-emacs-reference)
+                               (display-sort-function . identity)
+                               (cycle-sort-function . identity)))
+                   ((eq action dsh-emacs-reference--table-action)
+                    (dsh-emacs-reference--search-rows
+                     string pred candidates snapshot session-id))
+                   (t (complete-with-action
+                       action candidates string pred))))))))
+      (dsh-emacs-reference--require-cache session-id (nth 1 token))
+      ;; Build once now; subsequent table queries refresh this same snapshot.
+      (funcall table "" nil 'metadata)
+      (list start pos table
+            :company-prefix-length t
+            :display-sort-function #'identity
+            :affixation-function
+            (lambda (cands) (dsh-emacs-reference--affixate-with affix cands))
+            :exit-function
+            (lambda (cand status)
+              ;; Resolve the displayed row against its snapshot, not a new reply.
+              (let ((dsh-emacs--reference-candidates snapshot))
+                (dsh-emacs-reference--exit cand status rows)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; @ reference rendering: transcript / input lines show completed mentions as
@@ -1382,19 +1356,19 @@ composer chip."
 
 (defun dsh-emacs-reference ()
   "Insert an @ file or session reference into the chat input, at point.
-Synchronously fetches the reference candidates for the current @
-token (or an empty query when none is active), offers them via
+Requests reference candidates asynchronously for the current @ token
+(or an empty query when none is active), then offers cached results via
 `completing-read' (files, then directories, then sessions; rows show
 plain candidate text) and replaces the active token — or
 inserts at point when the cursor already sits inside the input area —
-with the formatted mention.  Requires a chat buffer with a session."
+with the formatted mention.  On a cold cache, reports loading; invoke
+again once results arrive.  Requires a chat buffer with a session."
   (interactive)
   (dsh-emacs-server-ensure)
   (let* ((session-id (dsh-emacs--active-session-id)))
     (unless session-id (user-error "Open or select a session first"))
     (let* ((token (dsh-emacs-reference--active-token))
            (query (or (and token (nth 1 token)) "")))
-      (setq dsh-emacs--reference-requested query)
       (if (dsh-emacs-reference--require-cache session-id query)
           (progn
             (condition-case nil

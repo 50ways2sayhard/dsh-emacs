@@ -1,5 +1,7 @@
 # 010 — @ File/Session References (the Web @ Directive)
 
+Completion fetch and matching decisions superseded by [119](119-reference-completion.md).
+
 ## Background
 
 The web client's `@` directive — type `@` in the composer, pick a file or a

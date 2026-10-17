@@ -81,16 +81,24 @@ the typing watcher also reuses its first detection result.
   have no auto channel and complete on `TAB`. Disable the `@` contribution
   with `dsh-emacs-reference-auto-complete` (`TAB` and
   `M-x dsh-emacs-reference` always work).
-- **Menu**: `M-x dsh-emacs-reference` — `completing-read` over the combined
-  cache (files, then directories, then sessions), replacing the active `@`
-  token at point.
-- **Completion**: `TAB` completes the active `@` token over the cache (a bare
-  `@` lists everything). `TAB` is bound to `completion-at-point` in chat
-  buffers. Matching is **flexible**: the `@` completion category is bound to the
-  built-in `flex` style in chat buffers (independent of your global
-  `completion-styles`), so typing a word that appears *anywhere* in a path — e.g.
-  `@button` or just `@bu` — narrows to files like
-  `@src/components/ui/button.tsx`, not only prefix matches.
+- **Menu**: `M-x dsh-emacs-reference` offers the combined cache (files,
+  directories, sessions) and refreshes it asynchronously. On a cold cache it
+  reports loading; invoke it again after results arrive.
+- **Completion**: `TAB` completes the active `@` token over the current cache.
+  Matching ignores case: `@re` finds `README.md`. Paths match substrings or
+  ordered characters, so `@button` finds `src/components/ui/button.tsx`.
+  Session matches can come from their label, ID or workspace, even when that
+  field is not displayed. Fresh results keep the host's matching decisions;
+  while loading, the client searches those fields in the previous cache.
+  Opening quotes do not become part of the search: `@"src/a` can complete to
+  `@"src/a.ts"`, preserving explicit quotation. The completion category
+  `dsh-emacs-reference` defaults to the package's `dsh-emacs-reference-search`
+  style; `completion-category-overrides` can replace it with your preferred
+  styles.
+
+An ambiguous exact match stays editable: with both `a` and `ab` available,
+`TAB` at `@a` does not turn it into a chip. Pick a row or finish an unambiguous
+completion to accept the reference.
 
 Menu rows are short by design: a file names its path, a directory its path
 with a trailing slash, a session only its label. Picking a file or directory
@@ -117,23 +125,28 @@ directory token (`@dir/`) is left plain so typing can descend further.
 
 ## Caching (stale-while-revalidate)
 
-The first `@` trigger synchronously fetches both Remotes (the same one-time
-round trip the slash catalog makes on first `TAB`). Under corfu-auto that
-initial table is filtered natively on every edit and backspace, while a
-data-fetch watcher refreshes changed queries from the host in the background;
-a trailing slash is an explicit directory drill whose settled results reopen
-the popup via corfu's own deferred path. Non-corfu setups answer from the
-previous query's cache while the new query is fetched in the background, so
-typing never blocks on the network.
+Both discovery requests run **asynchronously**, including the first `@` or
+`TAB`. The cache changes only after both replies settle; late replies from a
+completed reference cannot replace a newer request. Repeated reads share one
+request, and changed queries use `dsh-emacs-reference-fetch-delay` to debounce
+while cached results remain usable. A running request hands off to the latest
+query rather than replaying intermediate keystrokes. Empty queries and directory
+drills bypass the ordinary debounce.
 
-The bare-query lists are **pre-fetched** when a session opens for non-Corfu
-completion (`dsh-emacs-reference-prefetch`, idle gap
-`dsh-emacs-reference-prefetch-delay`); Corfu owns its first fetch so its
-native popup lifecycle stays intact. By default all host-returned files,
-directories, and sessions are offered. Set
-`dsh-emacs-reference-max-files` or `dsh-emacs-reference-max-sessions` to a
-number to cap a section when working with a very large index; `nil` keeps all
-results.
+With corfu-auto enabled, fresh results update the active reference popup in
+place, or open a cold popup through Corfu's deferred path. They do not insert
+text, steal another buffer's focus, or restart a dismissed popup after `C-g`.
+Other frontends read the refreshed table on their next completion; if a cold
+`TAB` has no results yet, press `TAB` again after discovery finishes.
+
+Bare-query lists are **pre-fetched** when a session opens for every frontend,
+including Corfu (`dsh-emacs-reference-prefetch`, idle gap
+`dsh-emacs-reference-prefetch-delay`). A query already started by the user takes
+precedence. By default all host-returned results are offered, not necessarily
+all files in the workspace: the host can limit a query's results. Set
+`dsh-emacs-reference-max-files` or `dsh-emacs-reference-max-sessions` to cap a
+section further; `nil` keeps every host result. Server discovery latency still
+exists, but no synchronous discovery request blocks completion.
 
 ## What the server-side mention costs the target session
 
