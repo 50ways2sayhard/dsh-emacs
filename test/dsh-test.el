@@ -25501,6 +25501,8 @@ messages (e.g. `command/done')."
         (string-match-p "Original conversation" (buffer-string))
         (string-match-p "Automatic compaction" (buffer-string))
         (string-match-p "3 history items · ~42k tokens" (buffer-string))
+        (eq (map-elt state :status) 'compaction-summary)
+        (null (map-elt state :header-face))
         (map-elt state :collapsed)
         (not (string-match-p "Keep the API stable" (buffer-string))))
       (goto-char (car block))

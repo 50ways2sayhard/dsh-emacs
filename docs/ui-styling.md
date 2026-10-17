@@ -232,11 +232,15 @@ tool row expands/collapses the body (the body is stored inside the block, so
 expanding always restores it).
 
 Automatic compaction summaries use a folded **Automatic compaction** row
-with a covered-item count and approximate old-context token estimate.
-`RET` or a click expands the summary text; the original conversation stays
-visible. The row uses neutral wording because applying the summary's
-checkpoint can still fail afterward. Raw model output and the checkpoint
-body stay hidden, and manual `/compact` retains its command card.
+with the existing bash/terminal icon and `dsh-emacs-tool-title-face`. Like tool
+rows, the header has no extra blank padding; covered-item counts and the
+approximate old-context token estimate remain muted. `RET` or a click expands
+the Markdown summary, and the original conversation stays visible. The header
+has no success tint or success mark: the summary arrives before checkpoint
+application, which can still fail afterward. Raw model output and the
+checkpoint body stay hidden. Manual `/compact` retains its command card,
+and running compaction keeps its existing mode-line presentation. No new icon,
+face or option is added; see [record 116](../postmortem/116-compaction-tool-row.md).
 
 Standalone model and automatic compaction errors have one blank line above
 and below their cards, including when collapsed. Their title and error detail

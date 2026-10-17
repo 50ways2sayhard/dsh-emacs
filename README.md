@@ -252,9 +252,11 @@ run `M-x dsh-emacs-describe-status` for details. See
 [Execution feedback](docs/modeline.md#execution-feedback).
 
 Automatic compaction leaves a folded **Automatic compaction** row in the
-transcript. `RET` or a click expands the generated summary; the header shows
-the number of covered items and an approximate token count for the old
-context. The original conversation stays visible. A later compaction failure
+transcript, styled like a compact tool row with the existing terminal icon
+and no extra blank padding. `RET` or a click expands the Markdown summary;
+the muted header counts describe covered history items and approximate tokens
+in the old context, not tokens saved. The original conversation stays visible.
+The neutral title does not claim checkpoint success: a later compaction failure
 gets its own error card; manual `/compact` keeps its command result card.
 
 Plan mode shows `Plan` while active, or `Plan → on` / `Plan → off` while a

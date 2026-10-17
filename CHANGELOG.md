@@ -36,6 +36,13 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Keep automatic compaction summaries as compact tool rows**: the folded
+  summary uses the existing terminal/tool icon and tool-title face, without
+  extra blank padding. Counts stay muted and the Markdown body stays folded
+  by default. The row remains neutral: it does not claim checkpoint success
+  or replace later failure cards, manual `/compact` output or mode-line
+  activity. (rationale: postmortem/116)
+
 - **Reload local package source without resetting chats**: `M-x dsh-emacs-reload`
   preflights every local module and loads `.el` source in dependency order,
   bypassing stale bytecode. Drafts, attachments, settings, connections and

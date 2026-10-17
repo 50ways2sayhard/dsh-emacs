@@ -3993,7 +3993,7 @@ DATA.REASON.ERROR ({code, message, ...})."
      :insert-before insert-point)))
 
 (defun dsh-emacs-render-compaction-summary (event)
-  "Render automatic compaction EVENT as a folded summary and return its seq.
+  "Render automatic compaction EVENT as a folded tool-style row; return seq.
 The row records a generated summary, not successful checkpoint application.
 Manual compactions retain their command card; later automatic failures keep
 their own error card.  Neither the old conversation nor input history changes."
@@ -4010,8 +4010,12 @@ their own error card.  Neither the old conversation nor input history changes."
         :namespace-id (dsh-emacs-render--make-namespace)
         :block-id (format "compaction-summary-%s"
                           (or (dsh-protocol-compaction-summary-id summary) seq))
-        :label-left (propertize "Automatic compaction"
-                                'face 'dsh-emacs-meta-face)
+        ;; Web's CompactionItem shares the terminal icon with tool rows.
+        ;; Do not borrow a success tint: the checkpoint is not committed yet.
+        :label-left (concat
+                     (dsh-emacs-render--tool-icon "bash") " "
+                     (propertize "Automatic compaction"
+                                 'face 'dsh-emacs-tool-title-face))
         :label-right
         (propertize
          (string-join
@@ -4026,7 +4030,7 @@ their own error card.  Neither the old conversation nor input history changes."
          'help-echo "Size of the summarized history; not tokens saved")
         :body (unless (string-blank-p text) (dsh-emacs-markdown-render text))
         :style 'minimal :status 'compaction-summary
-        :non-foldable (string-blank-p text) :padding t)
+        :non-foldable (string-blank-p text))
        :expanded nil :insert-before (dsh-emacs-render--input-insert-point)))
     seq))
 
