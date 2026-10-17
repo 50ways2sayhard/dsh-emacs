@@ -241,8 +241,8 @@ Goal projection and RPC response decoding both belong to the protocol module;
 Composer's mutation callback compares parsed goal identities and revisions.
 
 Next Message mirrors the Goal Row's anatomy: dsh web's queue glyph (a chat
-bubble with two text lines, tinted with `dsh-emacs-composer-next-face` from the
-queue amber that the mode-line `[Q2 S1]` indicator shares) followed by the
+bubble with two text lines, tinted with `dsh-emacs-composer-next-face` from
+`dsh-emacs-color-queue` / `dsh-emacs-color-queue-dark`) followed by the
 folded preview in the muted `dsh-emacs-composer-next-body-face`, or `≡ …` as a
 text fallback when Emacs lacks SVG. Like the Goal Row and editable `❯` line,
 it uses the buffer background. One
@@ -626,19 +626,20 @@ applied to whatever buffer is current.  The baseline's `projections` record
 is keyed by session id, and `json-read` interns JSON object keys as symbols,
 so `dsh-emacs-events--host-control-baseline` normalizes each record key to a
 string before the chat-buffer and projection lookups — the same identity the
-incremental `sessionId` field and `session/list` rows carry.  The mirror
-drives the mode-line
-`[Qn Sm]` indicator, the echo-area feedback (enqueue / steer / consumption,
-diffed against the previous mirror, with locally-deleted ids suppressed),
-the Composer Next Message row, and the `C-c C-q` manager.
+incremental `sessionId` field and `session/list` rows carry. The mirror
+drives the echo-area feedback (enqueue / steer / consumption, diffed against
+the previous mirror, with locally-deleted ids suppressed), the Composer Next
+Message row, and the `C-c C-q` manager with its queued/steering counts. The
+mode line has no queue segment and queue-only updates do not request
+mode-line redraws.
 `dsh-emacs-queue-next-item` determines the visible next message from delivery
 order and the transient gate: steering (next-step) takes priority over queued
 (next-turn), and a locally-submitted queued message not yet in the mirror is
 the fallback (`dsh-emacs-queue--optimistic-submit') so the row appears with
-the keystroke, not one round trip later. Composer owns its clock icon, width
+the keystroke, not one round trip later. Composer owns its queue glyph, width
 fitting and buffer geometry.
 Our steer/delete/edit RPCs still update the mirror optimistically on success,
-so Composer and the mode-line refresh immediately. Queue-triggered repaints
+so Composer refreshes immediately. Queue-triggered repaints
 are coalesced per frame burst with the existing zero-delay timer, preserving
 transient suppression. The manager's minibuffer keys `e`/`s`/`d`/`RET` act on the
 highlighted item; `x` deletes the whole queue. `context`
@@ -682,8 +683,8 @@ into the transcript at submit time
 appears the instant the input clears rather than one HTTP round trip later;
 the pending entry dedups the host's canonical `user/message', and a
 rejected prompt deletes the echo and restores the draft.
-Genuine queueing — items already parked — keeps its feedback,
-its preview, and its mode-line count.
+Genuine queueing — items already parked — keeps its feedback and preview;
+the manager retains queued/steering counts.
 This is the queue-frame complement of the anchor-gated replay dedup
 (rationale: postmortem/004): transcript frames are idempotent by seq,
 queue frames by submit context.

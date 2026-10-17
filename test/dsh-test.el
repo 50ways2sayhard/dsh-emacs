@@ -20488,39 +20488,6 @@ ID is the message id, TEXT its single text block, KIND its source kind
     (when (buffer-live-p chat) (kill-buffer chat))
     (when (process-live-p proc) (delete-process proc))))
 
-;; Mode-line indicator: hidden for an empty queue, shows [Qn Sm] when
-;; non-empty, context not counted
-(let ((buf (get-buffer-create " *t-queue-indicator*")))
-  (unwind-protect
-      (progn
-        (with-current-buffer buf
-          (dsh-emacs-mode)
-          (dsh-test-assert "queue-indicator-hidden-when-empty"
-            (string-empty-p (dsh-emacs-modeline--queue-indicator)))
-          (setq dsh-emacs--queue-items
-                (list (dsh-emacs-test--queue-item "1" "queued" "a")
-                      (dsh-emacs-test--queue-item "2" "queued" "b")
-                      (dsh-emacs-test--queue-item "3" "steering" "c")))
-          (let ((ind (dsh-emacs-modeline--queue-indicator)))
-            (dsh-test-assert "queue-indicator-shows-counts"
-              (string-match-p "\\[Q2 S1\\]" ind)
-              (eq 'dsh-emacs-modeline-queue-face
-                  (get-text-property 0 'face ind)))
-            (dsh-test-assert "queue-indicator-reuses-text-and-keymap"
-              (eq ind (dsh-emacs-modeline--queue-indicator))
-              (eq (lookup-key (get-text-property 0 'local-map ind)
-                              [mode-line mouse-1])
-                  #'dsh-emacs-list-queue)))
-          (setq dsh-emacs--queue-items (cdr dsh-emacs--queue-items))
-          (dsh-test-assert "queue-indicator-updates-cached-counts"
-            (string-match-p "\\[Q1 S1\\]"
-                            (dsh-emacs-modeline--queue-indicator))))
-        ;; A non-dsh buffer does not touch the mode line
-        (with-temp-buffer
-          (dsh-test-assert "queue-indicator-outside-chat-empty"
-            (string-empty-p (dsh-emacs-modeline--queue-indicator)))))
-    (when (buffer-live-p buf) (kill-buffer buf))))
-
 ;; next preview = the next item in the host's actual send order: in-flight
 ;; steering (next-step, injected into the running agent's next step) takes
 ;; precedence over queued (next-turn); context is host-injected content and
@@ -20792,12 +20759,13 @@ ID is the message id, TEXT its single text block, KIND its source kind
                '(((request (sessionId . "optimistic-chat")
                            (itemId . "host-id") (action (kind . "steer"))))))))))
 
-;; The two Composer rows keep one queue color and one muted tier: the glyph
-;; tint resolves the mode-line queue amber, and both body faces inherit shadow
-;; so nothing borrows the `❯' prompt accent.
-(dsh-test-assert "composer-next-shares-the-queue-color"
-  (equal (face-foreground 'dsh-emacs-composer-next-face nil t)
-         (face-foreground 'dsh-emacs-modeline-queue-face nil t)))
+;; Composer keeps its queue color and muted body tier without borrowing the
+;; input prompt's accent.
+(dsh-test-assert "composer-next-keeps-the-queue-colors"
+  (equal (get 'dsh-emacs-composer-next-face 'face-defface-spec)
+         `((((background light)) :foreground ,dsh-emacs-color-queue)
+           (((background dark)) :foreground ,dsh-emacs-color-queue-dark)
+           (t :inherit warning))))
 (dsh-test-assert "composer-next-body-matches-the-goal-body-tier"
   (eq (face-attribute 'dsh-emacs-composer-next-body-face :inherit)
       (face-attribute 'dsh-emacs-composer-goal-body-face :inherit)))
@@ -27430,6 +27398,9 @@ messages (e.g. `command/done')."
   (let* ((dsh-emacs-jobs--roster
           (list (dsh-protocol-job--from-alist
                  '((id . "running-job") (status . "running")))))
+         (dsh-emacs--queue-items
+          (list (dsh-emacs-test--queue-item "q" "queued" "Next turn")
+                (dsh-emacs-test--queue-item "s" "steering" "Next step")))
          (image '(image :type svg :data "test-svg"))
          (map (make-sparse-keymap))
          (children (propertize (concat " " (propertize " " 'display image) "3")
@@ -27438,14 +27409,13 @@ messages (e.g. `command/done')."
               ((symbol-function 'dsh-emacs-modeline--step-indicator) (lambda () ""))
               ((symbol-function 'dsh-emacs-modeline--plan-indicator) (lambda () " Plan "))
               ((symbol-function 'dsh-emacs-modeline--execution-indicator) (lambda () " Retry 1/3 "))
-              ((symbol-function 'dsh-emacs-modeline--queue-indicator) (lambda () " [Q1 S1]"))
               ((symbol-function 'dsh-emacs-subagent-indicator) (lambda () children))
               ((symbol-function 'dsh-emacs-modeline--modeinline) (lambda () "(model CH24%%) ")))
       (let* ((text (dsh-emacs-modeline--doom-segment))
              (icon-pos (string-match " 3" text)))
-        (dsh-test-assert "modeline-joins-status-pieces-with-one-space"
+        (dsh-test-assert "modeline-joins-status-without-pending-queue"
                          (equal (substring-no-properties text)
-                                " █ Plan Retry 1/3 [Q1 S1]  3 (model CH24%%) "))
+                                " █ Plan Retry 1/3  3 (model CH24%%) "))
         (dsh-test-assert "modeline-spacing-preserves-svg-and-mouse-properties"
                          icon-pos
                          (equal (get-text-property icon-pos 'display text) image)
@@ -27456,7 +27426,6 @@ messages (e.g. `command/done')."
                               '("left" mode-line-modes
                                 (:eval (dsh-emacs-modeline--doom-segment)) "right")))
       (cl-letf (((symbol-function 'dsh-emacs-modeline--ml-indicator) (lambda () ""))
-                ((symbol-function 'dsh-emacs-modeline--queue-indicator) (lambda () ""))
                 ((symbol-function 'dsh-emacs-subagent-indicator) (lambda () "")))
         (dsh-test-assert "modeline-empty-indicators-add-no-extra-gaps"
                          (equal (dsh-emacs-modeline--doom-segment) " (model CH24%%) "))

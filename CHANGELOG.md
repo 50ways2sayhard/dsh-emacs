@@ -10,6 +10,13 @@ minor) and stay undated until the release is cut.
 
 ### Breaking Changes
 
+- **Remove the mode-line queue indicator**: pending input stays in the
+  Composer Next Message preview and `C-c C-q` manager. The duplicate
+  `[Qn Sm]` count, its mouse shortcut and public
+  `dsh-emacs-modeline-queue-face` are removed without compatibility aliases.
+  Queue/steer behavior, manager counts and the Composer queue color settings
+  remain unchanged. (rationale: postmortem/114)
+
 - **Remove unused composer background settings**: `dsh-emacs-input-box-face`,
   `dsh-emacs-color-input-bg` and `dsh-emacs-color-input-bg-dark` are removed;
   composer rows now use the buffer background. (rationale: postmortem/103)
@@ -60,9 +67,8 @@ minor) and stay undated until the release is cut.
   (rationale: postmortem/104)
 
 - **Customize the pending-input queue color**: `dsh-emacs-color-queue` and
-  `dsh-emacs-color-queue-dark` now own the amber shared by the mode-line
-  `[Q2 S1]` indicator and the Next Message row's queue glyph, so one queue
-  keeps one hue. (rationale: postmortem/101)
+  `dsh-emacs-color-queue-dark` own the amber of the Composer Next Message
+  row's queue glyph. (rationale: postmortem/101, postmortem/114)
 
 - **See what each goal tool did**: `create_goal`, `get_goal` and `update_goal`
   rows now show dsh web's goal card — the goal icon, a `Create goal` /
@@ -157,7 +163,7 @@ minor) and stay undated until the release is cut.
   live direct parent and can be stopped; one-shot records and unavailable-parent
   input stay read-only. The mode line shows a muted brain-and-circuit child count
   (Nerd Font / `Sub` fallback), with running counts in the tooltip. Child lineage
-  remains visible; `S` stays reserved for steering messages.
+  remains visible.
   (rationale: postmortem/075, postmortem/076, postmortem/077, postmortem/078)
 
 - **Approval reasons follow your language**: dsh 0.2.0 approval prompts use
@@ -523,9 +529,9 @@ minor) and stay undated until the release is cut.
   `skills/list` catalog.
 - **The pending-input queue works against dsh 0.1.7 servers**: dsh 0.1.7
   removed the `session/queue` control frames (and the baseline's `queues`
-  record) that carried the pending inbox, so the mode-line `[Qn Sm]`
-  indicator, the echo-area `queued:`/`steering:`/`running:` feedback, the
-  Composer Next Message row and `C-c C-q` would all have stopped updating.
+  record) that carried the pending inbox, so the echo-area
+  `queued:`/`steering:`/`running:` feedback, the Composer Next Message row
+  and `C-c C-q` would all have stopped updating.
   The mirror is now derived from the host's `inbox` session projection, which
   carries the same fold state and predates the deleted frames — so the same
   client keeps working against 0.1.5/0.1.6 servers.  Reconnect baselines

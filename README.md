@@ -237,8 +237,9 @@ word includes the existing suffix. Slash commands and `@` references keep
 their own completion even when their catalogs are empty.
 
 The composer shows the current goal and the next pending message above `❯`.
-Hover over the preview for its full text, or use `C-c C-q` to manage pending
-messages. Goal shortcuts and inline controls are described in
+Hover over the preview for its full text, or use `C-c C-q` to inspect queue
+counts and manage pending messages. The queue has no mode-line indicator.
+Goal shortcuts and inline controls are described in
 [Goal actions](docs/customization.md#goal-actions).
 
 The mode line shows `Retry 1/3` while waiting to retry, `Retrying 1/3` once
@@ -452,7 +453,7 @@ details.
 - [Skills](docs/skills.md) — host skill catalog and `/name` gestures
 - [Shell commands](docs/shell-commands.md) — local `!command` execution
 - [Model picker](docs/model-picker.md) — models, providers and reasoning effort
-- [Mode line](docs/modeline.md) — status, context usage and pending queue
+- [Mode line](docs/modeline.md) — running status, context usage and subagents
 - [UI styling](docs/ui-styling.md) — faces and Markdown rendering
 - [Development & testing](AGENTS.md) — workflow and verification
 - [Architecture](docs/architecture.md) — module ownership and event flow

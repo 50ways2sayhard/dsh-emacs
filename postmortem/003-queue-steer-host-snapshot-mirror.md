@@ -5,6 +5,9 @@ always selects steer._
 
 _The prompt-prefix presentation is superseded by 020; queue semantics remain._
 
+_The mode-line queue indicator is superseded by
+[114](114-remove-queue-modeline.md); the mirror and queue/steer workflow remain._
+
 ## Background
 
 While a turn runs, dsh delivers further input through the agent inbox:

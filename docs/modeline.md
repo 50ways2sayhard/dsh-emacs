@@ -72,8 +72,8 @@ Compaction uses `dsh-emacs-modeline-compacting-face` and
 defaults. See [Execution feedback](#execution-feedback) for its separate clock.
 
 The stats use `dsh-emacs-modeline-format-spec` to choose segments and their
-separator (one space by default). Status indicators—animation, Plan/retry,
-queue and subagents—and the parenthesized stats have one separating space in
+separator (one space by default). Status indicators—animation, Plan/retry
+and subagents—and the parenthesized stats have one separating space in
 both native and Doom mode lines. Empty indicators add no gaps; SVG placeholders
 retain their display and click properties. Doom's right-side major-mode slot
 shows the DSH Web runtime whale mark in DSH chat buffers. Ordinary running and
@@ -283,17 +283,14 @@ Plan mode supplies planning guidance to the model. Sandbox permissions and
 approval policy remain independent. Todo cards continue to show task progress;
 their presence does not imply that Plan mode is active.
 
-### Pending-input queue indicator
+### Queue and background jobs
 
-While messages are queued or steering, a `[Q2 S1]` indicator (queued /
-steering counts; zero-count placements are omitted) sits right after the
-running animation, colored with `dsh-emacs-modeline-queue-face` (amber) and
-clickable (`mouse-1` opens `dsh-emacs-list-queue`).  It is hidden when
-nothing is pending — including when the queue holds only host-injected
-`context` items, which are neither counted nor listed, matching dsh web's
-QueueDock.  The counts come from the `inbox` session projection mirrored by
-`dsh-emacs-queue.el` (delivered as `session/control` `projection` frames), so the
-segment is live without any polling.
+Pending input stays in the Composer Next Message preview above the input.
+Use `C-c C-q` (`dsh-emacs-list-queue`) for queued/steering counts and the full
+queue manager. Neither native nor Doom mode lines show a queue segment;
+counts are not passively visible when the input area is off screen. See
+[queue ownership](architecture.md#pending-input-queue-inbox-projection-on-sessioncontrol)
+and [decision record 114](../postmortem/114-remove-queue-modeline.md).
 
 Background jobs use their transcript tool rows for status. `C-c C-j`
 (`dsh-emacs-list-jobs`) opens the job manager; they have no mode-line segment.
@@ -317,7 +314,7 @@ Flycheck's mode-line counts, while keeping the muted status-text color.
 `Sub 3` means three direct children in the text fallback. Only the total is
 shown; the tooltip includes the running count. Mouse-1 opens
 `dsh-emacs-list-subagents` in the
-minibuffer. `S` remains reserved for steering messages.
+minibuffer.
 Child chats show their direct parent, label and mode. A child that has
 descendants can also have its own child-count indicator.
 The completion annotations' cumulative token projection includes uncached

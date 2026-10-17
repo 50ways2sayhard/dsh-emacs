@@ -76,7 +76,7 @@ the existing muted `dsh-emacs-modeline-face`, with the total alone beside it.
 Without SVG support, it falls back to `nerd-icons`' `nf-md-source_branch`,
 then `Sub`. `Sub3` means
 three direct children; the running count is in the tooltip and activity is
-shown in completion annotations. `S` stays reserved for steering messages.
+shown in completion annotations.
 Empty catalogs have no count
 indicator. A child chat also displays its direct parent, label and mode.
 

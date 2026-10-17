@@ -1,5 +1,8 @@
 # 064 — Mirror the pending-input queue from the inbox projection
 
+_The mode-line queue surface is superseded by
+[114](114-remove-queue-modeline.md); the inbox projection source is unchanged._
+
 _Superseded by 065 (Known limitation "background jobs have no client surface"
 only): dsh-emacs-jobs.el now opens `job/list` and `job/follow` and surfaces the
 roster in the mode line and `C-c C-j`._

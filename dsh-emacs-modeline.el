@@ -62,11 +62,6 @@
 (declare-function doom-modeline-remove-segment "doom-modeline-core" (segment &optional modeline))
 (defvar nerd-icons-mode-icon-alist)
 
-;; Queue indicator (dsh-emacs assembles dsh-emacs-queue and reads it back at
-;; runtime).
-(declare-function dsh-emacs-queue-counts "dsh-emacs-queue" ())
-(declare-function dsh-emacs-list-queue "dsh-emacs-queue" ())
-
 ;; The renderer's pending text refresh can also redraw the running indicator.
 (defvar dsh-emacs--streaming-assistant)
 (defvar dsh-emacs--streaming-thinking)
@@ -1044,37 +1039,6 @@ Standalone compaction shares the activity slot without implying a busy turn."
                 (dsh-emacs-modeline--execution-indicator))))
     (if (string-empty-p text) "" (concat " " text " "))))
 
-(defvar dsh-emacs-modeline--queue-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map [mode-line mouse-1] #'dsh-emacs-list-queue)
-    map)
-  "Mouse binding shared by mode-line queue indicators.")
-
-(defvar-local dsh-emacs-modeline--queue-cache nil
-  "Last (COUNTS . TEXT) for this buffer's pending-input indicator.")
-
-(defun dsh-emacs-modeline--queue-indicator ()
-  "Return the pending-input counts, e.g. \" [Q2 S1]\"; empty when none.
-Only queued and steering placements count.  Mouse-1 opens the queue."
-  (if (not (derived-mode-p 'dsh-emacs-mode))
-      ""
-    (let ((counts (dsh-emacs-queue-counts)))
-      (unless (equal counts (car dsh-emacs-modeline--queue-cache))
-        (pcase-let* ((`(,q . ,s) counts)
-                     (parts (append (unless (zerop q) (list (format "Q%d" q)))
-                                    (unless (zerop s) (list (format "S%d" s))))))
-          (setq dsh-emacs-modeline--queue-cache
-                (cons counts
-                      (if parts
-                          (propertize
-                           (format " [%s]" (string-join parts " "))
-                           'face 'dsh-emacs-modeline-queue-face
-                           'help-echo "Pending messages (queue/steer); mouse-1 to manage"
-                           'mouse-face 'mode-line-highlight
-                           'local-map dsh-emacs-modeline--queue-map)
-                        "")))))
-      (cdr dsh-emacs-modeline--queue-cache))))
-
 (defun dsh-emacs-modeline--escape-percent (txt)
   "Escape `%' in TXT for mode-line display, keeping text properties.
 Mode-line strings undergo `%'-sequence expansion, so a literal `%' must be
@@ -1557,7 +1521,6 @@ mode name and protects the final column on right-aligned mode lines."
       ""
     (let ((text (dsh-emacs-modeline--join
                  (dsh-emacs-modeline--ml-indicator)
-                 (dsh-emacs-modeline--queue-indicator)
                  (dsh-emacs-modeline--escape-percent (dsh-emacs-subagent-indicator))
                  (dsh-emacs-modeline--modeinline))))
       (if (string-empty-p text) "" (concat " " text " ")))))

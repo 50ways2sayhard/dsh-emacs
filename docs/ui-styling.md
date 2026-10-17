@@ -358,8 +358,8 @@ the objective tooltip. SVG icons occupy at most two columns of pixel space.
 The Next Message row sits below the Goal Row and above `❯`, built like that
 row: dsh web's queue glyph (a chat bubble with two text lines,
 `IconQueueOutlineRegular`) tinted with `dsh-emacs-composer-next-face` — the
-queue amber `dsh-emacs-color-queue` that the mode line's `[Q2 S1]` indicator
-also uses — then the folded preview in `dsh-emacs-composer-next-body-face`,
+queue amber `dsh-emacs-color-queue` / `dsh-emacs-color-queue-dark` — then the
+folded preview in `dsh-emacs-composer-next-body-face`,
 the muted upright tier the goal objective uses. The row carries **no**
 background band, like the Goal Row and editable `❯` line; its identity is
 the tinted glyph and muted text.

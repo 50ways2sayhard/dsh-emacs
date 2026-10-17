@@ -190,8 +190,7 @@
 
 (defcustom dsh-emacs-color-queue "#b45f06"
   "Pending-input queue color (light).
-One owner for the mode-line queue indicator and the Composer Next Message
-glyph, so pending input keeps one hue."
+Used by the Composer Next Message glyph."
   :type 'string
   :group 'dsh-emacs-faces)
 
@@ -600,9 +599,8 @@ goal tool cards, so a goal icon matches the tool purple
     (((background dark))  :foreground ,dsh-emacs-color-queue-dark)
     (t :inherit warning))
   "Next Message row leading queue glyph tint.
-The row owns its icon slot exactly as the Goal Row owns its dartboard; the
-amber is the pending-input hue the mode line already shows
-\(`dsh-emacs-modeline-queue-face'), so one queue keeps one color."
+The row owns its icon slot exactly as the Goal Row owns its dartboard;
+`dsh-emacs-color-queue' and `dsh-emacs-color-queue-dark' set its hue."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-composer-next-body-face
@@ -706,14 +704,6 @@ Muted like the Goal Row's action glyphs (dsh web tints its queue actions
     (((background dark))  :foreground "#ff6b6b")
     (t :inherit error))
   "Context usage at least 80%."
-  :group 'dsh-emacs-faces)
-
-(defface dsh-emacs-modeline-queue-face
-  `((((background light)) :foreground ,dsh-emacs-color-queue)
-    (((background dark))  :foreground ,dsh-emacs-color-queue-dark)
-    (t :inherit warning))
-  "Pending-input queue indicator (`[Q2 S1]') in the mode line.
-Shares `dsh-emacs-color-queue' with the Composer Next Message glyph."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-modeline-permission-face

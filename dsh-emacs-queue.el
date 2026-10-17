@@ -22,9 +22,6 @@
 ;; published, so this source works against 0.1.5+ servers.
 
 ;; Emacs-native interaction (no panels, no overlays):
-;;   - mode line shows `[Q2 S1]' while items are pending (`context'
-;;     placement items — host-injected next-step content — are not counted,
-;;     matching dsh web's QueueDock);
 ;;   - the echo area flashes transient feedback on enqueue / steer /
 ;;     consumption, derived from the frame diff;
 ;;   - `dsh-emacs-list-queue' (C-c C-q) opens the queue as a minibuffer
@@ -214,7 +211,7 @@ flashes are genuine (ordering information) and stay."
                              (dsh-emacs-queue--submit-suppress-clear))))))))
 
 (defvar-local dsh-emacs-queue--paint-timer nil
-  "Pending zero-delay timer that repaints Composer and the mode-line.
+  "Pending zero-delay timer that repaints Composer.
 Queue frames arrive in bursts — the host often splices an item in and
 claims it again within milliseconds, and painting each frame would
 flash the Next Message row.  One repaint per burst, from the settled
@@ -393,13 +390,12 @@ unchanged."
       dsh-emacs-queue--optimistic-submit))
 
 (defun dsh-emacs-queue--paint-after-burst ()
-  "Repaint Composer and mode-line from the settled queue mirror."
+  "Repaint Composer from the settled queue mirror."
   (setq dsh-emacs-queue--paint-timer nil)
-  (dsh-emacs-composer-render)
-  (force-mode-line-update))
+  (dsh-emacs-composer-render))
 
 (defun dsh-emacs-queue--schedule-paint ()
-  "Schedule one Composer/mode-line repaint for the current frame burst.
+  "Schedule one Composer repaint for the current frame burst.
 Further frames arriving before the timer fires (same burst) are folded
 into the same repaint — see `dsh-emacs-queue--paint-timer'."
   (unless dsh-emacs-queue--paint-timer
@@ -413,7 +409,7 @@ into the same repaint — see `dsh-emacs-queue--paint-timer'."
                    (dsh-emacs-queue--paint-after-burst)))))))))
 
 (defun dsh-emacs-queue--refresh-ui ()
-  "Recompute Composer rows and the mode-line counts.
+  "Recompute Composer rows from the queue mirror.
 Optimistic path (steer/delete/edit RPC success): paint right away and
 drop any pending burst repaint, so our own actions stay instantaneous."
   (when (timerp dsh-emacs-queue--paint-timer)
@@ -437,7 +433,7 @@ runs in the chat buffer when the call fails; ON-SUCCESS when it
 succeeds — both with the chat buffer current.  The mirror is normally
 confirmed by the following `session/control' `inbox' projection frame;
 ON-SUCCESS is where this client applies our own actions OPTIMISTICALLY,
-so steer / delete / edit update the next-preview hint and the mode-line
+so steer / delete / edit update the next-preview hint
 the instant the RPC succeeds, without waiting for the frame round-trip."
 
   (dsh-emacs-subagent-require 'mutate)

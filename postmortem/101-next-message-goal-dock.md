@@ -1,5 +1,8 @@
 # 101 — Next Message: Goal Row dock and inline queue actions
 
+_The shared mode-line queue color consumer is superseded by
+[114](114-remove-queue-modeline.md); Composer keeps the queue color tokens._
+
 _Action availability and idle send-now safety are superseded by
 [102](102-confirmed-queue-actions.md)._
 
