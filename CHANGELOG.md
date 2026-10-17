@@ -36,6 +36,16 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Reload local package source without resetting chats**: `M-x dsh-emacs-reload`
+  preflights every local module and loads `.el` source in dependency order,
+  bypassing stale bytecode. Drafts, attachments, settings, connections and
+  timers stay live; Composer, session-list and mode-line presentation refresh.
+  Package keymap defaults replace ad-hoc edits; face defaults refresh beneath
+  custom overrides. Active readers, session creation and history loads block
+  reload. Existing transcript text and callbacks are not recreated; removed
+  definitions and structural changes still require a restart. Evaluation
+  errors may leave a partial reload. (rationale: postmortem/115)
+
 - **Start typing while a session is created**: new-session commands open an
   editable draft immediately, then connect it in place when the host responds.
   Creation runs without a header banner; only failures show a header message.

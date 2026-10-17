@@ -1475,13 +1475,16 @@ caption and clock while preserving the enclosing turn's running interval."
       (dsh-emacs-modeline--whale-label)
     (apply orig-fn mode args)))
 
-(with-eval-after-load 'nerd-icons
+(defun dsh-emacs-modeline--install-nerd-icon ()
+  "Register the DSH major-mode icon with Nerd Icons."
   ;; Nerd Icons caches mode icons; this intercepts DSH before stale cached
   ;; results reach `nerd-icons-completion' buffer candidates.
   (advice-add 'nerd-icons-icon-for-mode :around
               #'dsh-emacs-modeline--nerd-icon-for-mode)
   (add-to-list 'nerd-icons-mode-icon-alist
                '(dsh-emacs-mode dsh-emacs-modeline--nerd-icon "DSH")))
+
+(eval-after-load 'nerd-icons #'dsh-emacs-modeline--install-nerd-icon)
 
 (defun dsh-emacs-modeline--mode-name ()
   "Return a blue whale on dark frames, black on light frames, or DSH.
@@ -1547,10 +1550,14 @@ Both presentations preserve Doom's segment styling."
       nil
     (apply orig-fn args)))
 
-(with-eval-after-load 'doom-modeline-segments
+(defun dsh-emacs-modeline--install-doom-icon ()
+  "Register the DSH buffer icon with Doom Modeline."
   (when (fboundp 'doom-modeline-update-buffer-file-icon)
     (advice-add 'doom-modeline-update-buffer-file-icon :around
                 #'dsh-emacs-modeline--doom-buffer-file-icon)))
+
+(eval-after-load 'doom-modeline-segments
+  #'dsh-emacs-modeline--install-doom-icon)
 
 (defun dsh-emacs-modeline--install-doom-segment ()
   "Register the DSH whale before `buffer-info' and stats after `major-mode'.

@@ -469,6 +469,23 @@ first to align the scope. Run `scripts/verify.sh` before pushing. It checks
 syntax, checker self-tests, byte compilation, the full unit suite, silent
 loading, diff whitespace, and generated-file cleanup.
 
+After saving local source changes, run `M-x dsh-emacs-reload` to load all
+package modules from source and refresh Composer, session-list and mode-line
+presentation. Chats, drafts, attachments, settings, connections and timers stay
+in place; the command does not restart dsh or send a prompt. It refuses while
+a minibuffer/question/approval interaction, session creation or history load
+is active. There is no default keybinding.
+
+If this Emacs loaded an older checkout without the command, first use
+`M-x load-file` on your checkout's
+[dsh-emacs-reload.el](dsh-emacs-reload.el), then run `M-x dsh-emacs-reload`.
+Updating files on disk alone does not update a running Emacs. Reload replaces
+ad-hoc edits to package keymaps; it does not recreate existing transcript text,
+in-flight callbacks or major-mode initialization. Removed definitions and
+changed struct layouts still require a restart. See
+[Source reload](docs/architecture.md#source-reload) for preflight checks,
+customization behavior and partial-failure limits.
+
 Optional [GUI display tests](docs/architecture.md#gui-display-regression-tests)
 check actual visual wrapping in a graphical Emacs without a dsh server.
 

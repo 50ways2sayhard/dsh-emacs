@@ -25,8 +25,60 @@ dsh-emacs/
 ├── dsh-emacs-shell.el        # Client-side `!command` shell commands (local execution)
 ├── dsh-emacs-reference.el    # @ reference completion, chips and navigation
 ├── dsh-emacs-composer.el     # Composer chrome: Goal and Next Message rows above the input
+├── dsh-emacs-reload.el       # Local source reload and bounded presentation refresh
 └── dsh-emacs-session.el      # Session list card view
 ```
+
+## Source reload
+
+`M-x dsh-emacs-reload` loads every local package source module in
+[dsh-emacs-reload.el](../dsh-emacs-reload.el)'s directory. Lisp callers may
+select another local checkout explicitly:
+
+```elisp
+(dsh-emacs-reload "/path/to/dsh-emacs/")
+```
+
+The loader reads every matching `dsh-emacs*.el` source before changing running
+definitions. Literal top-level package `require` forms determine dependency
+order; unreadable forms and cycles reject the reload before evaluation.
+Explicit `.el` paths bypass stale bytecode. External dependencies remain owned
+by ordinary `require`; this does not reload third-party packages.
+
+This is definition and presentation reload, not an unload or session migration.
+It does not re-enter modes, reconnect transports, restart the server, send RPCs
+or submit a prompt. Existing buffers, draft text, attachments, stream state,
+processes and timers remain live. Current `defvar` and Custom option values
+remain intact, with two intentional presentation exceptions:
+
+- Existing keymaps declared by `defvar` take their source initializer's contents
+  in place, so live buffers and text properties retain the same map object.
+  Ad-hoc edits to these package maps are replaced; reapply personal bindings
+  after reload if needed.
+- Face default specs refresh while Custom/theme overrides retain precedence.
+  This is not a reset of user options or saved face customizations.
+
+After loading, the command invalidates visual image caches and refreshes
+Composer rows, session-list rows and mode-line presentation. It neither replays
+nor reformats the existing transcript. Stable named `eval-after-load` callbacks
+register optional icon integrations without retaining a new anonymous callback
+body on each source revision.
+
+Reload refuses during an active minibuffer, question or approval interaction,
+or while any chat/draft is creating a session or loading history. Ordinary
+streaming is not a blocker: existing callbacks continue against their retained
+state, and named function calls resolve the new definitions. The command has
+no default keybinding. In an already-running older Emacs, use `M-x load-file`
+on [dsh-emacs-reload.el](../dsh-emacs-reload.el) once to make the command
+available; merely updating the checkout does not hot-apply it.
+
+Preflight is not a transaction. Evaluation errors can leave some new
+definitions installed; fix the error and reload again, or restart Emacs.
+Removed definitions stay resident, and existing lexical callbacks are not
+rewritten. Restart for full definition removal, changed struct layouts or
+changed major-mode initialization. These boundaries avoid destroying drafts
+and live streams for the sake of an apparent clean restart. See
+[decision record 115](../postmortem/115-source-hot-reload.md).
 
 ## New session drafts (`dsh-emacs.el`)
 

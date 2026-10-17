@@ -30,6 +30,23 @@ Composer rows use the buffer background. The former
 entries from personal theme configuration. Goal icon, label, body and action
 faces remain separately customizable.
 
+## Reloading local source
+
+Run `M-x dsh-emacs-reload` after saving package source edits. It preserves
+current option values, drafts, attachments and connections while refreshing
+face defaults, package keymaps and presentation. Custom face overrides remain
+in effect; ad-hoc modifications to package keymaps are replaced by their
+source defaults and must be reapplied after reload. There is no default
+keybinding and no server restart or prompt submission.
+
+An older running Emacs first needs `M-x load-file` on the checkout's
+[dsh-emacs-reload.el](../dsh-emacs-reload.el). Wait for active readers, session
+creation and history loading to finish before invoking the command. It does
+not recreate existing transcript text or in-flight lexical callbacks; removed
+definitions, changed struct layouts and changed major-mode initialization
+require a restart. See [Source reload](architecture.md#source-reload) for
+source-directory selection, preflight checks and partial-failure behavior.
+
 ## Common options
 
 The most commonly used options, straight in your config:

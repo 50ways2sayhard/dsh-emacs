@@ -99,6 +99,7 @@
 (require 'dsh-emacs-reference)
 (require 'dsh-emacs-shell)
 (require 'dsh-emacs-session)
+(require 'dsh-emacs-reload)
 (declare-function dsh-emacs-session--ancestors "dsh-emacs-session" (id))
 (declare-function dsh-emacs-subagent--cell "dsh-emacs-subagent" (id key))
 
@@ -4090,11 +4091,15 @@ NOT lost while searching."
 ;; it overrides the default (the default registration is skipped
 ;; when assq already finds one).  No effect when
 ;; nerd-icons-completion is not installed.
-(with-eval-after-load 'nerd-icons-completion
+(defun dsh-emacs--install-model-completion-icon ()
+  "Register the default model-picker icon without overriding user choices."
   (when (and (boundp 'nerd-icons-completion-category-icons)
              (not (assq 'dsh-model nerd-icons-completion-category-icons)))
     (add-to-list 'nerd-icons-completion-category-icons
                  '(dsh-model . (nerd-icons-codicon "nf-cod-chip" nerd-icons-blue)))))
+
+(eval-after-load 'nerd-icons-completion
+  #'dsh-emacs--install-model-completion-icon)
 
 (defun dsh-emacs--model-select-setup-hook (grouped)
   "Buffer-local tweaks for the model picker's minibuffer.
