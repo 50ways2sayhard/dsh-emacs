@@ -585,14 +585,15 @@ Local actions use property boundaries rather than searching by identity."
 
 (defun dsh-emacs-ui--toggle-fragment-at-point ()
   "Toggle the block at point, preserving it if rendering or replacement fails."
-  (save-mark-and-excursion
-    (when-let* ((state (get-text-property (point) 'dsh-emacs-ui-state))
-                ((not (map-elt state :non-foldable)))
-                (block (dsh-emacs-ui--block-at (point))))
-      (let ((inhibit-read-only t)
-            (buffer-undo-list t)
-            (text (dsh-emacs-ui--render-fragment
-                   state (map-elt state :collapsed))))
+  (when-let* ((state (get-text-property (point) 'dsh-emacs-ui-state))
+              ((not (map-elt state :non-foldable)))
+              (block (dsh-emacs-ui--block-at (point))))
+    (let ((inhibit-read-only t)
+          (buffer-undo-list t)
+          (offset (- (point) (car block)))
+          (text (dsh-emacs-ui--render-fragment
+                 state (map-elt state :collapsed))))
+      (save-mark-and-excursion
         (atomic-change-group
           ;; Insert first so markers at the old end stay after the replacement,
           ;; including a following live reply's non-advancing start marker.
@@ -600,7 +601,10 @@ Local actions use property boundaries rather than searching by identity."
           (insert text)
           (delete-region (point) (+ (cdr block) (length text))))
         (dsh-emacs-ui--remember-block
-         (cons (car block) (+ (car block) (length text))))))))
+         (cons (car block) (+ (car block) (length text)))))
+      ;; The saved point marker falls to the new end when old text is deleted.
+      ;; Keep its relative position instead, clamping if the body disappeared.
+      (goto-char (+ (car block) (min offset (1- (length text))))))))
 
 ;;;###autoload
 (defun dsh-emacs-ui-toggle-fragment ()

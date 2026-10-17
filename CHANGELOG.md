@@ -337,6 +337,10 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep the cursor on row headers when folding**: pressing `RET` on a
+  header, including its end, expands or collapses the same row without
+  jumping below it. Consecutive presses keep targeting that row.
+
 - **Avoid repeated reply action rows after background follow-ups**: between
   rendered human messages, only the latest completed turn with a nonempty
   reply keeps its footer. Earlier replies remain visible; Copy/Fork target

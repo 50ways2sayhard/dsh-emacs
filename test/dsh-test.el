@@ -1850,6 +1850,46 @@ candidates as the UI would via `all-completions', not by destructuring."
       (goto-char (point-min))
       (dsh-emacs-ui-toggle-fragment))))
 
+;; Replacing a folded row must not carry the header cursor to the block end.
+(dolist (style '(minimal rounded sharp))
+  (dolist (padding '(nil t))
+    (dolist (position '(middle label-end line-end))
+      (with-temp-buffer
+        (dsh-emacs-ui-mode 1)
+        (dsh-emacs-ui-update-fragment
+         (dsh-emacs-ui-make-fragment
+          :namespace-id "fold-point" :block-id "row" :style style
+          :label-left "Title" :label-right "Summary"
+          :body "First body line\nSecond body line" :padding padding))
+        (dsh-emacs-ui-update-fragment
+         (dsh-emacs-ui-make-fragment
+          :namespace-id "fold-point" :block-id "neighbor" :style 'minimal
+          :label-left "Neighbor" :body "Neighbor body"))
+        (let* ((block (dsh-emacs-ui-find-block "fold-point" "row"))
+               (next (dsh-emacs-ui-find-block "fold-point" "neighbor"))
+               (boundary (copy-marker (car next) nil))
+               (neighbor (buffer-substring (car next) (cdr next))))
+          (goto-char (car block))
+          (search-forward "Summary")
+          (pcase position
+            ('middle (backward-char 3))
+            ('line-end (end-of-line)))
+          (let ((original-point (point)))
+            (dotimes (pass 2)
+              (call-interactively (key-binding (kbd "RET")))
+              (let* ((row (dsh-emacs-ui-find-block "fold-point" "row"))
+                     (state (get-text-property (car row) 'dsh-emacs-ui-state))
+                     (next (dsh-emacs-ui-find-block "fold-point" "neighbor")))
+                (dsh-test-assert
+                    (format "fragment-ret-keeps-header-point-%s-%s-%s-%s"
+                            style padding position pass)
+                  (= (point) original-point)
+                  (eq (map-elt state :collapsed) (= pass 1))
+                  (= boundary (car next))
+                  (equal-including-properties
+                   neighbor (buffer-substring (car next) (cdr next)))))))
+          (set-marker boundary nil))))))
+
 ;; Rendering and insertion failures preserve text, properties and input markers.
 (dolist (fault '(render insert))
   (dolist (operation '(update fold create))
