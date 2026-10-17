@@ -1005,7 +1005,7 @@ matches the workspace registered for it under any spelling."
   "Edit a draft while its session is being created.
 Sending and session commands are unavailable until creation succeeds.
 After failure, `\\[dsh-emacs-retry-session-creation]' retries without
-clearing the draft or changing the requested session identity."
+clearing the draft, using the last session identity confirmed by the server."
   (setq-local header-line-format nil))
 
 (defun dsh-emacs-retry-session-creation ()
@@ -1053,8 +1053,12 @@ clearing the draft or changing the requested session identity."
                               (lambda (win)
                                 (cons win (- (window-point win) (point-min))))
                               (get-buffer-window-list buf nil t))))
-               (unless (equal sid id)
-                 (error "Server returned a different session identity"))
+               (unless (and (stringp sid) (not (string-empty-p sid)))
+                 (error "Server returned no session identity"))
+               ;; A used candidate may be replaced by the server.  Preserve
+               ;; its authoritative ID if activation fails and we retry.
+               (setq context (list dir workspace preset server sid)
+                     dsh-emacs--creation-context context)
                (when-let* ((other (gethash sid dsh-emacs--chat-buffers))
                            ((buffer-live-p other))
                            ((not (eq other buf))))
@@ -1485,6 +1489,9 @@ its own realtime stream (tearing the previous one down here used to
 leave it stream-less — unable to ever switch back to
 realtime)."
   (interactive)
+  (when (and address
+             (equal (dsh-protocol-subagent-address-mode address) "external"))
+    (user-error "External subagents have no local conversation"))
   (dsh-emacs-server-ensure)
   (setq dsh-emacs--current-session session-id)
   (let* ((existing (gethash session-id dsh-emacs--chat-buffers))

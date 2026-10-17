@@ -103,6 +103,49 @@
             (should (dsh-protocol-subagent-cell-present
                      (dsh-emacs-subagent--cell "cold" 'subagentCatalog)))))))))
 
+(ert-deftest dsh-emacs-test-subagent-migration-hints-never-become-cells ()
+  :tags '(dsh-unit)
+  (let ((hints '((kind . "migration-required")
+                 (values (subagentCatalog . [])
+                         (tokenUsage (outputTokens . 999)))))
+        (dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
+        callback)
+    (should-error (dsh-protocol-subagent-baseline--from-alist hints)
+                  :type 'dsh-protocol-migration-required)
+    (cl-letf (((symbol-function 'dsh-emacs-subagent--changed) #'ignore)
+              ((symbol-function 'dsh-emacs--rpc-async)
+               (lambda (_method _args cb) (setq callback cb))))
+      (dsh-emacs-subagent-refresh "cold")
+      (funcall callback t hints)
+      (let ((state (gethash "cold" dsh-emacs--subagent-catalogs)))
+        (should (eq (plist-get state :state) 'error))
+        (should (string-match-p "requires migration" (plist-get state :error)))
+        (should-not (plist-get state :request))
+        (should-not (plist-get state :cells)))
+      ;; A live baseline received during a cold read retains its exact cut.
+      (dsh-emacs-subagent-refresh "cold")
+      (dsh-emacs-subagent-apply
+       "cold" (dsh-protocol-subagent-baseline--from-alist
+               '((kind . "sequenced") (asOfSeq . 8)
+                 (values (subagentCatalog . []) (tokenUsage (outputTokens . 12))))))
+      (funcall callback t hints)
+      (should (= 8 (dsh-protocol-subagent-cell-seq
+                    (dsh-emacs-subagent--cell "cold" 'tokenUsage))))
+      (should (= 12 (dsh-emacs-subagent-token-total
+                     (dsh-emacs-subagent--value "cold" 'tokenUsage))))
+      (dsh-emacs-subagent-refresh "cold")
+      (funcall callback t '((kind . "sequenced") (asOfSeq . 9)
+                           (values (subagentCatalog . []))))
+      (should (eq 'ready (plist-get
+                         (gethash "cold" dsh-emacs--subagent-catalogs) :state))))
+    (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+               (lambda () "legacy"))
+              ((symbol-function 'dsh-emacs--rpc-request)
+               (lambda (&rest _) (cons t hints))))
+      (should-error (dsh-emacs-subagent--read)
+                    :type 'dsh-protocol-migration-required)
+      (should-not (gethash "legacy" dsh-emacs--subagent-catalogs)))))
+
 (ert-deftest dsh-emacs-test-subagent-subagent-idle-parent-allows-input ()
   :tags '(dsh-unit)
   (let* ((parent (dsh-protocol-session--from-alist
@@ -176,6 +219,37 @@
             (should (equal (cdr (assq 'kind address)) "subagent"))
             (should (= (cdr (assq 'throughSeq args)) 40))
             (should (= (cdr (assq 'beforeSeq args)) 10))))))))
+
+(ert-deftest dsh-emacs-test-subagent-external-has-no-local-conversation ()
+  :tags '(dsh-unit)
+  (let ((dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
+        (dsh-emacs--subagent-host-live nil)
+        (dsh-emacs--chat-buffers (make-hash-table :test #'equal))
+        reads)
+    (cl-letf (((symbol-function 'dsh-emacs-subagent--changed) #'ignore)
+              ((symbol-function 'dsh-emacs--active-session-id) (lambda () "parent"))
+              ((symbol-function 'dsh-emacs--rpc-async)
+               (lambda (method args _cb) (push (cons method args) reads)))
+              ((symbol-function 'dsh-emacs-server-ensure)
+               (lambda () (error "External child must not connect")))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) "Remote [external]")))
+      (dsh-emacs-subagent-apply
+       "parent" (dsh-protocol-subagent-baseline--from-alist
+                 '((asOfSeq . 1)
+                   (values (subagentCatalog .
+                            [((id . "external") (mode . "external") (label . "Remote"))
+                             ((id . "local") (mode . "continuable") (label . "Local"))])))))
+      (pcase-let ((`(,parent . ,entry) (dsh-emacs-subagent--read)))
+        (should (equal parent "parent"))
+        (should (equal (dsh-protocol-subagent-entry-id entry) "external"))
+        (should (equal reads '(("session/projections"
+                               (request (sessionId . "local"))))))
+        (should-error (dsh-emacs-open-subagent parent entry) :type 'user-error)
+        (should-not (gethash "external" dsh-emacs--chat-buffers)))
+      (should-error (dsh-emacs-subagent-stop) :type 'user-error)
+      (should (cl-every (lambda (call) (equal (car call) "session/projections"))
+                        reads)))))
 
 (ert-deftest dsh-emacs-test-subagent-subagent-picker-distinguishes-duplicate-labels ()
   :tags '(dsh-unit)

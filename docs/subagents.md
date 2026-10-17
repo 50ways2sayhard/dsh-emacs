@@ -11,6 +11,12 @@ an Agent. The original real-server E2E passed history paging, continuation,
 stop and reconnect recovery. The minibuffer real-Emacs E2E passed **33 checks**. It drives the real minibuffer
 and checks return to the originating chat position and other-window selection.
 
+On 2026-10-18, dsh 0.2.1-rc.2 passed the standard 28-check E2E and a focused
+creation/projection probe, including a real `migration-required` response from
+an existing legacy Session. That probe rejected the cached hints without
+migrating the Session. External-child guards have unit coverage; external
+delegation was not exercised live in this run.
+
 Decision records: [075](../postmortem/075-subagent-conversations.md) for protocol
 and capability boundaries; [076](../postmortem/076-subagent-minibuffer.md) for
 the minibuffer workflow; [077](../postmortem/077-session-list-subagents.md)
@@ -33,7 +39,9 @@ with loading and error feedback. To discover other unknown catalogs, open the
 parent chat and use the subagent picker or `dsh-emacs-subagent-refresh`.
 Empty catalogs add no placeholder row. Cold children remain navigable without
 a session summary; rename, archive and fork are refused locally. `i` shows
-child details.
+child details. dsh 0.2.1 external entries remain visible, but have no local
+conversation: opening or interrupting them is refused, and the picker does
+not fetch their projections.
 
 From a chat, run `M-x dsh-emacs-list-subagents` or click the mode-line child
 count. Standard `completing-read` lists the conversation's **direct children**:
@@ -67,7 +75,11 @@ projections and parent availability. A missing root catalog is fetched when
 opening the picker; failures are reported distinctly from an empty catalog.
 Known catalogs are reused. Missing child metrics are fetched asynchronously;
 annotations use the available state when the completion frontend renders them.
-There is no periodic redraw or polling.
+There is no periodic redraw or polling. A `migration-required` response reports
+that the conversation must be opened first. Its cached hints never become
+sequenced cells or a ready catalog; async reads retain the explanation in the
+existing error state (the session-list error row exposes it in its tooltip).
+Normal follow can migrate the conversation, after which reads can be retried.
 
 ## Mode line and child input
 
@@ -125,7 +137,7 @@ plain plist:
 ;;           subagentCatalog / subagent / subagentTiming / tokenUsage
 ;; :state    nil / ready / loading / error
 ;; :request  generation-scoped cold-read token, nil after completion
-;; :error    remote error body
+;; :error    remote error body or local decode/migration explanation
 ;; :summary-revision  counter protecting newer live summaries
 ;; :availability-revision  counter for full summaries and removals only
 ```

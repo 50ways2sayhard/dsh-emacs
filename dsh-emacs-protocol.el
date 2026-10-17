@@ -1548,8 +1548,14 @@ Synthetic fork endings have no usable elapsed-time endpoint."
                                          ('tokenUsage (and raw (dsh-protocol-token-usage--from-alist raw)))))))))
   key seq present value)
 
+(define-error 'dsh-protocol-migration-required
+  "Session requires migration; open its conversation first" 'user-error)
+
 (defun dsh-protocol-subagent-baseline--from-alist (alist)
-  "Decode ALIST into sequenced cells, retaining absence watermarks."
+  "Decode ALIST into sequenced cells, retaining absence watermarks.
+Signal `dsh-protocol-migration-required' for sequence-free cached hints."
+  (when (equal (cdr (assq 'kind alist)) "migration-required")
+    (signal 'dsh-protocol-migration-required nil))
   (let ((values (cdr (assq 'values alist)))
         (seq (or (cdr (assq 'asOfSeq alist)) -1)))
     (mapcar

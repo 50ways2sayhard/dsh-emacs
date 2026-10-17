@@ -83,8 +83,10 @@ and live streams for the sake of an apparent clean restart. See
 ## New session drafts (`dsh-emacs.el`)
 
 New-session commands display an editable `dsh-emacs-draft-mode` buffer first.
-Its creation context captures cwd, workspace, preset, server and a stable
-client-generated session identity. Each retry owns a fresh attempt token;
+Its creation context captures cwd, workspace, preset, server and a
+client-generated session candidate. A successful create response supplies the
+authoritative identity, which replaces the candidate for activation and any
+later retry after activation failure. Each retry owns a fresh attempt token;
 callbacks require the original live draft, token and server. Pending drafts
 have no active session fallback. Failures preserve the text and surface in the
 header; `C-c C-c` retries. Workspace creation failures stop the chain instead
@@ -1299,6 +1301,10 @@ stays in `dsh-emacs-tokens.el`. The event layer feeds control deltas/baselines
 and follow snapshots, and merges summary facts without replacing projection
 hints. Availability is true / explicitly unavailable / unknown; disconnect
 invalidates it and a generation-checked summary read restores it.
+The baseline decoder rejects `migration-required` hints with a named user
+error. Async cold reads retain that error and release their request token;
+no hinted values enter the sequenced store. The picker skips metric reads for
+external children, and opening their local chat fails before connecting.
 
 Each child chat carries its direct-parent address. Follow, paging, prompt and
 stop serialize that address in the protocol module. The entry point owns input

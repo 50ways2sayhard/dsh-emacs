@@ -92,13 +92,18 @@
              (let ((current (gethash id dsh-emacs--subagent-catalogs)))
                (when (and (= (car token) dsh-emacs--subagent-generation)
                           (eq token (plist-get current :request)))
+                 ;; Decode before marking ready: migration hints have no
+                 ;; sequence cut and must never enter the projection store.
+                 (when (and ok value)
+                   (condition-case err
+                       (setq value (dsh-protocol-subagent-baseline--from-alist value))
+                     (error (setq ok nil value (error-message-string err)))))
                  (setq current (plist-put current :request nil)
                        current (plist-put current :state (if (and ok value) 'ready 'error))
                        current (plist-put current :error (unless (and ok value) value)))
                  (puthash id current dsh-emacs--subagent-catalogs)
                  (if (and ok value)
-                     (dsh-emacs-subagent-apply
-                      id (dsh-protocol-subagent-baseline--from-alist value))
+                     (dsh-emacs-subagent-apply id value)
                    (dsh-emacs-subagent--changed)))))))))))
 
 (defun dsh-emacs-subagent-summary-changed (id &optional status-only)
@@ -301,8 +306,9 @@ Use the current completion frontend with no additional minibuffer keys."
       (unless table (user-error "No subagents for this conversation"))
       (dsh-emacs-subagent--refresh-summaries)
       (dolist (entry entries)
-        (unless (plist-get (gethash (dsh-protocol-subagent-entry-id entry)
-                                    dsh-emacs--subagent-catalogs) :state)
+        (unless (or (equal (dsh-protocol-subagent-entry-mode entry) "external")
+                    (plist-get (gethash (dsh-protocol-subagent-entry-id entry)
+                                        dsh-emacs--subagent-catalogs) :state))
           (dsh-emacs-subagent-refresh (dsh-protocol-subagent-entry-id entry))))
       (let* ((completion-extra-properties
               (list :annotation-function
@@ -339,7 +345,7 @@ Use the current completion frontend with no additional minibuffer keys."
   (pcase-let* ((`(,parent . ,entry) (dsh-emacs-subagent--read))
                (address (dsh-emacs-subagent-address parent entry)))
     (unless (equal (dsh-protocol-subagent-address-mode address) "continuable")
-      (user-error "One-shot subagents cannot be interrupted"))
+      (user-error "Only local continuable subagents can be interrupted"))
     (unless (equal (dsh-emacs-subagent--activity
                     (dsh-protocol-subagent-address-child address)) "running")
       (user-error "This subagent is not known to be running"))

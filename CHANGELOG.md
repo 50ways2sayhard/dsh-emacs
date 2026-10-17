@@ -8,6 +8,18 @@ minor) and stay undated until the release is cut.
 
 ## 0.7.0 - Unreleased
 
+### Fixed
+
+- **Accept server-assigned session IDs**: dsh 0.2.1 can replace a requested
+  session candidate. Draft activation uses the returned ID and preserves it
+  for retries after an activation failure, together with the draft text.
+- **Keep migration hints out of projection state**: migration-required reads
+  report an explicit error instead of marking the subagent catalog ready or
+  installing cached hints as sequenced cells.
+- **Guard external subagents**: catalog entries without a local conversation
+  no longer trigger child projection reads or attempt to open a local chat;
+  interrupt remains limited to local continuable children.
+
 ## 0.6.0 - 2026-10-17
 
 ### Breaking Changes

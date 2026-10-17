@@ -1076,14 +1076,16 @@
               (funcall (cadr request-two) t
                        `((sessionId . ,(car request-two)) (agentPreset . "code")))
               (funcall (cadr request-one) t
-                       `((sessionId . ,(car request-one)) (agentPreset . "code")))
+                       '((sessionId . "server-assigned") (agentPreset . "code")))
               (ert-info ((format "%s" "draft-responses-do-not-steal-focus"))
                 (should (eq (window-buffer (selected-window)) other))
                 (should (equal dsh-emacs--current-session "old-session"))
                 (should (null dsh-emacs--current-buffer)))
               (ert-info ((format "%s" "draft-responses-connect-their-own-buffers"))
                 (should (equal connected (list first second)))
-                (should (eq (gethash (car request-one) dsh-emacs--chat-buffers) first))
+                (should (eq (gethash "server-assigned" dsh-emacs--chat-buffers) first))
+                (should-not (gethash (car request-one) dsh-emacs--chat-buffers))
+                (should (dsh-emacs--chat-session-item "server-assigned"))
                 (should (eq (gethash (car request-two) dsh-emacs--chat-buffers) second)))
               (with-current-buffer first
                 (ert-info ((format "%s" "draft-activation-preserves-text-point-and-directory"))
@@ -1116,20 +1118,21 @@
                 (let ((dsh-emacs-mode-hook
                        (list (lambda () (error "test activation failure")))))
                   (funcall (cadr new) t
-                           `((sessionId . ,(car new)) (agentPreset . "code"))))
+                           '((sessionId . "server-retry") (agentPreset . "code"))))
                 (ert-info ((format "%s" "draft-activation-error-restores-editable-text"))
                   (should (derived-mode-p 'dsh-emacs-draft-mode))
                   (should (equal (buffer-string) "retry me"))
                   (should (null dsh-emacs--creation-pending))
                   (should dsh-emacs--creation-context)
-                  (should (null (gethash (car new) dsh-emacs--chat-buffers))))
+                  (should (null (gethash "server-retry" dsh-emacs--chat-buffers))))
                 (dsh-emacs-retry-session-creation)
+                (should (equal (caar requests) "server-retry"))
                 (funcall (cadar requests) t
                          `((sessionId . ,(caar requests)) (agentPreset . "code")))
                 (ert-info ((format "%s" "draft-retry-activates-without-sending"))
                   (should (derived-mode-p 'dsh-emacs-mode))
                   (should (equal (dsh-emacs--get-input) "retry me"))
-                  (should (equal dsh-emacs--current-session (car old))))))
+                  (should (equal dsh-emacs--current-session "server-retry")))))
             (let* ((draft (dsh-emacs-new-session "/tmp" nil "code"))
                    (request (car requests)))
               (kill-buffer draft)

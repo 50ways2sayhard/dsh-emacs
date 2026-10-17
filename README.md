@@ -7,9 +7,13 @@ mandatory third-party Emacs packages.
 
 ![Chat buffer with streaming replies and tool calls](assets/chat.png)
 
-The client targets the **dsh 0.2.0 protocol**. The
-[protocol reference](docs/rpc.md) records the audited `0.2.0-rc.2` baseline
-and differences from earlier servers.
+The client includes compatibility fixes for the **dsh 0.2.1 protocol**:
+server-assigned session IDs, migration-required projection reads, and external
+subagent navigation guards. The [protocol reference](docs/rpc.md) is
+source-audited through **dsh 0.2.1-rc.2**. Live validation on 2026-10-18
+passed 28 E2E checks and 9 focused creation/projection checks against that
+version. External-child guards have unit coverage. Existing browser-cookie
+authentication is retained.
 
 ## Quick start
 
