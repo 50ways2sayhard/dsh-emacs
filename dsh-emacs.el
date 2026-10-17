@@ -323,7 +323,7 @@ non-nil value, so readers may iterate it directly.")
 (defvar dsh-emacs--chat-buffers (make-hash-table :test 'equal)
   "Registry of session id -> live chat buffer.
 
-Chat buffers are named `dsh-<list title>' (matching the session list, with
+Chat buffers are named `dsh: <list title>' (matching the session list, with
 dsh prepended), and sessions with the same title need unique names, so a
 buffer cannot be looked up by title; this table provides stable reuse and
 renaming by session ID.")
@@ -723,12 +723,11 @@ following character); it is replaced with the visually close full-width
 (defun dsh-emacs--chat-buffer-name (session-id)
   "Base buffer name for SESSION-ID.
 
-`dsh-<list title>' when the session list has a display title for the session
-(so the modeline matches the list), otherwise `dsh: <session-id>' as the
-historical fallback."
+`dsh: <list title>' when the session list has a display title for the session
+(so the modeline matches the list), otherwise `dsh: <session-id>'."
   (let ((title (dsh-emacs--chat-title session-id)))
     (if (and title (not (string-empty-p title)))
-        (concat "dsh-" (dsh-emacs--sanitize-buffer-name title))
+        (concat "dsh: " (dsh-emacs--sanitize-buffer-name title))
       (format "dsh: %s" session-id))))
 
 (defun dsh-emacs--chat-buffer-untrack ()
@@ -748,7 +747,7 @@ A numeric suffix is appended when another buffer already holds the name."
                       (buffer-local-value 'dsh-emacs--buffer-session buf)))
       (with-current-buffer buf
         (let ((name (if dsh-emacs--buffer-subagent
-                        (format "dsh-%s/%s"
+                        (format "dsh: %s/%s"
                                 (dsh-emacs--sanitize-buffer-name
                                  (or (dsh-emacs--chat-title
                                       (dsh-protocol-subagent-address-parent dsh-emacs--buffer-subagent))
@@ -1492,7 +1491,7 @@ realtime)."
          (buf (if (and existing (buffer-live-p existing))
                   existing
                 ;; First open, or the buffer was killed: name it
-                ;; `dsh-<list title>', appending an <N> suffix when taken
+                ;; `dsh: <list title>', appending an <N> suffix when taken
                 ;; so it stays unique (same-titled sessions can coexist).
                 (get-buffer-create
                  (generate-new-buffer-name
@@ -1997,7 +1996,7 @@ preset, context snapshot, title and workspace in one round trip."
                                              (cdr (assq 'items value))))))
                                 ;; A brand-new session on first open is missing
                                 ;; from the cache: refresh the whole cache so
-                                ;; the buffer name (`dsh-<title>') and the
+                                ;; the buffer name (`dsh: <title>') and the
                                 ;; workspace (default-directory) come along
                                 ;; too; `dsh-emacs--chat-buffers-sync-all' now
                                 ;; also feeds the preset to open chat buffers.
@@ -4931,7 +4930,7 @@ matching runs only for a local server and a non-remote directory."
 ;; and only one is answered at a time (nested completing-read calls
 ;; would stack different sessions' prompts in the same minibuffer
 ;; and overwrite each other); prompts carry the owning session's
-;; identifier (the chat buffer name, e.g. [dsh-<title>]) so the user
+;; identifier (the chat buffer name, e.g. [dsh: <title>]) so the user
 ;; knows which session asked.
 
 (defvar dsh-emacs--question-queue nil
@@ -5008,7 +5007,7 @@ distinguish remote resolution from the user's `C-g'."
 
 (defun dsh-emacs--question-session-label (session-id)
   "Label identifying SESSION-ID in question prompts.
-Prefers the live chat buffer's name (the title-based \"dsh-<title>\"
+Prefers the live chat buffer's name (the title-based \"dsh: <title>\"
 form); falls back to `dsh-emacs--chat-buffer-name', then to the raw id.
 Long labels are truncated so the minibuffer prompt stays readable; a nil
 SESSION-ID (direct test calls) yields an empty label."

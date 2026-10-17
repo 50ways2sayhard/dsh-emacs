@@ -156,13 +156,14 @@ misc-info, and all other existing content are preserved:
   major-mode tail; other status labels and stats retain their normal layout.
 - The splicing is done with `(:eval …)` and is recomputed live on
   `force-mode-line-update`.
-- **Buffer name**: session buffers are named `dsh-<list title>` (matching the
-  title of the row in the `*dsh-sessions*` list, with `dsh` prepended), which is
+- **Buffer name**: session buffers are named `dsh: <list title>` (matching the
+  title of the row in the `*dsh-sessions*` list, with `dsh: ` prepended), which is
   what `%b` in the mode line shows; a `%` in the title is replaced with the
   full-width `％` (mode-line `%`-expansion would swallow characters), sessions
   with the same title automatically get a `<N>` suffix, and the buffer is
   renamed automatically with the list refresh after a title drifts or is
-  renamed.
+  renamed. Sessions without a title use `dsh: <session-id>`; subagent chats
+  use `dsh: <parent title>/<label>`.
 
 The animation lights up when a message is sent or compaction starts and goes
 out when both activities finish; it is cleaned up automatically when the

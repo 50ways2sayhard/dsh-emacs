@@ -50,7 +50,7 @@
     (setq dsh-emacs--sessions
           (dsh-emacs-test--session-items (list item)))
     (ert-info ((format "%s" "chat-buffer-name-with-title"))
-      (should (string= "dsh-Emacs tweak" (dsh-emacs--chat-buffer-name "sess-title-1"))))
+      (should (string= "dsh: Emacs tweak" (dsh-emacs--chat-buffer-name "sess-title-1"))))
     (setq dsh-emacs--sessions old)))
 
 (ert-deftest dsh-emacs-test-lifecycle-chat-buffer-name-fallback-without-title ()
@@ -91,7 +91,7 @@
     (setq dsh-emacs--sessions
           (dsh-emacs-test--session-items (list item)))
     (ert-info ((format "%s" "chat-buffer-name-escape-percent"))
-      (should (string= "dsh-完成50％" (dsh-emacs--chat-buffer-name "sess-pct"))))
+      (should (string= "dsh: 完成50％" (dsh-emacs--chat-buffer-name "sess-pct"))))
     (setq dsh-emacs--sessions old)))
 
 ;; --- Test 39: same-title sessions get unique names (<N> suffix) ---
@@ -135,7 +135,7 @@
           (puthash "sess-rename" buf dsh-emacs--chat-buffers)
           (dsh-emacs--chat-buffer-sync "sess-rename")
           (ert-info ((format "%s" "chat-buffer-sync-renames"))
-            (should (string= "dsh-renamed" (buffer-name buf))))
+            (should (string= "dsh: renamed" (buffer-name buf))))
           (ert-info ((format "%s" "chat-buffer-sync-sets-default-directory"))
             (should (and (stringp (buffer-local-value 'default-directory buf))
                          (string= "/tmp/proj/"
@@ -217,7 +217,7 @@
                              (string= "/tmp/ws/"
                                       (buffer-local-value 'default-directory buf)))))
               (ert-info ((format "%s" "open-session-first-open-names-buffer"))
-                (should (and (bufferp buf) (string= "dsh-opening" (buffer-name buf)))))))
+                (should (and (bufferp buf) (string= "dsh: opening" (buffer-name buf)))))))
         (setq dsh-emacs--sessions old-sessions
               dsh-emacs--current-buffer old-current-buffer
               dsh-emacs--current-session old-current-session)

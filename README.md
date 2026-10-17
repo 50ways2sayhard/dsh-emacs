@@ -62,6 +62,9 @@ and clears it when both activities finish or the session disconnects. This
 fallback uses no animation timer or elapsed clock. See
 [Mode-line status](docs/modeline.md) for setup.
 
+Chat buffers are named `dsh: <title>` (or `dsh: <session-id>` before a title
+is available); subagent chats use `dsh: <parent title>/<label>`.
+
 When `nerd-icons-completion` is active, DSH chat buffers use the whale icon in
 Consult's buffer-switch minibuffer (`C-x b`).
 

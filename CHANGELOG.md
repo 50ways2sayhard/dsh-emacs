@@ -271,6 +271,10 @@ minor) and stay undated until the release is cut.
 
 ### Changed
 
+- **Use a consistent chat buffer prefix**: titled chats are named
+  `dsh: <title>` instead of `dsh-<title>`, and subagent chats use
+  `dsh: <parent title>/<label>`. The session-ID fallback is unchanged.
+
 - **Decode large session lists faster**: HTTP responses and event-stream frames
   use native JSON parsing when available, reducing client-side work on first
   open. Builds without native JSON keep the Lisp reader.
