@@ -36,18 +36,25 @@
 ;;;       problem surfaces through batch-byte-compile warnings.
 
 (defvar dsh-check:files
-  '("dsh-emacs.el" "dsh-emacs-protocol.el" "dsh-emacs-session.el"
-    "dsh-emacs-markdown.el" "dsh-emacs-render.el" "dsh-emacs-events.el"
-    "dsh-emacs-ui.el" "dsh-emacs-faces.el" "dsh-emacs-tokens.el"
-    "dsh-emacs-modeline.el" "dsh-emacs-queue.el" "dsh-emacs-jobs.el"
-    "dsh-emacs-server.el" "dsh-emacs-provider.el"
-    "dsh-emacs-plan.el" "dsh-emacs-subagent.el"
-    "dsh-emacs-command.el" "dsh-emacs-skill.el" "dsh-emacs-reference.el"
-    "dsh-emacs-composer.el" "dsh-emacs-history.el"
-    "dsh-emacs-shell.el" "dsh-emacs-reload.el"
-    "test/dsh-test.el" "test/dsh-e2e.el" "test/dsh-gui.el"
-    "test/check-lisp-test.el" "scripts/render-report.el")
-  "Default elisp files to check (relative to the repository root).")
+  (append
+   '("dsh-emacs.el" "dsh-emacs-protocol.el" "dsh-emacs-session.el"
+     "dsh-emacs-markdown.el" "dsh-emacs-render.el" "dsh-emacs-events.el"
+     "dsh-emacs-ui.el" "dsh-emacs-faces.el" "dsh-emacs-tokens.el"
+     "dsh-emacs-modeline.el" "dsh-emacs-queue.el" "dsh-emacs-jobs.el"
+     "dsh-emacs-server.el" "dsh-emacs-provider.el"
+     "dsh-emacs-plan.el" "dsh-emacs-subagent.el"
+     "dsh-emacs-command.el" "dsh-emacs-skill.el" "dsh-emacs-reference.el"
+     "dsh-emacs-composer.el" "dsh-emacs-history.el"
+     "dsh-emacs-shell.el" "dsh-emacs-reload.el"
+     "test/dsh-test.el" "test/dsh-e2e.el" "test/dsh-gui.el"
+     "test/check-lisp-test.el" "scripts/render-report.el"
+     "scripts/check-lisp.el" "scripts/check-coverage.el")
+   (mapcar (lambda (file) (concat "test/" file))
+           (directory-files
+            (expand-file-name "../test" (file-name-directory load-file-name))
+            nil "\\`dsh-test-.+\\.el\\'")))
+  "Default files relative to the repository root, including unit-test support.
+Every test/dsh-test-*.el subsystem and runner self-test is checked, not loaded.")
 
 (defvar dsh-check--no-run nil
   "When non-nil, `load'ing this file skips `dsh-check:main' (for test loading).")

@@ -32,7 +32,7 @@ ownership map in `docs/architecture.md`.
 ## Verification (run after every change — never skip)
 
 **One-shot gate: `scripts/verify.sh`** — the aggregated "definition of done"
-(check-lisp over `dsh-check:files`, checker self-tests, production
+(check-lisp over `dsh-check:files`, checker and runner self-tests, production
 byte-compile with free-variable warnings as failures, full unit suite, clean
 load silent, `git diff --check`, tree junk scan). Exit 0 only when everything
 passes; any FAIL is a blocker (see rule 6 below).
@@ -54,7 +54,8 @@ The manual loop, in order:
 2. **Fixing syntax errors — by hand, from the diagnostic report, in order**
    (the playbook below); then re-run step 1 until exit 0.
 3. Full unit tests: `emacs -Q --batch -l test/dsh-test.el`; checker
-   self-tests: `emacs -Q --batch -l test/check-lisp-test.el`
+   self-tests: `emacs -Q --batch -l test/check-lisp-test.el`; runner/coverage
+   self-tests: `emacs -Q --batch -l test/dsh-test-runner-test.el`
 4. Clean load: `emacs -Q --batch -L . -l dsh-emacs.el` should print nothing
    and exit 0
 5. For function-level repros prefer a minimal batch:
@@ -226,18 +227,44 @@ whole report blindly.
   padding, truncation, display order) don't add tests unless the text
   carries a real contract (state visibility, command availability, previously
   regressed behavior).
-- Unit tests live in `test/dsh-test.el` (ERT, no server needed); checker
-  self-tests in `test/check-lisp-test.el`. `test/dsh-e2e.el` drives a **real
-  dsh server** and is deliberately outside the verify gate — run it manually
-  when touching the event stream / RPC round-trip paths.
+- Unit tests live in `test/dsh-test-<subsystem>.el` (ERT, no server needed).
+  Each subsystem requires `test/dsh-test-support.el` for shared fixtures;
+  test names start with `dsh-emacs-test-` and carry `:tags '(dsh-unit)`.
+  `test/dsh-test.el` is only the loader and batch entry point; keep
+  `emacs -Q --batch -l test/dsh-test.el` working. Loading subsystem files
+  defines tests without executing them. Add new cases to their owner, not
+  the runner or shared support.
+- For an individual interactive test, add the checkout's `test/` directory
+  to `load-path`, load its subsystem file with `M-x load-file`, then use
+  `M-x ert` to select its name. To run a subsystem in a fresh batch:
+  ```sh
+  emacs -Q --batch -L test -l test/dsh-test-protocol.el -f ert-run-tests-batch-and-exit
+  ```
+  Tools loading the full suite bind `dsh-emacs-test-no-run` to t, then call
+  `dsh-emacs-test-run` with an optional ERT selector. It rejects an empty
+  selection and returns statistics without exiting; the default selector is
+  `(tag dsh-unit)`. Tests must not depend on another test having run first.
+- Use unconditional `should`, `should-not`, or `should-error` assertions.
+  A conditional body that never reaches its assertion can still pass ERT.
+  Use `skip-unless` for a genuinely absent optional dependency, not for a
+  broken or stale installed library. Keep fixtures and cleanup local to each
+  test so individual runs and reruns are meaningful.
+- Checker self-tests live in `test/check-lisp-test.el`; isolated runner and
+  coverage exit-contract tests live in `test/dsh-test-runner-test.el` (tag
+  `dsh-runner`, excluded from unit-suite discovery). `scripts/check-lisp.el`
+  discovers all `test/dsh-test-*.el` files for syntax checking, including
+  support and runner self-tests. `test/dsh-e2e.el` drives a **real dsh server**
+  and is deliberately outside the verify gate; run it manually when touching
+  the event stream / RPC round-trip paths.
 - Mock the RPC seam (`dsh-emacs--rpc-async` et al.) instead of spawning
   servers in unit tests; fixtures are wire-shaped alists fed through the
   compat gates.
-- Optional coverage report (testcover line/branch, ~1s):
-  `emacs -Q --batch -l scripts/check-coverage.el` — per-definition coverage,
-  defs below 80%; informational only, low coverage is a hint not a blocker.
+- Optional coverage report (testcover line/branch):
+  `emacs -Q --batch -l scripts/check-coverage.el` reports per-definition
+  coverage and defs below 80%. Low coverage is informational, not a blocker;
+  unexpected test failures still exit nonzero, after printing the report.
   `dsh-emacs-protocol.el` is excluded (testcover's edebug copy breaks
-  cl-defstruct values).
+  cl-defstruct values). Rationale: `postmortem/118-ert-subsystem-tests.md`.
 
 ## Documentation and changelog
 

@@ -5,7 +5,8 @@
 # exit 1 if anything fails.
 # Covers every machine-checkable step:
 #   1. check-lisp over the whole default dsh-check:files list
-#   2. checker self-tests (test/check-lisp-test.el)
+#   2. checker and runner self-tests (test/check-lisp-test.el and
+#      test/dsh-test-runner-test.el; runner failure/coverage status contracts)
 #   3. byte-compile of the production files (Errors count as FAIL;
 #      "reference to free variable" does too -- it means "code references a
 #      variable that does not exist", exactly the symptom of an unescaped
@@ -50,6 +51,9 @@ run 'check-lisp'      check     emacs -Q --batch -l scripts/check-lisp.el
 
 printf '\n== checker self-tests ==\n'
 run 'check-lisp-test' selftest  emacs -Q --batch -l test/check-lisp-test.el
+
+printf '\n== runner and coverage self-tests ==\n'
+run 'dsh-test-runner-test' runner emacs -Q --batch -l test/dsh-test-runner-test.el
 
 printf '\n== byte-compile (production files; Errors and free-variable warnings fail) ==\n'
 byte_files=$(ls dsh-emacs*.el 2>/dev/null)

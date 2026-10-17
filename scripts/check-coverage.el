@@ -9,7 +9,11 @@
 ;;; list of the first N uncovered functions to help fill in tests.
 
 (require 'cl-lib)
+(require 'ert)
 (require 'testcover)
+
+(defvar dsh-emacs-test-no-run)
+(declare-function dsh-emacs-test-run "../test/dsh-test" (&optional selector))
 
 (defvar dsh-cov:root
   (let ((dir (file-name-directory
@@ -23,7 +27,7 @@
   '("dsh-emacs.el" "dsh-emacs-session.el"
     "dsh-emacs-markdown.el" "dsh-emacs-render.el"
     "dsh-emacs-events.el" "dsh-emacs-ui.el"
-    "dsh-emacs-faces.el" "dsh-emacs-tokens.el" "dsh-emacs-footer.el"
+    "dsh-emacs-faces.el" "dsh-emacs-tokens.el" "dsh-emacs-modeline.el"
     "dsh-emacs-composer.el")
   "Product source files (relative to the repo root), each instrumented with
 testcover-start.  Note: dsh-emacs-protocol.el is not listed — testcover's
@@ -60,8 +64,10 @@ the tests fail, so it is excluded.")
         (cons covered total)))))
 
 (defun dsh-cov:run-tests ()
-  "Load and run the unit test file (same as the normal full-suite)."
-  (load (expand-file-name "test/dsh-test.el" dsh-cov:root)))
+  "Run the unit suite without exiting, and return its ERT statistics."
+  (let ((dsh-emacs-test-no-run t))
+    (load (expand-file-name "test/dsh-test.el" dsh-cov:root) nil t))
+  (dsh-emacs-test-run))
 
 (defun dsh-cov:report (syms threshold)
   "Print per-definition coverage summary for SYMS with THRESHOLD coverage."
@@ -97,9 +103,9 @@ the tests fail, so it is excluded.")
                             (string-match-p "cover" (car command-line-args-left)))
                        (string-to-number (car command-line-args-left) 10)
                      80.0)))
-    (let ((syms (dsh-cov:instrument)))
-      (dsh-cov:run-tests)
-      (dsh-cov:report syms threshold))
-    (kill-emacs 0)))
+    (let* ((syms (dsh-cov:instrument))
+           (stats (dsh-cov:run-tests)))
+      (dsh-cov:report syms threshold)
+      (kill-emacs (if (zerop (ert-stats-completed-unexpected stats)) 0 1)))))
 
 (dsh-cov:main)

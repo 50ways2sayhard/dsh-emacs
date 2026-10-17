@@ -473,8 +473,8 @@ details.
 Development workflow and commit conventions are in [AGENTS.md](AGENTS.md).
 Keep pull requests focused on one topic; for non-trivial work, open an issue
 first to align the scope. Run `scripts/verify.sh` before pushing. It checks
-syntax, checker self-tests, byte compilation, the full unit suite, silent
-loading, diff whitespace, and generated-file cleanup.
+syntax, checker and test-runner self-tests, byte compilation, the full unit
+suite, silent loading, diff whitespace, and generated-file cleanup.
 
 After saving local source changes, run `M-x dsh-emacs-reload` to load all
 package modules from source and refresh Composer, session-list and mode-line
