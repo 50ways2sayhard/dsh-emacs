@@ -100,6 +100,16 @@ An ambiguous exact match stays editable: with both `a` and `ab` available,
 `TAB` at `@a` does not turn it into a chip. Pick a row or finish an unambiguous
 completion to accept the reference.
 
+Session suggestions mirror the session list: archived, blank (never-messaged)
+and subagent-origin sessions are not offered, in `@` completion or in the
+explicit menu. Archived ids are filtered through the synced archive registry,
+so they stay hidden even before `session/list` has loaded; the other kinds use
+that cache, and a candidate whose session it does not know stays offered.
+Archive/unarchive updates are reflected the next time candidates are read,
+including in an existing completion table; a session that receives its first
+message appears on the next completion. The raw cache is not rewritten, so
+this never deletes sessions or changes mentions already inserted in a draft.
+
 Menu rows are short by design: a file names its path, a directory its path
 with a trailing slash, a session only its label. Picking a file or directory
 inserts its formatted mention (`@path` / `@path/`); picking a session inserts

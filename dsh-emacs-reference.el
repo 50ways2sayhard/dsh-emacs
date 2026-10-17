@@ -76,7 +76,11 @@
 (declare-function corfu-auto--complete-deferred "corfu-auto" (&optional tick))
 (declare-function dsh-emacs--active-session-id "dsh-emacs.el" ())
 (declare-function dsh-emacs--get-input "dsh-emacs.el" ())
+(declare-function dsh-emacs--sessions-index "dsh-emacs.el" ())
 (declare-function dsh-emacs-server-ensure "dsh-emacs-server.el" ())
+;; The session list owns the visible-session rule; @ suggestions mirror it.
+(declare-function dsh-emacs-session--visible-p
+                  "dsh-emacs-session.el" (session &optional current-session-id))
 
 ;; dsh-emacs.el's input-area anchor (buffer-local), borrowed read-only here
 (defvar dsh-emacs--input-marker)
@@ -560,6 +564,26 @@ user has already started or a cache that is already populated."
 ;; Completion UI side
 ;; ---------------------------------------------------------------------------
 
+(defun dsh-emacs-reference--visible-candidates ()
+  "Return cached suggestions excluding the sessions the session list hides.
+A session is hidden when it is archived, blank (never messaged) or of
+subagent origin, mirroring the list's visible-session rule.  The synced
+archive registry is consulted first, so an archived id disappears even
+when the list cache does not know it; a candidate whose session is
+unknown stays offered.  Keep the raw cache intact so unarchiving or a
+first message restores candidates without a fetch."
+  (let ((index (dsh-emacs--sessions-index)))
+    (cl-remove-if
+     (lambda (entry)
+       (and (eq (plist-get (cdr entry) :kind) 'session)
+            (let ((id (plist-get (cdr entry) :session-id)))
+              (or (and dsh-emacs--archived-sessions
+                       (gethash id dsh-emacs--archived-sessions))
+                  (let ((session (and id (gethash id index))))
+                    (and session
+                         (not (dsh-emacs-session--visible-p session))))))))
+     dsh-emacs--reference-candidates)))
+
 (defun dsh-emacs-reference--session-rows (&optional entries)
   "Alist (ROW . MENTION) for every session cache entry, in cache order.
 ENTRIES defaults to the current cache.  ROW is the short completion row
@@ -834,7 +858,7 @@ and quoting affect insertion only, not matching."
                                           (symbol-name kind) quoted)
                                        (car entry))
                                      props)))
-                           dsh-emacs--reference-candidates))
+                           (dsh-emacs-reference--visible-candidates)))
                     (let ((mention-to-row (make-hash-table :test 'equal)))
                       (setq rows (dsh-emacs-reference--session-rows snapshot))
                       (dolist (row rows)
@@ -1316,7 +1340,7 @@ session label); MENTION is the text inserted on pick."
         ('directory (concat (plist-get (cdr entry) :path) "/"))
         (_ (plist-get (cdr entry) :path)))
       (car entry)))
-   dsh-emacs--reference-candidates))
+   (dsh-emacs-reference--visible-candidates)))
 
 (defun dsh-emacs-reference--insert-at-point (mention)
   "Insert MENTION into the editable input area at point.

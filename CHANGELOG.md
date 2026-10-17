@@ -341,6 +341,13 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **@ suggestions mirror the session list**: completion and the explicit
+  reference menu skip archived sessions (through the synced archive registry,
+  even before the list has loaded), blank never-messaged sessions and
+  subagent-origin sessions. Unarchiving or a first message makes a session
+  eligible again without a fetch, and references already in a draft are
+  untouched. (rationale: postmortem/120)
+
 - **@ reference discovery never blocks**: both host queries run in the
   background, even on a cold cache, so completion answers immediately and Corfu
   refreshes its open popup as results arrive; other frontends read the new table

@@ -207,7 +207,9 @@ attachment-bearing item into a running turn, but refuses it while idle and
 leaves it queued; idle resubmission supports text-only items.
 
 Type **`@`** to choose file, directory or session references: `@src/` drills
-into a directory and `@session-title` mentions another session. Discovery runs
+into a directory and `@session-title` mentions another session. Suggestions
+mirror the session list — archived, blank and subagent sessions are excluded.
+Discovery runs
 in the background; matching ignores case and searches paths or session metadata,
 not just the displayed label. Corfu updates as results arrive; with other
 frontends, press `TAB` again if the first request is still loading. See

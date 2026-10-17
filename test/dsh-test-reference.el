@@ -1452,5 +1452,85 @@
     (should-not (all-completions "" table nil))
     (should-not (completion-all-completions "@a" table nil 2))))
 
+(ert-deftest dsh-emacs-test-reference-hides-archived-sessions-in-cached-menus ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "@")
+    (setq-local dsh-emacs--input-marker (point-min-marker)
+                dsh-emacs--reference-query ""
+                dsh-emacs--reference-candidates
+                '(("@old" :kind file :path "old")
+                  ("@dir/" :kind directory :path "dir")
+                  ("old-mention" :kind session :label "Old" :session-id "old")
+                  ("live-mention" :kind session :label "Live" :session-id "live")))
+    (let ((original dsh-emacs--reference-candidates)
+          (dsh-emacs--archived-sessions
+           (dsh-emacs--normalize-archived '("old")))
+          (completion-category-overrides nil)
+          (completion-styles '(basic)))
+      (cl-letf (((symbol-function 'dsh-emacs--active-session-id)
+                 (lambda () "sess"))
+                ((symbol-function 'dsh-emacs-reference--require-cache)
+                 (lambda (&rest _) t)))
+        (let ((table (nth 2 (dsh-emacs-reference-completion-at-point))))
+          (dolist (case '((("old") ("@old" "@dir/" "@Live")
+                           ("@old" "@dir/" "live-mention"))
+                          (("live") ("@old" "@dir/" "@Old")
+                           ("@old" "@dir/" "old-mention"))
+                          (nil ("@old" "@dir/" "@Old" "@Live")
+                               ("@old" "@dir/" "old-mention" "live-mention"))))
+            ;; The host replaces this set on archive/unarchive notifications.
+            (setq dsh-emacs--archived-sessions
+                  (dsh-emacs--normalize-archived (nth 0 case)))
+            (should (equal (all-completions "@" table nil) (nth 1 case)))
+            (should (equal (completion-all-completions "@" table nil 1)
+                           (append (nth 1 case) 0)))
+            (should (equal (mapcar #'cdr (dsh-emacs-reference--display-pairs))
+                           (nth 2 case)))
+            (should (eq original dsh-emacs--reference-candidates))))))))
+
+;; @ mirrors the session list's visible-session rule: archived ids (even when
+;; the list cache does not know them), blank never-messaged sessions and
+;; subagent-origin sessions are not suggested, while a session the cache does
+;; not know stays offered, so a cold list cache only degrades to the archive
+;; registry.
+(ert-deftest dsh-emacs-test-reference-visible-candidates-follow-the-session-list ()
+  :tags '(dsh-unit)
+  (let* ((sessions (list (dsh-protocol-session--from-alist
+                          '((sessionId . "live") (blank . :json-false)))
+                         (dsh-protocol-session--from-alist
+                          '((sessionId . "blank") (blank . t)))
+                         (dsh-protocol-session--from-alist
+                          '((sessionId . "sub") (blank . :json-false)
+                            (origin . "subagent")))
+                         (dsh-protocol-session--from-alist
+                          '((sessionId . "archived") (blank . :json-false)))))
+         (dsh-emacs--sessions sessions)
+         (dsh-emacs--archived-sessions
+          (dsh-emacs--normalize-archived '("archived" "gone")))
+         (dsh-emacs--current-session nil)
+         (dsh-emacs--reference-candidates
+          (list (cons "@live" '(:kind session :label "Live" :session-id "live"))
+                (cons "@blank" '(:kind session :label "Blank" :session-id "blank"))
+                (cons "@sub" '(:kind session :label "Sub" :session-id "sub"))
+                (cons "@archived" '(:kind session :label "Archived"
+                                    :session-id "archived"))
+                (cons "@gone" '(:kind session :label "Gone" :session-id "gone"))
+                (cons "@unknown" '(:kind session :label "Unknown"
+                                   :session-id "unknown"))
+                (cons "@file.txt" '(:kind file :path "file.txt")))))
+    (ert-info ((format "%s" "visible-candidates-follow-the-session-list"))
+      (should (equal (mapcar #'car (dsh-emacs-reference--visible-candidates))
+                     '("@live" "@unknown" "@file.txt"))))
+    ;; The filter is live: a first message clears `blank' and restores the row
+    ;; without refetching candidates.
+    (setf (dsh-protocol-session-blank
+           (cl-find "blank" sessions :key #'dsh-protocol-session-session-id
+                    :test #'equal))
+          nil)
+    (ert-info ((format "%s" "visible-candidates-restore-after-first-message"))
+      (should (equal (mapcar #'car (dsh-emacs-reference--visible-candidates))
+                     '("@live" "@blank" "@unknown" "@file.txt"))))))
+
 (provide 'dsh-test-reference)
 ;;; dsh-test-reference.el ends here
