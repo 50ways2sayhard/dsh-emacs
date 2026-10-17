@@ -165,14 +165,15 @@ above still control how files are accepted.
 
 ## Reply footer
 
-`dsh-emacs-reply-footer-items` controls the row at the end of each finished
-turn, below its replies, tool/thinking cards, Deliverables and diagnostics,
-with one blank line above the row. Copy and Fork target the last visible
-text reply, even when other content follows it.
-The default is `(copy fork usage
-duration)`; list order is display order, omitted items are hidden, and nil
-disables the whole row. Refresh an existing conversation (`C-c C-r`) after
-changing the option.
+`dsh-emacs-reply-footer-items` controls the row below a completed turn's
+replies, tool/thinking cards, Deliverables and diagnostics, with one blank
+line above it. Between rendered human messages, only the latest completed
+turn with a nonempty text reply keeps its row. Copy and Fork target that
+turn's last visible text reply, even when other content follows it.
+The default is `(copy fork usage duration)`; list order is display order,
+omitted items are hidden, and nil disables the whole row. Changing the option
+does not automatically redraw existing rows. `C-c C-r` reconnects the event
+stream but does not replay already consumed events.
 
 ```emacs-lisp
 (setq dsh-emacs-reply-footer-items '(copy fork usage duration))
@@ -202,10 +203,15 @@ changing the option.
   synthetic fork endings show `—`. Historical replay never uses the current
   wall clock to invent a duration.
 
-There is one row per completed turn, including interrupted/failed turns
-that have a committed text reply. Streaming, unfinished turns and turns
-without visible committed assistant text have no row. The footer precedes
-any subsequent deliverables or error card and stays outside copied replies.
+A completed follow-up replaces only the earlier footer in the same group:
+reply text and per-turn facts remain intact. Tokens and duration belong only
+to the turn whose row is shown; they are not totals across consecutive turns.
+Goal notices and hidden subagent traffic are not human-message boundaries.
+Interrupted or failed turns qualify when they have committed text. Streaming,
+unfinished turns and turns without visible committed assistant text do not
+replace the current row. Each visible footer follows its turn's content and
+stays outside copied replies. See
+[record 117](../postmortem/117-consecutive-reply-footer.md).
 
 ## Session and workspace controls
 

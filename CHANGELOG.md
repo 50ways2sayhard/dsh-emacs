@@ -337,6 +337,15 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Avoid repeated reply action rows after background follow-ups**: between
+  rendered human messages, only the latest completed turn with a nonempty
+  reply keeps its footer. Earlier replies remain visible; Copy/Fork target
+  that latest reply, and tokens/time still describe only its turn. Unfinished
+  or empty turns do not replace the row. History preserves separate groups
+  when streamed replies straddle human input, and rejected submissions merge
+  the groups again when their optimistic echo disappears.
+  (rationale: postmortem/117)
+
 - **Reuse saved authentication in batch E2E tests**: the runner reads the
   matching server's literal Customize token without executing the Emacs init,
   while preserving existing authentication. `DSH_E2E_CUSTOM_FILE` selects a

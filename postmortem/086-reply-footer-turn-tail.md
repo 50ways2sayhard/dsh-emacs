@@ -1,5 +1,9 @@
 # 086 — Separate the reply action target from the turn's end
 
+_Which completed turns keep visible footers is superseded by
+[117](117-consecutive-reply-footer.md); the placement and action-target rules
+below remain unchanged._
+
 ## Background
 
 At `ae201a0`, reply footers used the final committed text segment as both

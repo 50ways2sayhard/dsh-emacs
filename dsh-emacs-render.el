@@ -168,11 +168,12 @@ Off by default to reduce visual noise."
   :group 'dsh-emacs-render)
 
 (defcustom dsh-emacs-reply-footer-items '(copy fork usage duration)
-  "Items shown after all transcript content of each finished turn, in order.
-Use nil to hide the row.  `copy' copies the reply's original Markdown;
-`fork' branches through that reply.  `usage' sums reported tokens for the
-turn, including cache reads/writes; `duration' uses server turn timestamps.
-Refresh existing conversations after changing this option."
+  "Footer items for the latest completed text turn between human messages.
+Items appear in this order; nil hides the row.  `copy' copies the selected
+turn's last reply as original Markdown; `fork' branches through that reply.
+`usage' sums that turn's reported tokens, including cache reads/writes;
+`duration' uses its server timestamps.  Consecutive turns are not aggregated.
+Existing rows are not automatically redrawn when this option changes."
   :type '(repeat (choice (const copy) (const fork)
                          (const usage) (const duration)))
   :group 'dsh-emacs)
@@ -2129,6 +2130,16 @@ recall event lets the readable `@label' session tokens the server persisted
     (dsh-emacs-render--insert-user-block event references))
   (dsh-emacs-render--event-seq event))
 
+(defun dsh-emacs-render-delete-user-message (start end)
+  "Delete the user message from START to END and reconcile reply footers.
+Removing an optimistic echo can merge groups that completed while its
+submission was pending.  Reply text and per-turn facts remain unchanged."
+  (let ((inhibit-read-only t)
+        (buffer-undo-list t))
+    (delete-region start end))
+  (when dsh-emacs-render--reply-turns
+    (maphash #'dsh-emacs-render--reply-footer dsh-emacs-render--reply-turns)))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: assistant messages
 ;;; ---------------------------------------------------------------------------
@@ -3730,6 +3741,44 @@ unfold preserve the styling."
         (setq end (next-single-property-change pos 'dsh-emacs-message-seq
                                                nil (point-max))
               pos end))
+      ;; Hidden wakeups can finish several turns between human messages.
+      ;; Reconcile only their chrome, using rendered boundaries so optimistic
+      ;; echoes and history pages behave exactly like live canonical input.
+      (when end
+        (let* ((namespace (dsh-emacs-render--make-namespace))
+               (block-id (format "reply-footer-%s" turn))
+               (start (previous-single-property-change
+                       end 'dsh-emacs-user-message nil (point-min)))
+               (limit (or (text-property-not-all
+                           end (point-max) 'dsh-emacs-user-message nil)
+                          (point-max)))
+               older superseded)
+          (maphash
+           (lambda (other-turn other-state)
+             (let ((other-seq (plist-get other-state :reply-seq)))
+               (when (and other-seq (/= other-turn turn)
+                          (plist-get other-state :end-seq)
+                          (text-property-any start limit
+                                             'dsh-emacs-message-seq other-seq)
+                          ;; A streamed reply can straddle human input;
+                          ;; only its final segment assigns its group.
+                          (not (text-property-any
+                                limit (point-max)
+                                'dsh-emacs-message-seq other-seq)))
+                 (if (> other-seq seq)
+                     (setq superseded t)
+                   (push (format "reply-footer-%s" other-turn) older)))))
+           dsh-emacs-render--reply-turns)
+          (if superseded
+              (progn
+                (dsh-emacs-ui-delete-fragment namespace block-id)
+                (setq end nil))
+            ;; Point follows deletions before the reply; a raw END would not.
+            (save-excursion
+              (goto-char end)
+              (dolist (id older)
+                (dsh-emacs-ui-delete-fragment namespace id))
+              (setq end (point))))))
       (when end
         ;; The last text reply is the action target, but tools, reasoning
         ;; and diagnostics can follow it before the turn actually ends.

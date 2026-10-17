@@ -170,13 +170,18 @@ automatically. Replies still streaming and subagent conversations cannot
 be forked this way. In the session list, `f` forks through the latest
 completed turn instead. See [fork controls](docs/customization.md#forking-conversations).
 
-Finished turns show a small row after all their content, including
+Between rendered human messages, only the latest completed turn with a
+nonempty reply keeps a small row after all its content, including
 Deliverables, tool cards and error messages:
-`Copy · Fork · Tokens 12.3k · Time 8.2s`. Click an action or press `RET`
-on it (`TAB` moves between buttons). Copy preserves the reply's original
-Markdown. Tokens include the turn's reported input, output and cache usage;
-hover for the breakdown. Time includes tools and waits. Incomplete history
-shows a token lower bound (`≥`), and unavailable values show `—`.
+`Copy · Fork · Tokens 12.3k · Time 8.2s`. A completed background follow-up
+replaces the earlier row, not the earlier reply text; unfinished or empty
+turns leave it in place. Goal notices and hidden subagent traffic do not start
+a new group. Click an action or press `RET` on it (`TAB` moves between buttons).
+Copy and Fork target that turn's last text reply; Copy preserves its original
+Markdown. Tokens and Time describe only that turn, not the whole group.
+Tokens include reported input, output and cache usage; hover for the breakdown.
+Time includes tools and waits. Incomplete history shows a token lower bound
+(`≥`), and unavailable values show `—`.
 
 Choose the items and their order, or hide the row entirely:
 

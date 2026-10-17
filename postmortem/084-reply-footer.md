@@ -1,6 +1,8 @@
 # 084 — Actions and statistics below the final reply
 
 _Footer placement is superseded by [086](086-reply-footer-turn-tail.md)._
+_Always-visible per-turn rows are superseded by [117](117-consecutive-reply-footer.md);
+action targets and per-turn statistics remain unchanged._
 
 ## Background
 

@@ -4600,9 +4600,7 @@ removed it from the list and cleared its markers."
     (when (and (markerp start) (markerp end)
                (marker-buffer start) (marker-buffer end))
       (with-current-buffer (marker-buffer start)
-        (let ((inhibit-read-only t)
-              (buffer-undo-list t))
-          (delete-region start end))))
+        (dsh-emacs-render-delete-user-message start end)))
     (when (markerp start) (set-marker start nil))
     (when (markerp end) (set-marker end nil))))
 

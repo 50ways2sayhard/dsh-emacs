@@ -219,6 +219,20 @@ independent of the mode-line accumulator, survives reconnects and merges
 older pages; full reload clears it and transcript trimming discards summaries
 whose completed replies are gone.
 
+Visibility is a renderer policy, separate from those per-turn facts. Between
+rendered human messages, only the latest completed turn with a nonempty text
+reply keeps its footer. Replacing earlier footer chrome leaves reply text
+and turn summaries intact; Copy/Fork still target the selected turn's last
+text reply, and usage/duration still describe only that turn. Unfinished or
+empty turns do not replace the current footer. Goal notices and hidden
+subagent traffic do not create human-message boundaries. A reply's final
+rendered text segment determines its group, including when streaming spans
+human input. Removing a rejected optimistic echo goes through
+`dsh-emacs-render-delete-user-message`, which reconciles footers after the
+boundary disappears. History and replay use the same visibility rule rather
+than restoring superseded rows; no protocol or transport grouping is added. See
+[117](../postmortem/117-consecutive-reply-footer.md).
+
 History batches collect facts before painting, so a page cannot attach a
 footer to an intermediate reply. After rendering `turn/end`, the summary
 retains the identity of the last transcript fragment or message at the

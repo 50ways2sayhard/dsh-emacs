@@ -5857,7 +5857,12 @@ Lets a test drive a malformed content value through the result path."
 ;; the first-opened buffer was silently skipped by sync's guard, so
 ;; default-directory was never set, leaving magit unable to locate the project.
 ;; Here stubs mask network/rendering and the full open path runs.
-(cl-letf (((symbol-function 'dsh-emacs-events-connect) (lambda (&rest _) nil))
+;; Mock prefetch scheduling too: its timers outlive the chat buffer and would
+;; otherwise make real requests after these local network mocks unwind.
+(cl-letf (((symbol-function 'dsh-emacs-command-catalog-prefetch) #'ignore)
+          ((symbol-function 'dsh-emacs-skill-prefetch) #'ignore)
+          ((symbol-function 'dsh-emacs-reference-prefetch) #'ignore)
+          ((symbol-function 'dsh-emacs-events-connect) (lambda (&rest _) nil))
           ((symbol-function 'pop-to-buffer) (lambda (&rest _) nil)))
   (let ((old-sessions dsh-emacs--sessions)
         (old-current-buffer dsh-emacs--current-buffer)
@@ -5918,7 +5923,10 @@ Lets a test drive a malformed content value through the result path."
                      (list (cons 'sessionId "sess-kb")
                            (cons 'blank :json-false)
                            (cons 'agentPreset "standard")))))
-        (cl-letf (((symbol-function 'dsh-emacs-events-connect)
+        (cl-letf (((symbol-function 'dsh-emacs-command-catalog-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-skill-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-reference-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-events-connect)
                    (lambda (chat) (push (list 'connect chat) connects)))
                   ((symbol-function 'dsh-emacs-events-disconnect)
                    (lambda (&optional chat)
@@ -5939,7 +5947,10 @@ Lets a test drive a malformed content value through the result path."
         ;; Reopening the same session: still its own connection (connect drops its own
         ;; old stream internally)
         (setq disconnects nil connects nil)
-        (cl-letf (((symbol-function 'dsh-emacs-events-connect)
+        (cl-letf (((symbol-function 'dsh-emacs-command-catalog-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-skill-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-reference-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-events-connect)
                    (lambda (chat) (push (list 'connect chat) connects)))
                   ((symbol-function 'dsh-emacs-events-disconnect)
                    (lambda (&optional chat)
@@ -6024,6 +6035,9 @@ Lets a test drive a malformed content value through the result path."
                      (funcall cb t (list (cons 'items [])))))
                   ((symbol-function 'dsh-emacs-events-connect)
                    (lambda (&rest _) nil))
+                  ((symbol-function 'dsh-emacs-command-catalog-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-skill-prefetch) #'ignore)
+                  ((symbol-function 'dsh-emacs-reference-prefetch) #'ignore)
                   ((symbol-function 'pop-to-buffer)
                    (lambda (&rest _) nil)))
           (dsh-emacs-open-session "sess-ctxexist"))
@@ -8303,6 +8317,212 @@ Lets a test drive a malformed content value through the result path."
     (dsh-test-assert "footer-subagent-hides-fork-but-keeps-copy"
                      (string-match-p "Copy" (buffer-string))
                      (not (string-match-p "Fork" (buffer-string))))))
+
+;; Consecutive replies without a rendered human message share one visible footer.
+(dolist (delivery '(live history prepend reconnect))
+  (dolist (items '((copy fork usage duration) (usage duration)))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "footer-continuations")
+      (let* ((dsh-emacs-reply-footer-items items)
+             (events
+              '(((type . "turn/start") (seq . 1) (time . 0) (data . ((turn . 1))))
+                ((type . "user/message") (seq . 2)
+                 (data . ((content . [((type . "text") (text . "Question"))]))))
+                ((type . "assistant/message") (seq . 3)
+                 (data . ((turn . 1) (step . 1)
+                          (usage . ((inputTokens . 100) (outputTokens . 2)))
+                          (message . ((content . [((type . "text")
+                                                   (text . "**Main answer**"))]))))))
+                ((type . "turn/end") (seq . 4) (time . 1000) (data . ((turn . 1))))
+                ((type . "turn/start") (seq . 5) (time . 2000) (data . ((turn . 2))))
+                ((type . "user/message") (seq . 6)
+                 (data . ((source . ((kind . "subagent-settled")))
+                          (content . [((type . "text") (text . "Hidden child notice"))]))))
+                ((type . "assistant/message") (seq . 7)
+                 (data . ((turn . 2) (step . 1)
+                          (usage . ((inputTokens . 10) (outputTokens . 2)))
+                          (message . ((content . [((type . "text")
+                                                   (text . "**Follow-up**"))]))))))
+                ((type . "turn/end") (seq . 8) (time . 4000) (data . ((turn . 2))))))
+             (entries (mapcar (lambda (event) (list (cons 'event event))) events))
+             (ns (dsh-emacs-render--make-namespace)))
+        (pcase delivery
+          ('live (dolist (event events) (dsh-emacs-render-event event)))
+          ('prepend
+           (dsh-emacs-render-history-events (nthcdr 4 entries))
+           (let* ((dsh-emacs--history-insert-marker
+                   (dsh-emacs-render--history-prepend-marker))
+                  (position (marker-position dsh-emacs--history-insert-marker)))
+             (dsh-emacs-render-history-events
+              (cl-subseq entries 0 4) nil 5 :insert-before position :follow-p nil)
+             (set-marker dsh-emacs--history-insert-marker nil)))
+          (_ (dsh-emacs-render-history-events entries)
+             (when (eq delivery 'reconnect)
+               (dsh-emacs-render-history-events entries))))
+        (dsh-test-assert (format "footer-continuations-latest-only-%s-%s" delivery items)
+          (null (dsh-emacs-ui-find-block ns "reply-footer-1"))
+          (dsh-emacs-ui-find-block ns "reply-footer-2")
+          (= (how-many "Tokens" (point-min) (point-max)) 1)
+          (string-match-p "Tokens 12  ·  Time 2.0s" (buffer-string))
+          (string-match-p "Main answer" (buffer-string))
+          (string-match-p "Follow-up" (buffer-string))
+          (not (string-match-p "Hidden child notice" (buffer-string))))
+        (when (memq 'copy items)
+          (goto-char (point-min))
+          (search-forward "Copy")
+          (let ((button (button-at (1- (point)))))
+            (button-activate button)
+            (dsh-test-assert "footer-continuations-copy-target-stays-last-reply"
+              (equal (current-kill 0) "**Follow-up**")
+              (= (button-get button 'dsh-emacs-reply-seq) 7)))
+          (goto-char (point-min))
+          (search-forward "Fork")
+          (let (forked)
+            (cl-letf (((symbol-function 'dsh-emacs-fork-session)
+                       (lambda (session seq) (setq forked (list session seq)))))
+              (button-activate (button-at (1- (point)))))
+            (dsh-test-assert "footer-continuations-fork-target-stays-last-reply"
+              (equal forked '("footer-continuations" 7)))))
+        ;; No completed text in a subsequent turn must not steal the toolbar.
+        (dsh-emacs-render-event
+         '((type . "turn/start") (seq . 9) (data . ((turn . 3)))))
+        (dsh-test-assert "footer-continuations-pending-turn-keeps-last-footer"
+          (dsh-emacs-ui-find-block ns "reply-footer-2"))
+        (dsh-emacs-render-event
+         '((type . "assistant/message") (seq . 10)
+           (data . ((turn . 3) (message . ((content . [])))))))
+        (dsh-emacs-render-event
+         '((type . "turn/end") (seq . 11) (data . ((turn . 3)))))
+        (dsh-test-assert "footer-continuations-empty-turn-keeps-last-footer"
+          (dsh-emacs-ui-find-block ns "reply-footer-2")
+          (null (dsh-emacs-ui-find-block ns "reply-footer-3")))
+        ;; A visible human message, including an optimistic echo, splits groups.
+        (dsh-emacs-render-user-message
+         '((type . "user/message") (seq . 12)
+           (data . ((content . [((type . "text") (text . "New question"))])))))
+        (dsh-emacs-render-event
+         '((type . "assistant/message") (seq . 13)
+           (data . ((turn . 4) (step . 1)
+                    (message . ((content . [((type . "text") (text . "New answer"))])))))))
+        (dsh-emacs-render-event
+         '((type . "turn/end") (seq . 14) (data . ((turn . 4)))))
+        ;; Repainting older facts must neither resurrect an obsolete toolbar
+        ;; nor remove the toolbar on the far side of a human message.
+        (dolist (turn '(1 2))
+          (dsh-emacs-render--reply-footer turn (gethash turn dsh-emacs-render--reply-turns)))
+        (dsh-test-assert "footer-continuations-preserve-human-boundaries-on-repaint"
+          (null (dsh-emacs-ui-find-block ns "reply-footer-1"))
+          (dsh-emacs-ui-find-block ns "reply-footer-2")
+          (dsh-emacs-ui-find-block ns "reply-footer-4")
+          (= (how-many "Tokens" (point-min) (point-max)) 2))
+        (dsh-emacs-render-event
+         '((type . "user/message") (seq . 15)
+           (data . ((source . ((kind . "goal")))
+                    (content . [((type . "text") (text . "Automatic goal round"))])))))
+        (dsh-emacs-render-event
+         '((type . "assistant/message") (seq . 16)
+           (data . ((turn . 5) (step . 1)
+                    (message . ((content . [((type . "text") (text . "Goal follow-up"))])))))))
+        (dsh-emacs-render-event
+         '((type . "turn/end") (seq . 17) (data . ((turn . 5)))))
+        (dsh-test-assert "footer-continuations-goal-notice-is-not-human-boundary"
+          (string-match-p "Continuing goal" (buffer-string))
+          (dsh-emacs-ui-find-block ns "reply-footer-2")
+          (null (dsh-emacs-ui-find-block ns "reply-footer-4"))
+          (dsh-emacs-ui-find-block ns "reply-footer-5")
+          (= (how-many "Tokens" (point-min) (point-max)) 2))))))
+
+;; A streamed reply can straddle a human message.  Its final segment owns
+;; its group, even when an older turn is repainted after a history prepend.
+(with-temp-buffer
+  (dsh-emacs-mode)
+  (setq-local dsh-emacs--buffer-session "footer-split-reply")
+  (let ((dsh-emacs-reply-footer-items '(copy usage)))
+    (dolist (event
+             '(((type . "user/message") (seq . 2)
+                (data . ((content . [((type . "text") (text . "Question"))]))))
+               ((type . "assistant/message") (seq . 3)
+                (data . ((turn . 1) (step . 1)
+                         (message . ((content . [((type . "text") (text . "Answer"))]))))))
+               ((type . "turn/end") (seq . 4) (data . ((turn . 1))))
+               ((type . "assistant/chunk") (seq . 5)
+                (data . ((turn . 2) (step . 1)
+                         (chunk . ((type . "text-delta") (index . 0) (text . "Before\n"))))))
+               ((type . "assistant/chunk") (seq . 6)
+                (data . ((turn . 2) (step . 1)
+                         (chunk . ((type . "reasoning-delta") (index . 1) (text . "Think\n"))))))
+               ((type . "user/message") (seq . 7)
+                (data . ((content . [((type . "text") (text . "New question"))]))))
+               ((type . "assistant/chunk") (seq . 8)
+                (data . ((turn . 2) (step . 1)
+                         (chunk . ((type . "text-delta") (index . 2) (text . "After\n"))))))
+               ((type . "assistant/message") (seq . 9)
+                (data . ((turn . 2) (step . 1)
+                         (message . ((content . [((type . "text") (text . "Before\n"))
+                                                 ((type . "reasoning") (text . "Think\n"))
+                                                 ((type . "text") (text . "After\n"))]))))))
+               ((type . "turn/end") (seq . 10) (data . ((turn . 2))))))
+      (dsh-emacs-render-event event)
+      (dsh-emacs-render--flush-stream)
+      (dsh-emacs-render--flush-thinking))
+    (let* ((ns (dsh-emacs-render--make-namespace))
+           (dsh-emacs--history-insert-marker
+            (dsh-emacs-render--history-prepend-marker))
+           (position (marker-position dsh-emacs--history-insert-marker)))
+      (dsh-test-assert "footer-split-reply-before-prepend"
+        (dsh-emacs-ui-find-block ns "reply-footer-1")
+        (dsh-emacs-ui-find-block ns "reply-footer-2"))
+      (dsh-emacs-render-history-events
+       '(((event . ((type . "turn/start") (seq . 1) (data . ((turn . 1)))))))
+       nil 2 :insert-before position :follow-p nil)
+      (set-marker dsh-emacs--history-insert-marker nil)
+      (dsh-test-assert "footer-split-reply-prepend-preserves-both-groups"
+        (dsh-emacs-ui-find-block ns "reply-footer-1")
+        (dsh-emacs-ui-find-block ns "reply-footer-2")
+        (= (how-many "Tokens" (point-min) (point-max)) 2)))))
+
+;; Rejecting an optimistic input merges its neighboring groups.  A completed
+;; background follow-up wins; an unfinished one must leave the old row alone.
+(dolist (completed '(nil t))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs--buffer-session "footer-rollback")
+    (let ((dsh-emacs-reply-footer-items '(copy usage))
+          (ns (dsh-emacs-render--make-namespace)))
+      (dsh-emacs-render-event
+       '((type . "user/message") (seq . 1)
+         (data . ((content . [((type . "text") (text . "Question"))])))))
+      (dsh-emacs-render-event
+       '((type . "assistant/message") (seq . 2)
+         (data . ((turn . 1) (step . 1)
+                  (message . ((content . [((type . "text") (text . "Answer"))])))))))
+      (dsh-emacs-render-event
+       '((type . "turn/end") (seq . 3) (data . ((turn . 1)))))
+      (let ((echo (dsh-emacs--render-user-message-optimistic "Rejected question" nil)))
+        (dsh-emacs-render-event
+         '((type . "assistant/message") (seq . 4)
+           (data . ((turn . 2) (step . 1)
+                    (message . ((content . [((type . "text") (text . "Follow-up"))])))))))
+        (when completed
+          (dsh-emacs-render-event
+           '((type . "turn/end") (seq . 5) (data . ((turn . 2))))))
+        (dsh-test-assert (format "footer-before-rollback-%s" completed)
+          (dsh-emacs-ui-find-block ns "reply-footer-1")
+          (= (how-many "Tokens" (point-min) (point-max)) (if completed 2 1)))
+        (dsh-emacs--discard-user-message-echo echo)
+        (dsh-test-assert (format "footer-rollback-reconciles-merged-group-%s" completed)
+          (not (string-match-p "Rejected question" (buffer-string)))
+          (string-match-p "Answer" (buffer-string))
+          (string-match-p "Follow-up" (buffer-string))
+          (= (how-many "Tokens" (point-min) (point-max)) 1)
+          (dsh-emacs-ui-find-block ns (if completed "reply-footer-2" "reply-footer-1"))
+          (null (dsh-emacs-ui-find-block ns (if completed "reply-footer-1" "reply-footer-2"))))
+        (goto-char (point-min))
+        (search-forward "Copy")
+        (button-activate (button-at (1- (point))))
+        (dsh-test-assert (format "footer-rollback-copy-target-%s" completed)
+          (equal (current-kill 0) (if completed "Follow-up" "Answer")))))))
 
 ;; Deliverables belong above the footer, including expanded file lists.
 (dolist (history '(nil t))
