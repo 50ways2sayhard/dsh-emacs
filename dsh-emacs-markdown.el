@@ -1,6 +1,8 @@
 ;;; dsh-emacs-markdown.el --- Full Markdown rendering for dsh-emacs -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2026 Alvaro Ramirez
+;; Version: 0.6.0
+;; Package-Requires: ((emacs "27.1"))
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/vritser/dsh-emacs
