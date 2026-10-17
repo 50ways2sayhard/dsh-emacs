@@ -314,6 +314,11 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Recover from heartbeat write failures**: a connection that closes while a
+  WebSocket ping is sent now retires its timers and reconnects through the normal
+  stream recovery path, rather than leaking a broken-pipe error from the timer.
+  The failed probe is still reported once for that connection.
+
 - **Respect draft cancellation during CLI installation**: an installation
   finishing after timeout, draft closure or a server-address change no longer
   starts a server for the cancelled request. A server started by another request

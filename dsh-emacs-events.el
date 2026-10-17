@@ -1021,9 +1021,18 @@ silent indefinitely while its transport continues to answer pings."
                    (> (- now (or dsh-emacs--ws-last-probe-time 0)) 3.0))
               (setq dsh-emacs--ws-probe-inflight (format "dsh-%s" now)
                     dsh-emacs--ws-last-probe-time now)
-              (process-send-string
-               dsh-emacs--event-process
-               (dsh-emacs-events--frame 9 dsh-emacs--ws-probe-inflight)))))
+              (let ((process dsh-emacs--event-process)
+                    (frame (dsh-emacs-events--frame
+                            9 dsh-emacs--ws-probe-inflight)))
+                (condition-case err
+                    (process-send-string process frame)
+                  (error
+                   (message "dsh: event stream probe failed: %S" err)
+                   ;; A live check cannot predict a failed socket write.  The
+                   ;; send may already have closed it, with its sentinel pending.
+                   (when (process-live-p process)
+                     (delete-process process))
+                   (dsh-emacs-events--lost process)))))))
         (dsh-emacs-events--watchdog-stop)))))
 
 (defun dsh-emacs-events--watchdog-start ()

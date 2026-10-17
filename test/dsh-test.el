@@ -22514,6 +22514,82 @@ literal, padding stripped — the test-only inverse of
           (dsh-test-assert "watchdog-disconnects-unanswered-probe" deleted))
       (delete-process process))))
 
+;; A write can discover a broken connection after the watchdog's live check.
+(dolist (closed-before-error '(nil t))
+  (with-temp-buffer
+    (let* ((owner (current-buffer))
+           (process (make-pipe-process :name "dsh-watchdog-write-error"
+                                       :buffer owner :noquery t))
+           (watchdog (run-at-time 3600 1 #'ignore))
+           (health (run-at-time 3600 1 #'ignore))
+           (reads (run-at-time 3600 nil #'ignore))
+           (writes 0) (reconnects 0) (closed-streams 0)
+           escaped reported)
+      (unwind-protect
+          (progn
+            (setq-local dsh-emacs--event-process process
+                        dsh-emacs--event-ready t
+                        dsh-emacs--ml-busy t
+                        dsh-emacs--ws-last-event-time 0
+                        dsh-emacs--ws-last-probe-time nil
+                        dsh-emacs--ws-probe-inflight nil
+                        dsh-emacs--ws-watchdog-timer watchdog
+                        dsh-emacs--event-connect-timer health)
+            (process-put process 'dsh-emacs-chat-buffer owner)
+            (process-put process 'dsh-emacs-event-handshake-sent t)
+            (process-put process 'dsh-emacs-event-read-timer reads)
+            (process-put process 'dsh-emacs-event-read-filter #'ignore)
+            (process-put process 'dsh-emacs-stream-handlers
+                         (list (cons "test" (cons "test"
+                                                 (lambda (value)
+                                                   (unless value
+                                                     (cl-incf closed-streams)))))))
+            ;; Cover a pending sentinel as well as deletion invoking it inline.
+            (unless closed-before-error
+              (set-process-sentinel process #'dsh-emacs-events--sentinel))
+            (cl-letf (((symbol-function 'process-send-string)
+                       (lambda (proc _data)
+                         (cl-incf writes)
+                         (when closed-before-error (delete-process proc))
+                         (error "Process %s no longer connected to pipe; closed it"
+                                (process-name proc))))
+                      ((symbol-function 'dsh-emacs-events--schedule-reconnect)
+                       (lambda () (cl-incf reconnects)))
+                      ((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (push (apply #'format format-string args) reported))))
+              (condition-case err
+                  (with-temp-buffer
+                    (dsh-emacs-events--watchdog-tick owner))
+                (error (setq escaped err)))
+              (dsh-test-assert
+                  (format "watchdog-write-error-%s-recovers" closed-before-error)
+                (null escaped)
+                (= writes 1) (= reconnects 1) (= closed-streams 1)
+                (not (process-live-p process))
+                (null dsh-emacs--event-process)
+                (null dsh-emacs--event-ready)
+                (null dsh-emacs--ws-watchdog-timer)
+                (null dsh-emacs--event-connect-timer)
+                (null (process-get process 'dsh-emacs-event-read-timer))
+                (null (process-get process 'dsh-emacs-event-read-filter))
+                (not (memq watchdog timer-list))
+                (not (memq health timer-list))
+                (not (memq reads timer-list))
+                (= (length reported) 1)
+                (string-match-p "no longer connected to pipe" (or (car reported) "")))
+              ;; A late sentinel or queued tick must not repeat cleanup/writes.
+              (dsh-emacs-events--sentinel process "closed")
+              (dsh-emacs-events--watchdog-tick owner)
+              (dsh-test-assert
+                  (format "watchdog-write-error-%s-cleans-once" closed-before-error)
+                (= writes 1) (= reconnects 1) (= closed-streams 1))))
+        (set-process-sentinel process #'ignore)
+        (delete-process process)
+        (cancel-timer watchdog)
+        (cancel-timer health)
+        (cancel-timer reads)))))
+
 ;; A chat socket receives its first frame immediately, then batches reads.
 (dolist (ending '(resume alternate disconnect lost))
   (with-temp-buffer
