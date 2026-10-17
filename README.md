@@ -471,8 +471,11 @@ loading, diff whitespace, and generated-file cleanup.
 Optional [GUI display tests](docs/architecture.md#gui-display-regression-tests)
 check actual visual wrapping in a graphical Emacs without a dsh server.
 
-Real-server tests are separate. See [E2E testing](docs/architecture.md#real-server-e2e-testing)
-for the batch smoke suite and timed-question tests in a running Emacs.
+Real-server tests are separate. The batch runner reuses the token saved by
+Emacs Customize for the matching server without loading your init; set
+`DSH_E2E_CUSTOM_FILE` for a nonstandard Customize path. See
+[E2E testing](docs/architecture.md#real-server-e2e-testing) for authentication
+precedence, the batch smoke suite and timed-question tests in a running Emacs.
 
 ## Acknowledgments
 

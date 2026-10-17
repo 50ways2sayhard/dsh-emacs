@@ -1162,7 +1162,31 @@ gate checks this file's Lisp syntax; the GUI suite itself remains optional.
 It also opens a second real chat, switches back to the earlier chat and
 presses `C-c C-l`, checking the selected session row by ID for both chats.
 `DSH_E2E_URL` selects the server and `DSH_E2E_PRESET` selects the test session's
-preset. `DSH_E2E_PLAN_REVIEW=1` additionally exercises model-generated review.
+preset. When no cookie, captured/configured token or URL token is available,
+the runner reads the literal `dsh-emacs-server-auth-token` saved by Customize,
+without loading or evaluating user Lisp. `DSH_E2E_CUSTOM_FILE` selects a file;
+otherwise an already-set `custom-file` is used. With neither, it searches
+`user-init-file`, `custom.el` and `init.el` under `user-emacs-directory`, then
+`~/.emacs`. The selected explicit file must be readable and local.
+
+A saved token is reused only when the `dsh-emacs-base-url` saved in that same
+file matches the test server (ignoring a trailing slash and URL query). Without
+a saved address, the token belongs only to `http://127.0.0.1:3080`; overriding
+the test URL does not send it to another host or port. Computed Lisp values are
+not evaluated. The restored token is scoped to the run and is never printed or
+written back to the user's configuration. For a nonstandard Customize path:
+
+```sh
+DSH_E2E_CUSTOM_FILE="$HOME/path/to/custom.el" \
+  emacs -Q --batch -L . -l test/dsh-e2e.el
+```
+
+A stale token still fails authentication: replace it with the current launch
+token or pass the authenticated URL through `DSH_E2E_URL`. The inspected dsh
+0.2.0-rc.2 stores its launch token only in memory; its persisted browser signing
+secret is not a token and is never read by these tests.
+
+`DSH_E2E_PLAN_REVIEW=1` additionally exercises model-generated review.
 `DSH_E2E_RUNNING=1` starts a real sleeping turn and then proves that a cold
 client reopen seeds its running status from the cached host status before the
 follow snapshot can replay anything (the opening window is one message), and

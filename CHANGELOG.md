@@ -314,6 +314,12 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Reuse saved authentication in batch E2E tests**: the runner reads the
+  matching server's literal Customize token without executing the Emacs init,
+  while preserving existing authentication. `DSH_E2E_CUSTOM_FILE` selects a
+  nonstandard settings file; tokens are neither printed nor written back.
+  (rationale: postmortem/113)
+
 - **Recover from heartbeat write failures**: a connection that closes while a
   WebSocket ping is sent now retires its timers and reconnects through the normal
   stream recovery path, rather than leaking a broken-pipe error from the timer.

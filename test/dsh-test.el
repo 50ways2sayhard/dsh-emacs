@@ -39,6 +39,106 @@ FAIL instead of silently vanishing from the summary.  Empty CONDITIONS
       (dsh-test-pass name)
     (dsh-test-fail name "assertion failed (dsh-test-assert)")))
 
+;; Load the E2E definitions without starting its real-server runner.
+(let ((noninteractive nil))
+  (load (expand-file-name "dsh-e2e.el" (file-name-directory load-file-name))
+        nil t))
+
+(let* ((file (make-temp-file "dsh-e2e-custom-" nil ".el"))
+       (process-environment (copy-sequence process-environment))
+       (dsh-emacs-base-url "http://127.0.0.1:3080")
+       (custom-file file))
+  (unwind-protect
+      (progn
+        (setenv "DSH_E2E_CUSTOM_FILE" nil)
+        (dolist (case
+                 '(("literal"
+                    ((custom-set-variables
+                      '(dsh-emacs-server-auth-token "saved-token")))
+                    "saved-token")
+                   ("no-eval"
+                    ((error "must not execute config")
+                     (custom-set-variables
+                      '(dsh-emacs-server-auth-token "saved-token")))
+                    "saved-token")
+                   ("computed"
+                    ((custom-set-variables
+                      '(dsh-emacs-server-auth-token
+                        (error "must not evaluate token"))))
+                    nil)
+                   ("empty"
+                    ((custom-set-variables '(dsh-emacs-server-auth-token "")))
+                    nil)
+                   ("wrong-port"
+                    ((custom-set-variables
+                      '(dsh-emacs-base-url "http://127.0.0.1:9999")
+                      '(dsh-emacs-server-auth-token "other-token")))
+                    nil)
+                   ("wrong-host"
+                    ((custom-set-variables
+                      '(dsh-emacs-base-url "http://elsewhere.test:3080")
+                      '(dsh-emacs-server-auth-token "other-token")))
+                    nil)
+                   ("same-base"
+                    ((custom-set-variables
+                      '(dsh-emacs-base-url "http://127.0.0.1:3080/")
+                      '(dsh-emacs-server-auth-token "saved-token")))
+                    "saved-token")))
+          (with-temp-file file
+            (dolist (form (nth 1 case))
+              (prin1 form (current-buffer))
+              (terpri (current-buffer))))
+          (let ((actual (condition-case err
+                            (dsh-e2e--saved-auth-token)
+                          (error (car err)))))
+            (dsh-test-assert (concat "e2e-saved-auth-" (car case))
+              (equal actual (nth 2 case)))))
+        (with-temp-file file
+          (insert "(custom-set-variables '(dsh-emacs-server-auth-token \"saved-token\"))"))
+        (let ((dsh-emacs-base-url "https://remote.test"))
+          (dsh-test-assert "e2e-saved-auth-unscoped-token-stays-local"
+            (null (condition-case err (dsh-e2e--saved-auth-token)
+                    (error (car err))))))
+        (setenv "DSH_E2E_CUSTOM_FILE" file)
+        (let ((custom-file "/missing/ignored-custom.el"))
+          (dsh-test-assert "e2e-saved-auth-explicit-file-wins"
+            (equal (condition-case err (dsh-e2e--saved-auth-token)
+                     (error (car err)))
+                   "saved-token")))
+        (setenv "DSH_E2E_URL" nil)
+        (dolist (case '((saved nil nil nil "saved-token")
+                        (configured "configured-token" nil nil "configured-token")
+                        (cookie nil "existing-cookie" nil nil)
+                        (url nil nil "http://127.0.0.1:3080/?token=url-token" nil)))
+          (let ((dsh-emacs-server-auth-token (nth 1 case))
+                (dsh-emacs--server-auth-cookie (nth 2 case))
+                (dsh-emacs-base-url (or (nth 3 case) dsh-emacs-base-url))
+                (dsh-emacs--question-active nil)
+                (dsh-emacs--approval-active nil)
+                (dsh-emacs--question-queue nil)
+                (dsh-emacs--approval-queue nil)
+                (dsh-emacs-sessions-buffer " *dsh-e2e-auth-test*")
+                observed)
+            (cl-letf (((symbol-function 'dsh-emacs--server-auth-token)
+                       (lambda () dsh-emacs-server-auth-token))
+                      ((symbol-function 'dsh-e2e--rpc)
+                       (lambda (&rest _)
+                         (setq observed dsh-emacs-server-auth-token)
+                         (throw 'dsh-e2e-auth-ready t))))
+              (catch 'dsh-e2e-auth-ready (dsh-emacs-e2e-run)))
+            (dsh-test-assert (format "e2e-auth-before-rpc-%s" (car case))
+              (equal observed (nth 4 case))
+              (equal dsh-emacs-server-auth-token (nth 1 case)))))
+        (with-temp-file file (insert "(custom-set-variables 'broken"))
+        (let ((detail (condition-case err
+                          (progn (dsh-e2e--saved-auth-token) nil)
+                        (error (error-message-string err)))))
+          (dsh-test-assert "e2e-saved-auth-malformed-file-reports-safe-error"
+            (stringp detail)
+            (string-match-p "Cannot read E2E auth settings" (or detail ""))
+            (not (string-match-p "broken" (or detail ""))))))
+    (delete-file file)))
+
 ;; A new session must expose an editable draft before readiness or creation.
 (let ((ready nil)
       (create nil)

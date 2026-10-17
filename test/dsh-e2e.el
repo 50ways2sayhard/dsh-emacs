@@ -13,7 +13,11 @@
 ;;   emacs -Q --batch -L . -l test/dsh-e2e.el
 ;;
 ;; DSH_E2E_URL may override the default server URL.  A URL containing a
-;; launch token is accepted.  The test creates two sessions, exercises the
+;; launch token is accepted.  Without existing auth, read a literal token
+;; saved by Customize for the same server, without loading the user init.
+;; DSH_E2E_CUSTOM_FILE selects a nonstandard Customize file; otherwise use
+;; `custom-file' or the standard Emacs init/custom files.
+;; The test creates two sessions, exercises the
 ;; real event stream and C-c C-l navigation between chats, and archives both
 ;; sessions during cleanup because dsh does not expose a session deletion RPC.
 ;; Set DSH_E2E_PLAN_REVIEW=1 to exercise model-generated plan review,
@@ -46,6 +50,57 @@
 (defvar dsh-e2e--results nil)
 (defvar dsh-e2e--session-id nil)
 (defvar dsh-e2e--chat nil)
+
+(defun dsh-e2e--saved-auth-token ()
+  "Read a saved Customize token for this server without evaluating user Lisp.
+DSH_E2E_CUSTOM_FILE or `custom-file' selects one file.  Otherwise inspect
+`user-init-file', custom.el and init.el in `user-emacs-directory', then
+~/.emacs.  Only literal `custom-set-variables' entries are accepted.
+A token without a saved base URL belongs only to the default local server."
+  (let* ((override (getenv "DSH_E2E_CUSTOM_FILE"))
+         (explicit (or (and override (not (string-empty-p override)) override)
+                       custom-file))
+         (files (if explicit (list explicit)
+                  (delete-dups
+                   (delq nil
+                         (list user-init-file
+                               (expand-file-name "custom.el" user-emacs-directory)
+                               (expand-file-name "init.el" user-emacs-directory)
+                               (expand-file-name "~/.emacs"))))))
+         (base (dsh-emacs--server-base-url)))
+    (catch 'token
+      (dolist (file files)
+        (when (or (file-remote-p file)
+                  (and explicit (not (file-readable-p file))))
+          (error "E2E auth settings must be a readable local file: %s" file))
+        (when (file-readable-p file)
+          (let (settings)
+            (condition-case _err
+                (with-temp-buffer
+                  (insert-file-contents file)
+                  (delay-mode-hooks (emacs-lisp-mode))
+                  (goto-char (point-min))
+                  (while (progn (forward-comment (point-max)) (not (eobp)))
+                    (pcase (read (current-buffer))
+                      (`(custom-set-variables . ,entries)
+                       (dolist (entry entries)
+                         (pcase entry
+                           (`(quote (,name ,value . ,_))
+                            (when (memq name '(dsh-emacs-server-auth-token
+                                               dsh-emacs-base-url))
+                              (push (cons name value) settings)))))))))
+              ;; Reader errors may contain credential text; never print them.
+              (error (error "Cannot read E2E auth settings: %s" file)))
+            (let ((token (cdr (assq 'dsh-emacs-server-auth-token settings)))
+                  (saved-base (if-let* ((entry (assq 'dsh-emacs-base-url settings)))
+                                  (cdr entry)
+                                dsh-emacs-server-default-base-url)))
+              (when (and (stringp token) (not (string-empty-p token))
+                         (stringp saved-base)
+                         (equal base
+                                (let ((dsh-emacs-base-url saved-base))
+                                  (dsh-emacs--server-base-url))))
+                (throw 'token token)))))))))
 
 (defun dsh-e2e--pass (name)
   (push (list name t nil) dsh-e2e--results)
@@ -673,6 +728,7 @@ DSH_E2E_PRESET selects the preset; existing chats and connections are preserved.
   (when (and questions noninteractive)
     (user-error "Timed-question E2E needs a graphical Emacs for its real reader"))
   (let* ((dsh-emacs-base-url (or (getenv "DSH_E2E_URL") dsh-emacs-base-url))
+         (dsh-emacs-server-auth-token dsh-emacs-server-auth-token)
          (dsh-emacs-enable-notifications nil)
          (dsh-emacs-new-session-auto-project nil)
          (dsh-emacs-show-tool-calls t)
@@ -693,6 +749,12 @@ DSH_E2E_PRESET selects the preset; existing chats and connections are preserved.
       (unwind-protect
           (condition-case error-data
               (progn
+                (unless (or dsh-emacs--server-auth-cookie
+                            (dsh-emacs--server-auth-token)
+                            (dsh-emacs--server-auth-token-from-url
+                             dsh-emacs-base-url))
+                  (setq dsh-emacs-server-auth-token
+                        (dsh-e2e--saved-auth-token)))
                 (dsh-e2e--rpc "session/list" (dsh-emacs--session-list-args))
                 (dsh-e2e--pass "health-check")
 
