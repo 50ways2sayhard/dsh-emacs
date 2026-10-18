@@ -1291,8 +1291,8 @@ reconnect snapshot cannot replay it.
 A page is identified by `dsh-emacs--history-page` (bound by
 `dsh-emacs--load-older-history-page`, read through
 `dsh-emacs-render--history-page-p`), never by the marker, which only positions
-and may be nil. Page state — stream, pending command, todo, activity group,
-deliverable — is scoped to the page, and a page cannot flush or divert a live
+and may be nil. Page state — stream, pending command, todo, deliverable —
+is scoped to the page, and a page cannot flush or divert a live
 reply, change model/usage or step/busy indicators, consume a pending
 notification, or animate a command. Its Markdown renders synchronously instead
 of joining the idle queue that formats a live streaming tail. Older prompts are

@@ -54,8 +54,9 @@ before connecting. A `use-package` example is in
 From a local project, the command locates its existing workspace; from a chat,
 it locates that session. New sessions open an editable draft while connecting.
 
-Idle session dots and timestamps use the theme's `shadow` face (grey by
-default); running session dots are orange.
+Idle session dots, the `New Session` placeholder and muted text (timestamps,
+reply footers, deliverable descriptions, subagent error notices) use the
+theme's `shadow` face (grey by default); running session dots are orange.
 
 ![Session list grouped by workspace](assets/sessions.png)
 
@@ -83,10 +84,11 @@ Ordinary Emacs undo applies only to the input, leaving the transcript intact.
 `M-x imenu` navigates the conversation's questions. Click a folded tool or
 thinking header, or press `RET` on it, to expand it.
 
-For the upcoming 0.7.0 release, remove `dsh-emacs-group-consecutive-tools`
-and `dsh-emacs-assistant-divider` from personal configuration. These inactive
-options have been deleted; tool cards still fold independently and assistant
-message spacing is unchanged. See [Customization](docs/customization.md).
+The 0.7.0 release removes `dsh-emacs-group-consecutive-tools` and
+`dsh-emacs-assistant-divider`; both are deleted, so remove any remaining
+entries from personal configuration. Tool cards still fold independently and
+assistant message spacing is unchanged. See
+[Customization](docs/customization.md).
 
 ### References, commands, and attachments
 

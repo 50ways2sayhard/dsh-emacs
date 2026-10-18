@@ -188,10 +188,11 @@ whole report blindly.
 
 ## Protocol-layer constraint
 
-- Wire field names (`sessionId`, `archivedSessionIds`, …) must appear
-  **only** in the `--from-alist` constructors inside
-  `dsh-emacs-protocol.el`; business code reads through `dsh-protocol-*`
-  accessors exclusively
+- On the inbound/decoding path, wire field names (`sessionId`,
+  `archivedSessionIds`, …) must appear **only** in the `--from-alist`
+  constructors inside `dsh-emacs-protocol.el`; business code reads decoded
+  fields through `dsh-protocol-*` accessors exclusively. Outbound request
+  payloads are not centralized yet (see postmortem/135)
 - Business functions that must accept legacy test fixtures use the
   `dsh-protocol--struct` compat gate to take either a wire alist or an
   already-converted struct; wire arrays are vectors and are normalized to

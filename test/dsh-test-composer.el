@@ -214,7 +214,7 @@
         (should (get-text-property (- e 9) 'dsh-emacs-reference-chip))))))
 
 ;; --- Composer Goal Row: parse the goal projection ---
-(ert-deftest dsh-emacs-test-composer-composer-goal-from-projection-parses ()
+(ert-deftest dsh-emacs-test-composer-goal-projection-parses ()
   :tags '(dsh-unit)
   (let* ((proj (list (cons 'goal
                            (list (cons 'id "g1")
@@ -224,7 +224,7 @@
                                  (cons 'blockedReason nil)
                                  (cons 'maxGoalRounds 10)))))
          (goal (dsh-protocol-goal-projection--from-alist proj)))
-    (ert-info ((format "%s" "composer-goal-from-projection-parses"))
+    (ert-info ((format "%s" "composer-goal-projection-parses"))
       (should (dsh-protocol-goal-p goal))
       (should (equal (dsh-protocol-goal-objective goal) "Improve model picker"))
       (should (equal (dsh-protocol-goal-phase goal) "active"))

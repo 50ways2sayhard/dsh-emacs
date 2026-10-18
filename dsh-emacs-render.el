@@ -15,7 +15,6 @@
 ;;   * assistant message → borderless, just the markdown body + top/bottom rules
 ;;   * thinking block → `<details>`-style, collapsible, collapsed by default
 ;;   * tool call → rounded box, recolored by pending/success/error state
-;;   * consecutive tool calls → activity group, showing the aggregate state
 ;; Used together with dsh-emacs.el.  Every render function expects the
 ;; buffer-local variables `dsh-emacs--session-id' and `dsh-emacs--input-marker'
 ;; to be set.

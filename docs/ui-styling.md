@@ -329,9 +329,10 @@ not a working grouping surface.
 
 ## Session list
 
-Idle dots (`dsh-emacs-status-idle-face`) and muted text such as timestamps
-(`dsh-emacs-muted-face`) inherit `shadow` (grey in the default Emacs theme).
-Running dots (`dsh-emacs-status-running-face`) are orange.
+Idle dots (`dsh-emacs-status-idle-face`, also the `New Session` placeholder)
+and muted text (`dsh-emacs-muted-face`: timestamps, reply footers, deliverable
+descriptions, subagent error notices) inherit `shadow` (grey in the default
+Emacs theme). Running dots (`dsh-emacs-status-running-face`) are orange.
 
 | Face | Description |
 |---|---|
