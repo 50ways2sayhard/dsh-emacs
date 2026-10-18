@@ -30,6 +30,14 @@ Composer rows use the buffer background. The former
 entries from personal theme configuration. Goal icon, label, body and action
 faces remain separately customizable.
 
+The upcoming 0.7.0 release removes `dsh-emacs-group-consecutive-tools` and
+`dsh-emacs-assistant-divider`. Neither option affected the transcript; remove
+them from personal configuration. Tool cards fold independently, and assistant
+bodies keep their existing spacing. Tool visibility and initial expansion
+remain controlled by `dsh-emacs-show-tool-calls` and
+`dsh-emacs-tool-expand-by-default`. See
+[decision 122](../postmortem/122-remove-inactive-transcript-options.md).
+
 ## Reloading local source
 
 Run `M-x dsh-emacs-reload` after saving package source edits. It preserves

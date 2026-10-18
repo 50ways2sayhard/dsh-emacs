@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format follows
 sections carry the planned next version (pre-1.0: `fix` → patch, features →
 minor) and stay undated until the release is cut.
 
+## 0.7.0 - Unreleased
+
+### Breaking Changes
+
+- **Remove inactive transcript options**: `dsh-emacs-group-consecutive-tools`
+  and `dsh-emacs-assistant-divider` are removed without compatibility aliases.
+  Neither affected the transcript: tool cards continue to fold independently,
+  and assistant bodies retain their existing spacing. Remove these settings
+  from personal configuration. (rationale: postmortem/122)
+
 ## 0.6.1 - 2026-10-18
 
 Compatible with **dsh 0.2.1-rc.2**, the latest upstream release as of

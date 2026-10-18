@@ -4,6 +4,9 @@ String-qualified identity and navigation superseded by 024; the snapshot
 contract remains in effect, except its whole-block face clause — superseded by
 [039](039-region-scoped-fragment-faces.md).
 
+Activity-group follow-up debt superseded by
+[122](122-remove-inactive-transcript-options.md).
+
 ## Background
 
 At baseline `049f0a6`, the UI layer had separate writers for insertion,

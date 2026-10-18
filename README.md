@@ -78,6 +78,11 @@ Ordinary Emacs undo applies only to the input, leaving the transcript intact.
 `M-x imenu` navigates the conversation's questions. Click a folded tool or
 thinking header, or press `RET` on it, to expand it.
 
+For the upcoming 0.7.0 release, remove `dsh-emacs-group-consecutive-tools`
+and `dsh-emacs-assistant-divider` from personal configuration. These inactive
+options have been deleted; tool cards still fold independently and assistant
+message spacing is unchanged. See [Customization](docs/customization.md).
+
 ### References, commands, and attachments
 
 - **`@` references** select server-side files, directories, or sessions.

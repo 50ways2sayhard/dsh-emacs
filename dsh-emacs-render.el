@@ -161,12 +161,6 @@ default); the error kind turns the node red."
   :type 'boolean
   :group 'dsh-emacs-render)
 
-(defcustom dsh-emacs-assistant-divider nil
-  "Whether to draw a divider between assistant message bodies.
-Off by default to reduce visual noise."
-  :type 'boolean
-  :group 'dsh-emacs-render)
-
 (defcustom dsh-emacs-reply-footer-items '(copy fork usage duration)
   "Footer items for the latest completed text turn between human messages.
 Items appear in this order; nil hides the row.  `copy' copies the selected
@@ -201,11 +195,6 @@ page, while a displayed window is not following new output, and when the
 input area's position cannot be located, so the limit is soft during history
 browsing.  Set to nil to disable trimming."
   :type '(choice integer (const nil))
-  :group 'dsh-emacs-render)
-
-(defcustom dsh-emacs-group-consecutive-tools 3
-  "How many consecutive tool calls are grouped into one activity group."
-  :type 'integer
   :group 'dsh-emacs-render)
 
 (defcustom dsh-emacs-show-todos t
@@ -955,17 +944,6 @@ input area."
     (let ((buffer-undo-list t))
       (insert txt))))
 
-(defun dsh-emacs-render--insert-divider (&optional position)
-  "Insert a subtle divider at POSITION when dividers are enabled."
-  (when dsh-emacs-assistant-divider
-    (let* ((w (max 40 (- (window-width) 4)))
-           (line (concat (propertize (make-string w ?─)
-                                    'face 'dsh-emacs-divider-face))))
-      (let ((inhibit-read-only t)
-            (buffer-undo-list t))
-        (when position (goto-char position))
-        (insert line "\n")))))
-
 (defun dsh-emacs-render--insert-chat-message (text face insert-point event-id &optional role)
   "Insert TEXT as a read-only, background-colored chat message.
 FACE is applied to the message body.  EVENT-ID is stored for navigation.
@@ -1079,18 +1057,6 @@ turn\" means the marker stays a positioning concern."
 (defvar-local dsh-emacs--tool-states (make-hash-table :test 'equal)
   "Map from toolCallId -> plist (:state :variant :title :summary :args :result).")
 
-(defvar-local dsh-emacs--group-counter 0
-  "Auto-incremented id for activity groups.")
-
-(defvar-local dsh-emacs--current-group-id nil
-  "Id of the currently open activity group, if any.")
-
-(defvar-local dsh-emacs--current-group-count 0
-  "Number of tool calls folded into the current activity group.")
-
-(defvar-local dsh-emacs--current-group-completed 0
-  "Number of tool calls in current group that have completed.")
-
 (defvar-local dsh-emacs--turn-awaiting nil
   "Non-nil while a run submitted by this buffer awaits `turn/end'.")
 
@@ -1142,10 +1108,6 @@ miss the entry is cleaned up.")
         dsh-emacs--command-blocks (make-hash-table :test 'equal)
         dsh-emacs--command-spinners (make-hash-table :test 'equal)
         dsh-emacs--pending-command nil
-        dsh-emacs--group-counter 0
-        dsh-emacs--current-group-id nil
-        dsh-emacs--current-group-count 0
-        dsh-emacs--current-group-completed 0
         dsh-emacs-render--turn-deliverables nil
         dsh-emacs-render--reply-turns nil
         dsh-emacs-render--attempt-turns nil)
@@ -1161,42 +1123,6 @@ miss the entry is cleaned up.")
 (defun dsh-emacs-render--set-tool-state (tool-call-id &rest props)
   "Set props onto the tracked state of TOOL-CALL-ID, replacing all."
   (puthash tool-call-id props dsh-emacs--tool-states))
-
-(defun dsh-emacs-render--close-current-group ()
-  "Close out the current activity group (if any) so the next tool starts fresh."
-  (when (and dsh-emacs--current-group-id
-             (> dsh-emacs--current-group-count 1))
-    ;; Update the group header's label-right with the completed count.
-    (let* ((gid dsh-emacs--current-group-id)
-           (done dsh-emacs--current-group-completed)
-           (total dsh-emacs--current-group-count)
-           (right (format "%d of %d completed" done total))
-           (ns (dsh-emacs-render--make-namespace))
-           (block (dsh-emacs-ui-find-block ns gid)))
-      (when block
-        (dsh-emacs-ui-update-fragment
-         (dsh-emacs-ui-make-fragment
-          :namespace-id ns
-          :block-id gid
-          :label-left (propertize "Tool activity" 'face 'dsh-emacs-group-face)
-          :label-right right)
-         :create-new nil))))
-  (setq dsh-emacs--current-group-id nil
-        dsh-emacs--current-group-count 0
-        dsh-emacs--current-group-completed 0))
-
-(defun dsh-emacs-render--ensure-group ()
-  "Maybe open a new group if we have accumulated `dsh-emacs-group-consecutive-tools'."
-  (when (>= dsh-emacs--current-group-count dsh-emacs-group-consecutive-tools)
-    (dsh-emacs-render--close-current-group))
-  (unless dsh-emacs--current-group-id
-    (setq dsh-emacs--group-counter (1+ dsh-emacs--group-counter))
-    (setq dsh-emacs--current-group-id
-          (format "group-%d-%d"
-                  dsh-emacs--group-counter
-                  (random 99999)))
-    (setq dsh-emacs--current-group-count 0
-          dsh-emacs--current-group-completed 0)))
 
 (defun dsh-emacs-render--stream-key (event)
   "Return the logical assistant stream key for EVENT."
@@ -2431,7 +2357,7 @@ the event seq but renders no ordinary tool card."
     (dsh-emacs-render--event-seq event)))
 
 ;;; ---------------------------------------------------------------------------
-;;; Renderer: tool call (part of an activity group)
+;;; Renderer: tool call
 ;;; ---------------------------------------------------------------------------
 
 (defun dsh-emacs-render--tool-call-block-id (tool-call-id)
@@ -2470,7 +2396,6 @@ the event seq but renders no ordinary tool card."
                                      'action #'dsh-emacs-render--open-plan
                                      'dsh-emacs-plan--call-id call-id 'dsh-emacs-plan--markdown text)
                  (buffer-string))))
-    (dsh-emacs-render--close-current-group)
     (dsh-emacs-render--set-tool-state call-id :plan-text text)
     (dsh-emacs-ui-update-fragment
      (dsh-emacs-ui-make-fragment
@@ -2484,9 +2409,9 @@ the event seq but renders no ordinary tool card."
   "Render a `tool/call' event. Returns seq."
   (let ((name (dsh-emacs-render--aget "name" (dsh-emacs-render--event-data event))))
     (when-let* ((text (and dsh-emacs-show-tool-calls
-                          (dsh-emacs-render--plan-text
-                           name (dsh-emacs-render--aget
-                                 "arguments" (dsh-emacs-render--event-data event))))))
+                           (dsh-emacs-render--plan-text
+                            name (dsh-emacs-render--aget
+                                  "arguments" (dsh-emacs-render--event-data event))))))
       (dsh-emacs-render--plan-card
        (dsh-emacs-render--aget "callId" (dsh-emacs-render--event-data event)) text)
       (cl-return-from dsh-emacs-render-tool-call
@@ -2545,9 +2470,6 @@ the event seq but renders no ordinary tool card."
            call-id :state 'pending :variant variant :icon icon :title title
            :name name :args body-text :args-raw args
            :summary summary :call-time ts :ns ns)
-          ;; Maybe open / reuse an activity group.
-          (dsh-emacs-render--ensure-group)
-          (setq dsh-emacs--current-group-count (1+ dsh-emacs--current-group-count))
           (dsh-emacs-ui-update-fragment
            (dsh-emacs-ui-make-fragment
             :namespace-id ns
@@ -2562,13 +2484,7 @@ the event seq but renders no ordinary tool card."
             :header-face 'dsh-emacs-tool-pending-face)
            :create-new t
            :expanded dsh-emacs-tool-expand-by-default
-           :insert-before insert-point)
-          ;; Update tracked state with group id.
-          (dsh-emacs-render--set-tool-state
-           call-id :state 'pending :variant variant :icon icon :title title
-           :name name :args body-text :args-raw args
-           :summary summary :call-time ts :ns ns
-           :group-id dsh-emacs--current-group-id))
+           :insert-before insert-point))
         ;; Return seq via the helper to keep helper structure.
         (dsh-emacs-render--event-seq event)))))
 
@@ -3593,13 +3509,7 @@ everything else `success'."
              call-id :state state :result full-text :exit-code exit-code
              :variant variant :title title :name name :args args
              :args-raw args-raw :icon icon :summary summary
-             :call-time (plist-get prev :call-time) :ns (plist-get prev :ns)))
-          ;; Increment completed counter in the current group.
-          (when (and dsh-emacs--current-group-id
-                     (equal (plist-get (dsh-emacs-render--tool-state call-id) :group-id)
-                            dsh-emacs--current-group-id))
-            (setq dsh-emacs--current-group-completed
-                  (1+ dsh-emacs--current-group-completed))))))
+             :call-time (plist-get prev :call-time) :ns (plist-get prev :ns))))))
     (dsh-emacs-render--event-seq event)))
 
 (defun dsh-emacs-render-question-settled (call-id answers-json)
@@ -3614,25 +3524,20 @@ buffer still tracks CALL-ID's row and that row is showing the pending result."
     (when (and prev
                (equal (plist-get prev :variant) "question")
                (dsh-emacs-render--ask-pending-p (plist-get prev :result)))
-      ;; Re-rendering an already-settled row is not a new result, so the
-      ;; activity group's completed counter must not move.
-      (let ((completed dsh-emacs--current-group-completed))
-        (unwind-protect
-            (dsh-emacs-render-tool-result
-             (list (cons "type" "tool/result")
-                   (cons "data"
-                         (list (cons "message"
-                                     (list (cons "callId" call-id)
-                                           (cons "content"
-                                                 (vector
-                                                  (list (cons "type" "tool-result")
-                                                        (cons "isError" :json-false)
-                                                        (cons "content"
-                                                              (vector
-                                                               (list (cons "type" "text")
-                                                                     (cons "text"
-                                                                           answers-json)))))))))))))
-          (setq dsh-emacs--current-group-completed completed))))))
+      (dsh-emacs-render-tool-result
+       (list (cons "type" "tool/result")
+             (cons "data"
+                   (list (cons "message"
+                               (list (cons "callId" call-id)
+                                     (cons "content"
+                                           (vector
+                                            (list (cons "type" "tool-result")
+                                                  (cons "isError" :json-false)
+                                                  (cons "content"
+                                                        (vector
+                                                         (list (cons "type" "text")
+                                                               (cons "text"
+                                                                     answers-json))))))))))))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: goal card (`create_goal' / `get_goal' / `update_goal')
@@ -3946,7 +3851,6 @@ or re-fetched history whose tail is a `turn/start' without a matching
 `turn/end' means the turn is still in flight, so re-light the mode-line
 running spinner (idempotent — the send path already lit it, and a
 `turn/end' later clears it)."
-  (dsh-emacs-render--close-current-group)
   ;; A turn started (or a still-open turn was replayed after a reconnect /
   ;; session reopen): light the mode-line running spinner.
   (when (and (not (dsh-emacs-render--history-page-p))
@@ -4005,7 +3909,6 @@ turn-error node — the provider rejected the run: quota, rate, ...)
 renders as a visible error row; anything else just clears the running
 spinner."
   (dsh-emacs-render--flush-stream nil t)
-  (dsh-emacs-render--close-current-group)
   ;; A turn's declared deliverables close the transcript after its final
   ;; message (web's turnTail), so they are rendered here, not at their own
   ;; event position.
@@ -5187,9 +5090,6 @@ re-delivered and the running animation had no later event to stop it."
                 (dsh-emacs--turn-awaiting nil)
                 (dsh-emacs--pending-command nil)
                 (dsh-emacs--todo-list nil)
-                (dsh-emacs--current-group-id nil)
-                (dsh-emacs--current-group-count 0)
-                (dsh-emacs--current-group-completed 0)
                 (dsh-emacs-render--turn-deliverables nil))
             (dolist (entry entries)
               (consume-entry entry))

@@ -2711,12 +2711,6 @@ the erase discards any history an earlier layout left behind."
   (setq dsh-emacs--undo-stale nil)
   (dsh-emacs--subagent-input-update))
 
-(defun dsh-emacs--ensure-input-area ()
-  "Ensure the input area exists and point is at the right position."
-  (unless (and dsh-emacs--input-marker (marker-buffer dsh-emacs--input-marker))
-    (dsh-emacs--setup-input-area))
-  (goto-char dsh-emacs--input-marker))
-
 (defun dsh-emacs--active-session-id ()
   "Return the session id the current command context belongs to.
 Resolves in this order:

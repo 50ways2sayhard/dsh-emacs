@@ -14,8 +14,7 @@ builds on agent-shell, the mode-line stats on pi-mono):
 
 - **User messages**: `❯` prompt followed by text, with blank-line spacing and
   no background by default
-- **Assistant messages**: frameless design, pure Markdown rendering, separated
-  by dividers
+- **Assistant messages**: frameless Markdown bodies with transcript spacing
 - **Thinking blocks**: collapsible `<details>`-style items, folded by default,
   shown with dsh web's Think icon (IconThink) + "Think" + a first-sentence
   preview (truncated with `...` when too long)
@@ -97,7 +96,8 @@ and its args/output lines unstyled (`dsh-emacs-tool-output-face` is unused).
 
 Tool rows mimic dsh web's `ToolRow`: each tool call renders as one row of
 **collapsible** cards, with a header of `variant icon + title + summary`;
-expanding reveals the call body.  Icons correspond one-to-one with dsh web's
+expanding reveals the call body. Each card folds independently. Icons
+correspond one-to-one with dsh web's
 `VARIANT_ICONS`:
 
 | Variant | Icon | Corresponding dsh web icon |

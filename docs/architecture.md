@@ -1191,12 +1191,12 @@ text property; a forward lookup finds its first occurrence, even at buffer start
 after trimming. See
 [044](../postmortem/044-load-older-history.md).
 
-## Activity groups
+## Tool card ownership
 
-Tool cards currently render and fold independently. The renderer retains
-legacy group counters and `dsh-emacs-group-consecutive-tools`, but does not
-create group headers or attach child fragments. The UI has no group API;
-these renderer remnants are recorded as follow-up debt in decision 022.
+Tool cards render and fold independently. The renderer tracks each call's
+identity, arguments and result; the UI owns that card's fold state. Turn
+boundaries and older-history pages do not maintain separate activity-group
+counters. See [decision 122](../postmortem/122-remove-inactive-transcript-options.md).
 
 ## Chinese encoding
 
