@@ -100,7 +100,7 @@
            (ordinary (dsh-render-report-scenario
                       scenario (lambda (run) (funcall run) (buffer-string)))))
       (ert-info ((format "%s" (format "render-report-preserves-output-%s" scenario)))
-        (should (equal-including-properties instrumented ordinary)))
+        (should (dsh-test-equal-text-p instrumented ordinary)))
       (when (eq scenario 'session-title)
         (ert-info ((format "%s" "render-report-distinguishes-row-visits-from-builds"))
           (should (= (plist-get report :session-rows) 540))

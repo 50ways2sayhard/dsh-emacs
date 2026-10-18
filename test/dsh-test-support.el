@@ -12,6 +12,27 @@
 (add-to-list 'load-path dsh-emacs-test-root)
 (require 'dsh-emacs)
 
+(defun dsh-test-equal-text-p (left right)
+  "Compare text and property values in LEFT and RIGHT structurally.
+Emacs 28's `equal-including-properties' compares string property values
+by identity, so independently rendered but equivalent snapshots differ."
+  (and (equal left right)
+       (let ((pos 0)
+             (end (length left)))
+         (catch 'different
+           (while (< pos end)
+             (let ((left-props (text-properties-at pos left))
+                   (right-props (text-properties-at pos right)))
+               (unless (and (= (length left-props) (length right-props))
+                            (cl-loop for (key value) on left-props by #'cddr
+                                     always (and (plist-member right-props key)
+                                                 (equal-including-properties
+                                                  value (plist-get right-props key)))))
+                 (throw 'different nil)))
+             (setq pos (min (next-property-change pos left end)
+                            (next-property-change pos right end))))
+           t))))
+
 (defun dsh-emacs-test--session-items (items)
   "Wrap raw session-item alists ITEMS as `dsh-protocol-session' structs
 so the code under test can read fields through the protocol accessors."

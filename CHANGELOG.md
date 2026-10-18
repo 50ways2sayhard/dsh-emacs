@@ -27,6 +27,8 @@ minor) and stay undated until the release is cut.
   navigation markers stay attached to their sessions. (rationale: postmortem/137)
 - **Show goal objectives in the help buffer on Emacs 28**: opening goal details
   no longer inserts the objective into the chat buffer or omits it from help.
+- **Keep unchanged cards untouched on Emacs 28**: streaming outside a card no
+  longer causes its equivalent snapshot properties to be rewritten.
 - **Keep idle session indicators muted**: idle dots and muted text inherit
   `shadow`, so the default Emacs theme shows them in grey instead of the
   red comment color. Running indicators remain orange.

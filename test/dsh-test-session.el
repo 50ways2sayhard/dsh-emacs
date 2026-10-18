@@ -947,7 +947,7 @@ window's own point behind, which the session list now preserves per window."
             (setq dsh-emacs-session--row-cache nil)
             (check "explicit-cold-render-rebuilds" 2)
             (ert-info ((format "%s" "session-row-cache-cold-and-warm-output-identical"))
-              (should (equal-including-properties warm (buffer-string)))))
+              (should (dsh-test-equal-text-p warm (buffer-string)))))
           (let ((inhibit-read-only t))
             (goto-char (+ (row) 5))
             (delete-char 1)

@@ -441,8 +441,19 @@ Rendering completes before editing; failed replacements roll back and signal."
                      model (if block (not (map-elt state :collapsed)) expanded)
                      width))))
             (when (and block
-                       (equal-including-properties
-                        text (buffer-substring (car block) (cdr block))))
+                       (let ((old (buffer-substring (car block) (cdr block)))
+                             (end (length text)))
+                         ;; Emacs 28 compares string property values by identity.
+                         ;; Compare each property's data so fresh but equivalent
+                         ;; snapshots do not rewrite an unchanged block.
+                         (and (equal text old)
+                              (cl-loop for pos = 0 then
+                                       (min (next-property-change pos text end)
+                                            (next-property-change pos old end))
+                                       while (< pos end)
+                                       always (equal-including-properties
+                                               (text-properties-at pos text)
+                                               (text-properties-at pos old))))))
               (dsh-emacs-ui--remember-block block layout)
               (cl-return-from dsh-emacs-ui-update-fragment block))
             ;; Captured only once a write is certain, so cache hits stay free.
