@@ -16,7 +16,9 @@
                           ((id . "m2"))])))
          (g2 '((id . "g2") (name . "qwen-token-plan")
                (models . [((id . "m3") (name . "Qwen-M"))])))
-         (cands (dsh-emacs--model-candidates `((groups . [,g1 ,g2])))))
+         (directory (dsh-protocol-model-directory--from-alist
+                     `((groups . [,g1 ,g2]))))
+         (cands (dsh-emacs--model-candidates directory)))
     ;; Each entry carries (id provider group name), where provider is the id of the
     ;; owning group; the list sorts by provider name + model id (m1 < m2 within a
     ;; group, group names case-insensitive)
@@ -34,7 +36,9 @@
                           ((id . "m2") (name . "Alpha"))])))
          (g2 '((id . "g2") (name . "Alpha-Group")
                (models . [((id . "m3") (name . "gamma"))])))
-         (cands (dsh-emacs--model-candidates `((groups . [,g1 ,g2])))))
+         (directory (dsh-protocol-model-directory--from-alist
+                     `((groups . [,g1 ,g2]))))
+         (cands (dsh-emacs--model-candidates directory)))
     (ert-info ((format "%s" "model-candidates-sorted-provider-then-name"))
       (should (equal cands '(("m3" "g2" "Alpha-Group" "gamma" nil)
                              ("m1" "g1" "Zeta" "beta" nil)
@@ -865,6 +869,28 @@
                                msgs))
               (should (null calls)))))
       (kill-buffer buf))))
+
+(ert-deftest dsh-emacs-test-model-selection-select-effort-missing-model-reports ()
+  :tags '(dsh-unit)
+  (let (messages calls)
+    (cl-letf (((symbol-function 'dsh-emacs--session-model-selection)
+               (lambda (_id)
+                 (dsh-protocol-model-selection--from-alist
+                  '((provider . "p1") (model . "removed-model")))))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _)
+                 (ert-fail "Missing model must not open an effort reader")))
+              ((symbol-function 'dsh-emacs--rpc-async)
+               (lambda (&rest args) (push args calls)))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (push (apply #'format fmt args) messages))))
+      (dsh-emacs--select-effort-prompt
+       "sess-e"
+       '((groups . [((id . "p1") (name . "DeepSeek")
+                     (models . [((id . "m1") (name . "One"))]))]))))
+    (should (equal messages '("Model removed-model is not in the live catalog")))
+    (should-not calls)))
 
 ;; --- Test 47p: C-g in select-effort cancels cleanly (the quit must not reach
 ;; the command boundary) ---

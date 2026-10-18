@@ -3863,8 +3863,8 @@ readable regular file no larger than `dsh-emacs-attach-max-file-size'."
             (message "No attachable files among the dropped files")
           (dsh-emacs--stage-attachments attachments))))))
 
-(defun dsh-emacs--model-candidates (value)
-  "Flatten a `session/modelCatalog' VALUE into per-model entries, sorted.
+(defun dsh-emacs--model-candidates (directory)
+  "Flatten model DIRECTORY into per-model entries, sorted.
 
 The list is sorted by provider display name then model id
 (case-insensitive), so the model picker shows a stable, predictable
@@ -3881,11 +3881,8 @@ Each entry is (ID PROVIDER PROVIDER-NAME NAME REASONING):
                   (a `dsh-protocol-reasoning' struct), or nil when the
                   model offers no reasoning-effort options.
 
-VALUE is the raw `session/modelCatalog' (or legacy directory) response
-alist — it is normalized to a `dsh-protocol-model-directory' struct
-first, so all field access lives in dsh-emacs-protocol.el."
-  (let* ((dir (dsh-protocol-model-directory--from-alist value))
-         (groups (dsh-protocol-model-directory-groups dir)))
+DIRECTORY is a decoded `dsh-protocol-model-directory' struct."
+  (let ((groups (dsh-protocol-model-directory-groups directory)))
     (sort (cl-loop for g in groups
                    for provider = (dsh-protocol-provider-group-id g)
                    for provider-name = (or (dsh-protocol-provider-group-name g)
@@ -3896,14 +3893,15 @@ first, so all field access lives in dsh-emacs-protocol.el."
                                                   id)
                                    for reasoning = (dsh-protocol-model-catalog-entry-reasoning m)
                                    collect (list id provider provider-name
-                                                name reasoning)))
+                                                 name reasoning)))
           (lambda (a b)
-            (let ((pa (downcase (nth 2 a)))
-                  (pb (downcase (nth 2 b)))
-                  (ia (downcase (nth 0 a)))
-                  (ib (downcase (nth 0 b))))
-              (or (string-lessp pa pb)
-                  (and (string= pa pb) (string-lessp ia ib))))))))
+            (pcase-let* ((`(,id-a ,_ ,provider-a . ,_) a)
+                         (`(,id-b ,_ ,provider-b . ,_) b)
+                         (provider-a (downcase provider-a))
+                         (provider-b (downcase provider-b)))
+              (or (string-lessp provider-a provider-b)
+                  (and (string= provider-a provider-b)
+                       (string-lessp (downcase id-a) (downcase id-b)))))))))
 
 (defun dsh-emacs--model-effort-choices (reasoning)
   "Effort options of REASONING (a `dsh-protocol-reasoning' struct, or a
@@ -3964,14 +3962,12 @@ property rendering \"  id\" (or, when DUP non-nil — the same id is
 offered by several providers — and no group headers are available,
 \"  id (Provider Name)\" so duplicate-id rows stay distinguishable
 after the group headers are dropped)."
-  (let* ((id (nth 0 c))
-         (provider (nth 1 c))
-         (provider-name (nth 2 c))
-         (shown (if dup
-                    (format "  %s (%s)" id provider-name)
-                  (format "  %s" id)))
-         (key (propertize (format "%s [%s|%s]" id provider provider-name)
-                          'display shown)))
+  (pcase-let* ((`(,id ,provider ,provider-name . ,_) c)
+               (shown (if dup
+                          (format "  %s (%s)" id provider-name)
+                        (format "  %s" id)))
+               (key (propertize (format "%s [%s|%s]" id provider provider-name)
+                                'display shown)))
     (cons key c)))
 
 (defun dsh-emacs--model-key-parts (key)
@@ -3983,17 +3979,13 @@ or nil when KEY is not a model row."
           (match-string 2 key)
           (match-string 3 key))))
 
-(defun dsh-emacs--model-key-provider (key)
-  "Provider id embedded in row KEY, or nil."
-  (nth 1 (dsh-emacs--model-key-parts key)))
-
 (defun dsh-emacs--model-entries (candidates)
   "Entries for completion UIs WITHOUT grouping support: provider shown
 once as a bare header row, its models following, indented, each
 showing the model id (the payload keeps the display NAME for
 messages/the mode line) with payload = the candidate tuple
 (ID PROVIDER PROVIDER-NAME NAME REASONING), where REASONING is the
-host's `reasoning' alist (efforts + defaultEffort) or nil.  Rows are
+host's `dsh-protocol-reasoning' struct or nil.  Rows are
 (DISPLAY . PAYLOAD) conses, so a picked header is rejected by the
 caller instead of being treated as a model.
 
@@ -4007,11 +3999,11 @@ displayed list the moment the user types a query."
         (last-provider nil)
         (id-count (make-hash-table :test #'equal)))
     (dolist (c candidates)
-      (let ((id (nth 0 c)))
+      (let ((id (car c)))
         (puthash id (1+ (gethash id id-count 0)) id-count)))
     (dolist (c candidates (nreverse entries))
-      (let* ((provider-name (nth 2 c))
-             (dup (> (gethash (nth 0 c) id-count 0) 1)))
+      (pcase-let* ((`(,id ,_ ,provider-name . ,_) c)
+                   (dup (> (gethash id id-count 0) 1)))
         (unless (equal provider-name last-provider)
           (push (cons provider-name (cons :header provider-name)) entries)
           (setq last-provider provider-name))
@@ -4215,7 +4207,7 @@ the filter as \"error in process filter: Quit\"."
              ;; when the session row knows it).
              (current-provider (and current
                                     (dsh-protocol-model-selection-provider current)))
-             (candidates (dsh-emacs--model-candidates value))
+             (candidates (dsh-emacs--model-candidates dir))
              ;; The prompt's provider must match the picker's group headers,
              ;; which show the provider DISPLAY name, not its id.  Resolve the
              ;; current provider id to the display name from the catalog (the
@@ -4224,8 +4216,9 @@ the filter as \"error in process filter: Quit\"."
              (current-provider-label
               (or (and current-provider
                        (cl-some (lambda (c)
-                                  (and (equal (nth 1 c) current-provider)
-                                       (nth 2 c)))
+                                  (pcase-let ((`(,_ ,provider ,name . ,_) c))
+                                    (and (equal provider current-provider)
+                                         name)))
                                 candidates))
                   current-provider))
              ;; Modern vertico (>=2.0) natively supports group-function
@@ -4288,25 +4281,23 @@ the filter as \"error in process filter: Quit\"."
          ((eq :header (car (cdr (assoc picked entries))))
           (message "That is a provider header — pick a model below it"))
          (t
-          (let* ((chosen (cdr (assoc picked entries)))
-                 (model (nth 0 chosen))
-                 (provider (nth 1 chosen))
-                 (reasoning (nth 4 chosen))
-                 ;; Second layer: ask for effort only when the target
-                 ;; model declares reasoning options.  Re-picking the
-                 ;; current model → keep its live reasoningEffort; other
-                 ;; models → the catalog defaultEffort (or the first one).
-                 ;; RET/the vertico preselect takes the default; C-g
-                 ;; bubbles to the outer handler for a uniform "cancel".
-                 (effort-id (and reasoning
-                                 (dsh-emacs--model-pick-effort
-                                  model
-                                  (dsh-emacs--model-effort-choices reasoning)
-                                  (dsh-emacs--model-effort-default-id
-                                   reasoning
-                                   (and (equal model current-model)
-                                        (dsh-protocol-model-selection-reasoning-effort
-                                         current)))))))
+          (pcase-let* ((`(,model ,provider ,provider-name ,model-name ,reasoning)
+                        (cdr (assoc picked entries)))
+                       ;; Second layer: ask for effort only when the target
+                       ;; model declares reasoning options.  Re-picking the
+                       ;; current model → keep its live reasoningEffort; other
+                       ;; models → the catalog defaultEffort (or the first one).
+                       ;; RET/the vertico preselect takes the default; C-g
+                       ;; bubbles to the outer handler for a uniform "cancel".
+                       (effort-id (and reasoning
+                                       (dsh-emacs--model-pick-effort
+                                        model
+                                        (dsh-emacs--model-effort-choices reasoning)
+                                        (dsh-emacs--model-effort-default-id
+                                         reasoning
+                                         (and (equal model current-model)
+                                              (dsh-protocol-model-selection-reasoning-effort
+                                               current)))))))
             (dsh-emacs--rpc-async "session/selectModel"
               `((request . ((sessionId . ,session-id)
                             (provider . ,provider)
@@ -4329,7 +4320,7 @@ the filter as \"error in process filter: Quit\"."
                       ;; fetch (pure RPC), not server-start/event recovery.
                       (dsh-emacs-list-sessions--fetch)
                       (message "Model switched to %s (%s)%s"
-                               (nth 3 chosen) (nth 2 chosen)
+                               model-name provider-name
                                (if effort-id
                                    (format ", effort %s" effort-id)
                                  "")))
@@ -4379,15 +4370,16 @@ model declares no `reasoning' options; C-g cancels the whole read."
          ((null model)
           (message "No running model is known for this session"))
          (t
-          (let* ((entries (dsh-emacs--model-candidates value))
-                 (entry (cl-find-if
-                         (lambda (e)
-                           (and (equal (nth 0 e) model)
-                                (or (null provider)
-                                    (equal (nth 1 e) provider))))
-                         entries))
-                 (reasoning (and entry (nth 4 entry)))
-                 (choices (dsh-emacs--model-effort-choices reasoning)))
+          (pcase-let* ((entries (dsh-emacs--model-candidates dir))
+                       (entry (cl-find-if
+                               (lambda (e)
+                                 (pcase-let ((`(,id ,owner . ,_) e))
+                                   (and (equal id model)
+                                        (or (null provider)
+                                            (equal owner provider)))))
+                               entries))
+                       (`(,_ ,entry-provider ,_ ,_ ,reasoning) entry)
+                       (choices (dsh-emacs--model-effort-choices reasoning)))
             (cond
              ((null entry)
               (message "Model %s is not in the live catalog" model))
@@ -4401,7 +4393,7 @@ model declares no `reasoning' options; C-g cancels the whole read."
                 (dsh-emacs--rpc-async
                  "session/selectModel"
                  `((request . ((sessionId . ,session-id)
-                               (provider . ,(or provider (nth 1 entry)))
+                               (provider . ,(or provider entry-provider))
                                (model . ,model)
                                (reasoningEffort . ,effort-id))))
                  (lambda (ok2 value2)
