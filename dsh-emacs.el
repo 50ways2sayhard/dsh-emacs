@@ -57,10 +57,10 @@
 (defvar use-system-tooltips)
 (defvar x-max-tooltip-size)
 (declare-function icomplete-force-complete-and-exit "icomplete" ())
-;; Emacs 29+ `yank-media'; the forward declaration keeps byte-compile on the
-;; 27.1 baseline honest about a variable defined only in that package.
-(defvar yank-media-preferred-types)
-;; Emacs 31-only; the 27.1 baseline falls back to
+;; `yank-media-preferred-types' is Emacs 31+ and is not declared here: a
+;; load-time `defvar' would shadow the package's default.  Its one use site
+;; guards on `boundp' and suppresses the byte-compiler warning instead.
+;; Emacs 31-only; the 28.1 baseline falls back to
 ;; `dsh-emacs--completion-table-with-metadata'.  The declaration only keeps
 ;; byte-compile on Emacs <=30 from warning about an unknown function.
 (declare-function completion-table-with-metadata "minibuffer" (table metadata))
@@ -2641,9 +2641,12 @@ metadata preserves nearest-first ordering for display and cycling."
     (yank-media-handler "image/.*" #'dsh-emacs--yank-media-handler)
     ;; A macOS pasteboard exposes TIFF only, which the stock preferred-types
     ;; list omits; prefer it in chat buffers so a plain `M-x yank-media' does
-    ;; not stop at "no preferred MIME type to yank".
-    (setq-local yank-media-preferred-types
-                (append yank-media-preferred-types '(image/tiff)))))
+    ;; not stop at "no preferred MIME type to yank".  The list itself is
+    ;; Emacs 31+; older versions have no such knob.
+    (when (boundp 'yank-media-preferred-types)
+      (with-suppressed-warnings ((free-variable yank-media-preferred-types))
+        (setq-local yank-media-preferred-types
+                    (cons 'image/tiff yank-media-preferred-types))))))
 
 (defun dsh-emacs--setup-input-area ()
   "Set up the input area (a read-only transcript plus a writable input box).

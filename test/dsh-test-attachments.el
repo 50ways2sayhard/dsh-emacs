@@ -1522,5 +1522,16 @@
               (should (null result)))))
       (delete-file file))))
 
+;; `yank-media-preferred-types' is Emacs 31+; loading the package must not
+;; shadow its default list, and a chat buffer must keep the TIFF addition.
+(ert-deftest dsh-emacs-test-attachments-yank-media-keeps-preferred-types ()
+  :tags '(dsh-unit)
+  (skip-unless (>= emacs-major-version 31))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (ert-info ((format "%s" "yank-media-keeps-preferred-types"))
+      (should (memq 'image/tiff yank-media-preferred-types))
+      (should (> (length yank-media-preferred-types) 1)))))
+
 (provide 'dsh-test-attachments)
 ;;; dsh-test-attachments.el ends here
