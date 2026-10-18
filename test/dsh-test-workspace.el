@@ -1734,7 +1734,7 @@
                  ;; Record each candidate label, pick the first item (most recent activity
                  ;; = s2)
                  (dolist (item (dsh-test-completion-items coll))
-                   (when (string-search "In W1" item)
+                   (when (dsh-test--string-search "In W1" item)
                      (setq label-by-title item)))
                  (car (dsh-test-completion-items coll))))
               ((symbol-function 'dsh-emacs-open-session)
@@ -1749,7 +1749,7 @@
                    (equal (mapcar #'substring-no-properties
                                   (dsh-test-completion-items collection))
                           (list "In W1" "In W2" "Ungrouped"))
-                   (string-search "In W1" (or label-by-title "")))))))
+                   (dsh-test--string-search "In W1" (or label-by-title "")))))))
 
 ;; --- Test 112: dsh-emacs-switch-workspace-session prefix argument = all
 ;; workspaces ---

@@ -723,8 +723,8 @@
               ((symbol-function 'create-image)
                (lambda (_data _type _data-p &rest props) (cons 'image props))))
       (let* ((row (dsh-emacs-composer--render-next-row item))
-             (icon-faces (ensure-list (get-text-property 0 'face row)))
-             (body-faces (ensure-list (get-text-property 3 'face row))))
+             (icon-faces (dsh-test--ensure-list (get-text-property 0 'face row)))
+             (body-faces (dsh-test--ensure-list (get-text-property 3 'face row))))
         (ert-info ((format "%s" "composer-next-icon-is-chrome"))
           (should (string-prefix-p "   Alpha" (substring-no-properties row)))
           (should (eq 'image (car (get-text-property 0 'display row))))
@@ -734,7 +734,7 @@
           (should (null (memq 'dsh-emacs-input-prompt-face body-faces))))))
     (cl-letf (((symbol-function 'image-type-available-p) (lambda (_type) nil)))
       (let* ((row (dsh-emacs-composer--render-next-row item))
-             (icon-faces (ensure-list (get-text-property 0 'face row))))
+             (icon-faces (dsh-test--ensure-list (get-text-property 0 'face row))))
         (ert-info ((format "%s" "composer-next-text-fallback-is-chrome"))
           (should (string-prefix-p "≡  Alpha" (substring-no-properties row)))
           (should (= 2 (string-width (dsh-emacs-composer--next-icon))))
@@ -789,7 +789,7 @@
                                    cells)))
             (should (cl-every (lambda (cell)
                                 (and (eq 'dsh-emacs-composer-next-action-face
-                                         (car (ensure-list
+                                         (car (dsh-test--ensure-list
                                                (get-text-property (car cell) 'face row))))
                                      (eq 'highlight
                                          (get-text-property (car cell) 'mouse-face row))))
@@ -1007,12 +1007,12 @@
               (should (and (dsh-test-composer-next-row)
                            (let ((plain (substring-no-properties
                                          (dsh-test-composer-next-row))))
-                             (and (string-search "Alpha" plain)
+                             (and (dsh-test--string-search "Alpha" plain)
                                   ;; SVG available: the icon preview line starts with icon(space);
                                   ;; otherwise fall back to the text form
                                   (if (image-type-available-p 'svg)
                                       (string-prefix-p " " plain)
-                                    (string-search "≡" plain)))))))
+                                    (dsh-test--string-search "≡" plain)))))))
             ;; Burst 2: remove frame (mirror cleared immediately, preview line not
             ;; redrawn yet) + steering regression frame
             (dsh-emacs-queue-apply buf 'proc nil)
@@ -1030,7 +1030,7 @@
             (setq paints nil)
             (ert-info ((format "%s" "queue-next-row-steer-reinsert-shows-inflight"))
               (should (and (dsh-test-composer-next-row)
-                           (string-search "Alpha"
+                           (dsh-test--string-search "Alpha"
                                           (substring-no-properties
                                            (dsh-test-composer-next-row))))))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
@@ -1076,7 +1076,7 @@
             (setq paints nil)
             (ert-info ((format "%s" "queue-burst-parked-item-paints"))
               (should (and (dsh-test-composer-next-row)
-                           (string-search "parked"
+                           (dsh-test--string-search "parked"
                                           (substring-no-properties
                                            (dsh-test-composer-next-row))))))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
@@ -1382,9 +1382,9 @@
               (let ((cb (car calls))) (setq calls (cdr calls)) (funcall cb t nil)))
             (ert-info ((format "%s" "queue-next-row-optimistic-steer-second-flips"))
               (should (and (dsh-test-composer-next-row)
-                           (string-search "Second"
+                           (dsh-test--string-search "Second"
                                           (substring-no-properties (dsh-test-composer-next-row)))
-                           (not (string-search "First"
+                           (not (dsh-test--string-search "First"
                                                (substring-no-properties
                                                 (dsh-test-composer-next-row)))))))
             ;; That in-flight entry is consumed (deleted): next falls back to the queue head
@@ -1396,9 +1396,9 @@
               (let ((cb (car calls))) (setq calls (cdr calls)) (funcall cb t nil)))
             (ert-info ((format "%s" "queue-next-row-optimistic-steered-consumed-falls-back"))
               (should (and (dsh-test-composer-next-row)
-                           (string-search "First"
+                           (dsh-test--string-search "First"
                                           (substring-no-properties (dsh-test-composer-next-row)))
-                           (not (string-search "Second"
+                           (not (dsh-test--string-search "Second"
                                                (substring-no-properties
                                                 (dsh-test-composer-next-row)))))))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
@@ -1424,9 +1424,9 @@
               (let ((cb (car calls))) (setq calls (cdr calls)) (funcall cb t nil)))
             (ert-info ((format "%s" "queue-next-row-optimistic-delete-first-flips"))
               (should (and (dsh-test-composer-next-row)
-                           (string-search "Fourth"
+                           (dsh-test--string-search "Fourth"
                                           (substring-no-properties (dsh-test-composer-next-row)))
-                           (not (string-search "Third"
+                           (not (dsh-test--string-search "Third"
                                                (substring-no-properties
                                                 (dsh-test-composer-next-row)))))))
             (let ((item (cl-find "p4" dsh-emacs--queue-items
@@ -1461,9 +1461,9 @@
             ;; just changed to in-flight state)
             (ert-info ((format "%s" "queue-next-row-optimistic-steer-head-keeps-head"))
               (should (and (dsh-test-composer-next-row)
-                           (string-search "Fifth"
+                           (dsh-test--string-search "Fifth"
                                           (substring-no-properties (dsh-test-composer-next-row)))
-                           (not (string-search "Sixth"
+                           (not (dsh-test--string-search "Sixth"
                                                (substring-no-properties
                                                 (dsh-test-composer-next-row)))))))))
       (when (buffer-live-p buf) (kill-buffer buf)))))

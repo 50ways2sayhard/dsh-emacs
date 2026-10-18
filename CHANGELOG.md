@@ -25,6 +25,9 @@ minor) and stay undated until the release is cut.
   signals (for example while another minibuffer owns the prompt), the client
   now declines the question or rejects the approval instead of leaving the
   host waiting for an outcome.
+- **Keep the declared Emacs 27.1 baseline working**: the slash-command skill
+  gesture no longer calls Emacs 28's `ensure-list`, so skill completion works
+  on 27.1 again.
 
 ## 0.6.1 - 2026-10-18
 

@@ -237,7 +237,7 @@ Lets a test drive a malformed content value through the result path."
       (ert-info ((format "%s" "tool-read-card-gutter-keeps-its-face"))
         (should (and num
                      (memq 'dsh-emacs-tool-meta-face
-                           (ensure-list (get-text-property num 'face full)))))))))
+                           (dsh-test--ensure-list (get-text-property num 'face full)))))))))
 
 ;; A read that covered the whole file prints no window footer.
 (ert-deftest dsh-emacs-test-tools-tool-read-card-whole-file-has-no-window-footer ()
@@ -309,15 +309,15 @@ Lets a test drive a malformed content value through the result path."
       (ert-info ((format "%s" "tool-diff-lines-carry-state-faces"))
         (should (and del add
                      (memq 'dsh-emacs-tool-diff-del-face
-                           (ensure-list (get-text-property del 'face full)))
+                           (dsh-test--ensure-list (get-text-property del 'face full)))
                      (memq 'dsh-emacs-tool-diff-add-face
-                           (ensure-list (get-text-property add 'face full))))))
+                           (dsh-test--ensure-list (get-text-property add 'face full))))))
       (ert-info ((format "%s" "tool-diff-context-has-no-change-face"))
         (should (and context
                      (not (cl-intersection
                            '(dsh-emacs-tool-diff-add-face dsh-emacs-tool-diff-del-face
                                                           dsh-emacs-tool-success-face)
-                           (ensure-list (get-text-property (+ context 4) 'face full)))))))
+                           (dsh-test--ensure-list (get-text-property (+ context 4) 'face full)))))))
       ;; Expanded card rows are drawn on the transcript background and are not
       ;; padded to the box width, so each row ends at its own content.
       (ert-info ((format "%s" "tool-diff-card-rows-are-unpadded"))
@@ -581,7 +581,7 @@ Lets a test drive a malformed content value through the result path."
           (ert-info ((format "%s" (format "tool-job-output-footer-%s" (car case))))
             (should (and pos
                          (memq (cadr case)
-                               (ensure-list (get-text-property pos 'face text)))))))))))
+                               (dsh-test--ensure-list (get-text-property pos 'face text)))))))))))
 
 (ert-deftest dsh-emacs-test-tools-tool-job-list-card ()
   :tags '(dsh-unit)

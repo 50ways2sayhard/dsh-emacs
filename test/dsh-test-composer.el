@@ -348,7 +348,7 @@
                             (get-text-property ref 'dsh-emacs-reference-ref row))))
         (should (and ref
                      (memq 'dsh-emacs-reference-face
-                           (ensure-list (get-text-property ref 'face row)))))
+                           (dsh-test--ensure-list (get-text-property ref 'face row)))))
         (should (and ref
                      (equal "RET/mouse-1: open this session"
                             (get-text-property ref 'help-echo row))))
@@ -358,7 +358,7 @@
                                     "")))
         (should (cl-find-if (lambda (i)
                               (memq 'dsh-emacs-composer-goal-body-face
-                                    (ensure-list (get-text-property i 'face row))))
+                                    (dsh-test--ensure-list (get-text-property i 'face row))))
                             (number-sequence 0 (1- (length row)))))))))
 
 ;; The goal tool card shows the same objective projection, so it collapses the

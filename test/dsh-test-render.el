@@ -223,12 +223,12 @@
         (should (let ((dot (string-match "●" full)))
                   (and dot
                        (memq 'dsh-emacs-deliverable-dot-face
-                             (ensure-list (get-text-property dot 'face full)))))))
+                             (dsh-test--ensure-list (get-text-property dot 'face full)))))))
       (ert-info ((format "%s" "deliverables-title-uses-own-face"))
         (should (let ((title (string-match "Deliverables" full)))
                   (and title
                        (memq 'dsh-emacs-deliverable-text-face
-                             (ensure-list (get-text-property title 'face full)))))))
+                             (dsh-test--ensure-list (get-text-property title 'face full)))))))
       ;; Expanding shows the file lines in the bash-card panel surface.
       (goto-char (point-min))
       (search-forward "Deliverables")
@@ -243,7 +243,7 @@
           (should (equal '(file . "report.md")
                          (get-text-property path 'dsh-emacs-reference-ref full)))
           (should (memq 'dsh-emacs-reference-face
-                        (ensure-list (get-text-property path 'face full)))))))))
+                        (dsh-test--ensure-list (get-text-property path 'face full)))))))))
 
 ;; Repeated declaration of one path keeps one line, latest description.
 (ert-deftest dsh-emacs-test-render-deliverables-merge-last-wins ()
@@ -1046,8 +1046,8 @@
                                                                    (vector (list (cons "type" "text")
                                                                                  (cons "text" "PRUNED-COPY")))))))))))))
           (ert-info ((format "%s" "render-skips-replacement-tool-result"))
-            (should (not (string-search "PRUNED-COPY" (buffer-string))))
-            (should (string-search "echo original" (buffer-string)))
+            (should (not (dsh-test--string-search "PRUNED-COPY" (buffer-string))))
+            (should (dsh-test--string-search "echo original" (buffer-string)))
             (should (= dsh-emacs--anchor-seq 2)))
           ;; Control: an append-origin result on another call still paints.
           (dsh-emacs-render-tool-call
@@ -1070,7 +1070,7 @@
                                                                    (vector (list (cons "type" "text")
                                                                                  (cons "text" "APPEND-COPY")))))))))))))
           (ert-info ((format "%s" "render-keeps-append-tool-result"))
-            (should (string-search "APPEND-COPY" (buffer-string)))
+            (should (dsh-test--string-search "APPEND-COPY" (buffer-string)))
             (should (= dsh-emacs--anchor-seq 4))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 

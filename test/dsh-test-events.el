@@ -1237,9 +1237,9 @@
 (defun dsh-emacs-test--buffer-copies (needle)
   "Count non-overlapping occurrences of NEEDLE in the current buffer."
   (let ((n 0) (text (buffer-substring-no-properties (point-min) (point-max))))
-    (while (string-search needle text)
+    (while (dsh-test--string-search needle text)
       (setq n (1+ n)
-            text (substring text (+ (string-search needle text)
+            text (substring text (+ (dsh-test--string-search needle text)
                                     (length needle)))))
     n))
 

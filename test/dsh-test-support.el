@@ -17,11 +17,22 @@
 so the code under test can read fields through the protocol accessors."
   (mapcar #'dsh-protocol-session--from-alist items))
 
+(defun dsh-test--ensure-list (value)
+  "Return VALUE as a list.
+The Emacs 27.1 baseline has no `ensure-list', so the suite carries its own."
+  (if (listp value) value (list value)))
+
+(defun dsh-test--string-search (needle haystack)
+  "Return the position of NEEDLE in HAYSTACK, or nil.
+`string-search' is Emacs 28+; a quoted `string-match' is the 27.1-safe
+equivalent for the suite's literal needles."
+  (string-match (regexp-quote needle) haystack))
+
 (defun dsh-test--faces-at (pos)
   "Return the `face' property at POS as a list (nil when unset).
 Lets face assertions read uniformly whether the property holds one face
 symbol or an ordered list."
-  (ensure-list (get-text-property pos 'face)))
+  (dsh-test--ensure-list (get-text-property pos 'face)))
 
 (defun dsh-test-completion-items (coll)
   "Return COLL's completion strings (text properties stripped).
