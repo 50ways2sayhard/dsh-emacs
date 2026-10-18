@@ -80,25 +80,20 @@
 ;; Packed stream records reconstruct in order, tool calls included.
 (ert-deftest dsh-emacs-test-render-attempt-stream-text-reconstructs ()
   :tags '(dsh-unit)
-  (ert-info ((format "%s" "attempt-stream-text-reconstructs"))
-    (should (equal (dsh-emacs-render--assistant-stream-text
-                    (list (list (cons "type" "reasoning-chunks")
-                                (cons "texts" (vector "think")))
-                          (list (cons "type" "tool-call-chunks")
-                                (cons "name" "bash")
-                                (cons "args" (vector "{\"command\":\"ls\"}")))
-                          (list (cons "type" "text-chunks")
-                                (cons "texts" (vector "reply")))))
+  (let ((records (dsh-protocol--assistant-records
+                  '[((type . "reasoning-chunks") (texts . ["think"]))
+                    ((type . "tool-call-chunks") (name . "bash")
+                     (args . ["{\"command\":\"ls\"}"]))
+                    ((type . "text-chunks") (texts . ["reply"]))])))
+    (should (equal (dsh-emacs-render--assistant-stream-text records)
                    "think\n→ bash {\"command\":\"ls\"}\nreply"))))
 
 (ert-deftest dsh-emacs-test-render-attempt-stream-text-respects-reasoning-option ()
   :tags '(dsh-unit)
-  (ert-info ((format "%s" "attempt-stream-text-respects-reasoning-option"))
-    (should (let ((dsh-emacs-show-reasoning nil))
-              (equal (dsh-emacs-render--assistant-stream-text
-                      (list (list (cons "type" "reasoning-chunks")
-                                  (cons "texts" (vector "hidden think")))))
-                     "")))))
+  (let ((dsh-emacs-show-reasoning nil)
+        (records (dsh-protocol--assistant-records
+                  '[((type . "reasoning-chunks") (texts . ["hidden think"]))])))
+    (should (equal (dsh-emacs-render--assistant-stream-text records) ""))))
 
 ;; A live body the attempt settles is taken over, never painted twice.
 (ert-deftest dsh-emacs-test-render-attempt-takes-over-live-body ()
@@ -180,6 +175,25 @@
           (should (equal (buffer-string) before)))))))
 
 ;; deliverables/presented: collected, rendered once at the turn's tail.
+(ert-deftest dsh-emacs-test-render-deliverables-decoded-view ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (let ((view (dsh-protocol-deliverables--from-alist
+                 '((seq . 71) (data (turn . 8)
+                                    (files . [((path . "report.md")
+                                               (description . "First"))]))))))
+      (should (= 71 (dsh-emacs-render-deliverables view)))
+      (should (equal '((8 ("report.md" . "First")))
+                     dsh-emacs-render--turn-deliverables)))
+    (should (= 72 (dsh-emacs-render-deliverables
+                   '((seq . 72) (data (turn . 8) (files . []))))))
+    (should (= 73 (dsh-emacs-render-deliverables
+                   '((seq . 73) (data (turn . "invalid")
+                                      (files . [((path . "ignore.md"))]))))))
+    (should (equal '((8 ("report.md" . "First")))
+                   dsh-emacs-render--turn-deliverables))))
+
 (ert-deftest dsh-emacs-test-render-deliverables-deferred-until-turn-end ()
   :tags '(dsh-unit)
   (with-temp-buffer
@@ -836,7 +850,7 @@
   :tags '(dsh-unit)
   (let* ((response (json-read-from-string
                     "{\"message\":\"Allocated quota exceeded, please increase your quota limit.\",\"code\":\"insufficient_quota\"}"))
-         (unwrapped (dsh-emacs--unwrap-response response)))
+         (unwrapped (dsh-protocol-rpc-result--from-alist response)))
     (ert-info ((format "%s" "unwrap-leaked-error-body-surfaces-message"))
       (should (and (null (car unwrapped))
                    (string-match-p "Allocated quota exceeded" (cdr unwrapped)))))))
@@ -847,7 +861,7 @@
 ;; defaults to pending, counts are correct
 (ert-deftest dsh-emacs-test-render-todo-parse-drops-invalid-defaults-status ()
   :tags '(dsh-unit)
-  (let ((l (dsh-emacs-render--todo-parse
+  (let ((l (dsh-protocol-todos--from-alist
             "{\"todos\":[{\"content\":\"a\",\"status\":\"pending\"},{\"content\":\"b\",\"status\":\"in_progress\"},{\"content\":\"c\",\"status\":\"completed\"},{\"content\":\"\",\"status\":\"completed\"},{\"content\":\"d\"}]}")))
     (ert-info ((format "%s" "todo-parse-drops-invalid-defaults-status"))
       (should (and (= (length l) 4)
@@ -997,12 +1011,12 @@
 (ert-deftest dsh-emacs-test-render-render-replacement-predicate ()
   :tags '(dsh-unit)
   (ert-info ((format "%s" "render-replacement-predicate"))
-    (should (dsh-emacs-render--replacement-p
+    (should (dsh-protocol-replacement--from-alist
              '((type . "tool/result")
                (surfaceOp . ((op . "replace") (startSeq . 2) (endSeq . 2))))))
-    (should (not (dsh-emacs-render--replacement-p
+    (should (not (dsh-protocol-replacement--from-alist
                   '((type . "tool/result") (surfaceOp . "append")))))
-    (should (not (dsh-emacs-render--replacement-p '((type . "tool/result")))))))
+    (should (not (dsh-protocol-replacement--from-alist '((type . "tool/result")))))))
 
 (ert-deftest dsh-emacs-test-render-render-skips-replacement-tool-result ()
   :tags '(dsh-unit)

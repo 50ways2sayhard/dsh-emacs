@@ -615,10 +615,10 @@
 (ert-deftest dsh-emacs-test-reference-decode-session-uri-restores-session-id ()
   :tags '(dsh-unit)
   (ert-info ((format "%s" "decode-session-uri-restores-session-id"))
-    (should (equal (dsh-emacs-reference--decode-session-uri
+    (should (equal (dsh-protocol-session-uri--from-string
                     "InNlc3Npb24tZTMyYTE1MGUtMTk1Ny00MDU3LTg2ZjMtNmM0YTNmOTM1YTYxIg")
                    "session-e32a150e-1957-4057-86f3-6c4a3f935a61"))
-    (should (null (dsh-emacs-reference--decode-session-uri "cyJpZCI6InMxIn0")))))
+    (should (null (dsh-protocol-session-uri--from-string "cyJpZCI6InMxIn0")))))
 
 ;; JSON numbers and Unicode escapes alter match data, including before a parse
 ;; error.  Decoding must not rewind the scanner to the same mention forever.
@@ -631,12 +631,12 @@
     (pcase-let* ((`(,name ,payload ,id) case)
                  (prefix "a sufficiently long prefix ")
                  (decode (symbol-function
-                          'dsh-emacs-reference--decode-session-uri))
+                          'dsh-protocol-session-uri--from-string))
                  (calls 0)
                  (out
                   (catch 'repeated-mention
                     (cl-letf (((symbol-function
-                                'dsh-emacs-reference--decode-session-uri)
+                                'dsh-protocol-session-uri--from-string)
                                (lambda (value)
                                  ;; Bound the repro so a regression fails instead
                                  ;; of hanging the entire test suite.

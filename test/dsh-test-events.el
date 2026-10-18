@@ -693,23 +693,23 @@
                                           (sessionId . "s1"))))))))
          (msg (json-read-from-string json)))
     (ert-info ((format "%s" "mux-open-message-shape"))
-      (should (equal "open" (dsh-emacs-render--aget "type" msg)))
-      (should (equal "follow-1" (dsh-emacs-render--aget "streamId" msg)))
-      (should (equal "session/follow" (dsh-emacs-render--aget "endpoint" msg)))
+      (should (equal "open" (dsh-protocol--field "type" msg)))
+      (should (equal "follow-1" (dsh-protocol--field "streamId" msg)))
+      (should (equal "session/follow" (dsh-protocol--field "endpoint" msg)))
       (should (equal "s1"
-                     (dsh-emacs-render--aget
+                     (dsh-protocol--field
                       "sessionId"
-                      (dsh-emacs-render--aget
+                      (dsh-protocol--field
                        "address"
-                       (dsh-emacs-render--aget "request"
-                                               (dsh-emacs-render--aget "args"
-                                                                       (dsh-emacs-render--aget "payload" msg))))))))))
+                       (dsh-protocol--field "request"
+                                               (dsh-protocol--field "args"
+                                                                       (dsh-protocol--field "payload" msg))))))))))
 
 (ert-deftest dsh-emacs-test-events-mux-open-no-args-encodes-empty-object ()
   :tags '(dsh-unit)
   (let* ((json (dsh-emacs-events--open-message "events-1" "$events" nil))
          (msg (json-read-from-string json))
-         (args (assq 'args (dsh-emacs-render--aget "payload" msg))))
+         (args (assq 'args (dsh-protocol--field "payload" msg))))
     ;; An empty object decodes to nil in json-read: the wire frame must still
     ;; carry the `args' key (a `{}' value), never drop it.
     (ert-info ((format "%s" "mux-open-no-args-encodes-empty-object"))

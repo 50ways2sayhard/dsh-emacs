@@ -335,67 +335,6 @@ icon.  Add your own entries to curate custom tool names."
   :type '(alist :key-type string :value-type string)
   :group 'dsh-emacs-render)
 
-(defconst dsh-emacs--summary-keys
-  '(("bash"   . ("description" "command"))
-    ("read"   . ("path" "file_path" "url"))
-    ("search" . ("query" "pattern" "url"))
-    ("write"  . ("path" "file_path"))
-    ("edit"   . ("path" "file_path"))
-    ("code"   . ("description"))
-    ("job_output" . ("job_id"))
-    ("job_kill" . ("job_id"))
-    ("others" . ()))
-  "Tool name or variant -> summary key priority list.
-An exact tool name takes precedence over its variant.")
-
-;;; ---------------------------------------------------------------------------
-;;; alist helpers (internal)
-;;; ---------------------------------------------------------------------------
-
-(defun dsh-emacs-render--aget (key alist)
-  "Return KEY's value from ALIST (a list or vector of (KEY . VALUE) cells).
-Accept both string and symbol keys because `json-read' normally produces
-symbol-keyed alists while renderer call sites use JSON field names.  A
-non-sequence ALIST (a number, symbol, or string where the wire promised an
-object) yields nil rather than signalling: this accessor is the renderer's
-wire boundary, and a malformed field must select a fallback, not break the
-event stream."
-  (when (or (listp alist) (vectorp alist))
-    (let* ((alternate-key (cond
-                           ((stringp key) (intern key))
-                           ((symbolp key) (symbol-name key))
-                           (t key)))
-           (entry (if (listp alist)
-                      (or (assoc key alist)
-                          (assoc alternate-key alist))
-                    (catch 'found
-                      (dotimes (i (length alist))
-                        (let ((pair (aref alist i)))
-                          (when (and (consp pair)
-                                     (or (equal (car pair) key)
-                                         (equal (car pair) alternate-key)))
-                            (throw 'found pair))))))))
-      (and (consp entry) (cdr entry)))))
-
-(defun dsh-emacs-render--wire-list (value)
-  "Return VALUE as a list when it is a wire array or object list, else nil.
-JSON arrays arrive as vectors and JSON objects as alists; a field that must
-hold a list of objects yields nil for anything else, so the caller can fall
-back instead of signalling on malformed wire data."
-  (and (or (listp value) (vectorp value)) (append value nil)))
-
-(defun dsh-emacs-render--aget-nested (path alist)
-  "Walk PATH (list of keys) inside ALIST and return the value, or nil."
-  (let ((cur alist))
-    (dolist (key path cur)
-      (setq cur (if (or (consp cur) (vectorp cur))
-                    (dsh-emacs-render--aget key cur)
-                  nil)))))
-
-(defun dsh-emacs-render--json-bool (value)
-  "JSON bool (`t' or `:json-false') -> Elisp bool."
-  (and value (not (eq value :json-false))))
-
 ;;; ---------------------------------------------------------------------------
 ;;; Tool classification and summary
 ;;; ---------------------------------------------------------------------------
@@ -605,57 +544,22 @@ there is no previewable content."
     (when (and first (> dsh-emacs-thinking-preview-max 0))
       (truncate-string-to-width first dsh-emacs-thinking-preview-max nil nil "..."))))
 
-(defun dsh-emacs-render--present-paths (parsed)
-  "Return a `present' call's declared paths as one comma-joined line.
-PARSED is the call's decoded argument alist; nil when it declares no usable
-path.  dsh web's `PresentRow' names its files this way, so the row header
-carries them instead of the generic ioCard's argument dump."
-  (let ((paths (and (listp parsed)
-                    (delq nil
-                          (mapcar
-                           (lambda (file)
-                             (let ((path (dsh-emacs-render--aget "path" file)))
-                               (and (stringp path)
-                                    (not (string-empty-p path))
-                                    path)))
-                           (dsh-emacs-render--wire-list
-                            (dsh-emacs-render--aget "files" parsed)))))))
-    (and paths (mapconcat #'identity paths ", "))))
-
 (defun dsh-emacs-render--tool-summary (name variant args-raw)
-  "Extract a single-line summary from NAME's ARGS-RAW JSON string.
-A goal call names its objective, or its update action when it replaces none
-\(see `dsh-emacs-render--goal-call-summary'); otherwise prefer NAME's summary
-keys, falling back to those for VARIANT, and a `present' call instead names
-the files it declared."
+  "Format NAME's decoded argument summary on one line."
   (or (dsh-emacs-render--goal-call-summary name args-raw)
-      (when (and args-raw (not (string-empty-p args-raw))
-                 (not (string= args-raw "{}")))
-        (let* ((parsed (condition-case nil (json-read-from-string args-raw)
-                         (error nil)))
-               (keys (cdr (or (assoc name dsh-emacs--summary-keys)
-                              (assoc variant dsh-emacs--summary-keys)))))
-          (when (and parsed (listp parsed))
-            (or
-             (and (equal name "present")
-                  (dsh-emacs-render--present-paths parsed))
-             (catch 'found
-               (dolist (key keys)
-                 (let ((val (dsh-emacs-render--aget key parsed)))
-                   (when (and (stringp val) (not (string-empty-p val)))
-                     (throw 'found (dsh-emacs-render--first-line val))))))
-             (catch 'found
-               (dolist (pair parsed)
-                 (let ((v (cdr pair)))
-                   (when (and (stringp v) (not (string-empty-p v)))
-                     (throw 'found (dsh-emacs-render--first-line v))))))))))))
+      (let* ((args (dsh-protocol-tool-arguments--from-alist
+                    args-raw name variant))
+             (paths (dsh-protocol-tool-arguments-paths args))
+             (summary (dsh-protocol-tool-arguments-summary args)))
+        (if (and (equal name "present") paths)
+            (mapconcat #'identity paths ", ")
+          (when summary (dsh-emacs-render--first-line summary))))))
 
 (defun dsh-emacs-render--tool-body-text (_variant args-raw)
   "Format the args section of a tool card body."
-  (let* ((parsed (condition-case nil (json-read-from-string args-raw) (error nil)))
-         (command (and parsed (listp parsed)
-                       (or (dsh-emacs-render--aget "command" parsed)
-                           (dsh-emacs-render--aget "code" parsed)))))
+  (let* ((args (dsh-protocol-tool-arguments--from-alist args-raw))
+         (parsed (dsh-protocol-tool-arguments-object args))
+         (command (dsh-protocol-tool-arguments-command args)))
     (cond
      ((and (stringp command) (not (string-empty-p command)))
       (concat "$ " command))
@@ -680,22 +584,22 @@ row states its outcome instead of showing a bare title."
 ;;; ---------------------------------------------------------------------------
 
 (defun dsh-emacs-render--text-from-content (content)
-  "Concatenate all \"text\" blocks from CONTENT (alist/vector)."
-  (let ((parts '()))
-    (dolist (block (append content nil))
-      (when (and (consp block)
-                 (equal (dsh-emacs-render--aget "type" block) "text"))
-        (push (dsh-emacs-render--aget "text" block) parts)))
-    (mapconcat #'identity (nreverse parts) "\n")))
+  "Concatenate text blocks from decoded CONTENT in display order."
+  (mapconcat #'dsh-protocol-content-block-text
+             (cl-remove-if-not
+              (lambda (block)
+                (equal (dsh-protocol-content-block-kind block) "text"))
+              content)
+             "\n"))
 
 (defun dsh-emacs-render--reasoning-from-content (content)
-  "Concatenate all \"reasoning\" blocks from CONTENT."
-  (let ((parts '()))
-    (dolist (block (append content nil))
-      (when (and (consp block)
-                 (equal (dsh-emacs-render--aget "type" block) "reasoning"))
-        (push (dsh-emacs-render--aget "text" block) parts)))
-    (mapconcat #'identity (nreverse parts) "\n")))
+  "Concatenate reasoning blocks from decoded CONTENT in display order."
+  (mapconcat #'dsh-protocol-content-block-text
+             (cl-remove-if-not
+              (lambda (block)
+                (equal (dsh-protocol-content-block-kind block) "reasoning"))
+              content)
+             "\n"))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Timestamps
@@ -703,17 +607,9 @@ row states its outcome instead of showing a bare title."
 
 (defun dsh-emacs-render--event-time (event)
   "HH:MM:SS string from event's epoch-ms `time' field, or nil."
-  (let ((time (dsh-emacs-render--aget "time" event)))
-    (when (and (integerp time) (> time 0))
+  (let ((time (dsh-protocol-event-clock--from-alist event)))
+    (when time
       (format-time-string "%H:%M:%S" (/ time 1000.0)))))
-
-(defun dsh-emacs-render--event-seq (event)
-  "Return the event seq."
-  (dsh-emacs-render--aget "seq" event))
-
-(defun dsh-emacs-render--event-data (event)
-  "Return the event data alist."
-  (dsh-emacs-render--aget "data" event))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Rendering primitives
@@ -725,7 +621,7 @@ row states its outcome instead of showing a bare title."
 
 (defun dsh-emacs-render--make-block-id (event)
   "Return a block-id string for the event (using seq)."
-  (let ((seq (dsh-emacs-render--event-seq event)))
+  (let ((seq (dsh-protocol-event-sequence--from-alist event)))
     (format "evt-%s" (or seq (random 999999)))))
 
 (defun dsh-emacs-render--face-matches-prompt-p (face)
@@ -1124,13 +1020,6 @@ miss the entry is cleaned up.")
   "Set props onto the tracked state of TOOL-CALL-ID, replacing all."
   (puthash tool-call-id props dsh-emacs--tool-states))
 
-(defun dsh-emacs-render--stream-key (event)
-  "Return the logical assistant stream key for EVENT."
-  (let ((data (dsh-emacs-render--event-data event)))
-    (format "%s/%s"
-            (or (dsh-emacs-render--aget "turn" data) "?")
-            (or (dsh-emacs-render--aget "step" data) "?"))))
-
 (defun dsh-emacs-render--stream-state-key (state)
   "Return the logical key stored in streaming STATE."
   (plist-get state :key))
@@ -1426,10 +1315,8 @@ would rewrite that block's text and the final repair would delete it."
 (defun dsh-emacs-render--start-assistant-stream (event text)
   "Create or extend the live assistant stream with TEXT from EVENT."
   (when (and (stringp text) (not (string-empty-p text)))
-    (let* ((key (dsh-emacs-render--stream-key event))
-           (index (dsh-emacs-render--aget
-                   "index" (dsh-emacs-render--aget
-                            "chunk" (dsh-emacs-render--event-data event))))
+    (let* ((key (dsh-protocol-stream-key--from-alist event))
+           (index (dsh-protocol-chunk-index--from-alist event))
            (state dsh-emacs--streaming-assistant)
            (new-state nil)
            windows)
@@ -1506,7 +1393,7 @@ text needs only the pending incremental pass; changed text is replaced and
 rendered in full."
   (let ((state dsh-emacs--streaming-assistant))
     (when (and state
-               (equal (dsh-emacs-render--stream-key event)
+               (equal (dsh-protocol-stream-key--from-alist event)
                       (dsh-emacs-render--stream-state-key state)))
       (let* ((step (or step
                        (dsh-emacs-render--step-record (plist-get state :key))))
@@ -1550,7 +1437,7 @@ rendered in full."
       ;; Only the durable message supplies a fork boundary.  Keep it in the
       ;; state too, so a deferred Markdown pass preserves the same identity.
       (set-marker-insertion-type (plist-get state :end) nil)
-      (setf (plist-get state :seq) (dsh-emacs-render--event-seq event))
+      (setf (plist-get state :seq) (dsh-protocol-event-sequence--from-alist event))
       (when (plist-get state :seq)
         (let ((inhibit-read-only t)
               (buffer-undo-list t))
@@ -1595,18 +1482,16 @@ swaps it for the collapsible Think fragment once the authoritative reasoning
 text arrives."
   (when (and dsh-emacs-show-reasoning
              (stringp text) (not (string-empty-p text)))
-    (let* ((key (dsh-emacs-render--stream-key event))
-           (index (dsh-emacs-render--aget
-                   "index" (dsh-emacs-render--aget
-                            "chunk" (dsh-emacs-render--event-data event))))
+    (let* ((key (dsh-protocol-stream-key--from-alist event))
+           (index (dsh-protocol-chunk-index--from-alist event))
            (state dsh-emacs--streaming-thinking)
            (new-state nil))
       ;; A later block can start before this reasoning block finishes.
       ;; Its index still owns the folded row: reopening it at the input
       ;; would split the answer and create a second Think fragment.
       (when-let* ((step (and (integerp index)
-                            (equal key (plist-get dsh-emacs--streamed-step :key))
-                            dsh-emacs--streamed-step))
+                             (equal key (plist-get dsh-emacs--streamed-step :key))
+                             dsh-emacs--streamed-step))
                   (closed (cl-find index (plist-get step :thinking-regions)
                                    :key (lambda (entry) (plist-get entry :index)))))
         (push text (plist-get closed :all))
@@ -1720,17 +1605,14 @@ extends the live assistant body and closes any live Thinking block, while a
 `reasoning-delta' opens or extends the live Thinking block and closes the live
 assistant body.  `block-end' supplies content only for an unseen block index;
 providers may close earlier blocks after later blocks have already streamed."
-  (let* ((data (dsh-emacs-render--event-data event))
-         (chunk (dsh-emacs-render--aget "chunk" data))
-         (chunk-type (dsh-emacs-render--aget "type" chunk))
-         (ending (equal chunk-type "block-end"))
-         (block (if ending (dsh-emacs-render--aget "block" chunk) chunk))
-         (type (dsh-emacs-render--aget "type" block))
-         (text (dsh-emacs-render--aget "text" block))
-         (index (dsh-emacs-render--aget "index" chunk))
-         (key (dsh-emacs-render--stream-key event)))
+  (let* ((chunk (dsh-protocol-chunk--from-alist event))
+         (ending (dsh-protocol-chunk-ending chunk))
+         (type (dsh-protocol-chunk-type chunk))
+         (text (dsh-protocol-chunk-text chunk))
+         (index (dsh-protocol-chunk-index chunk))
+         (key (dsh-protocol-stream-key--from-alist event)))
     (when (and (member type '("text-delta" "reasoning-delta"
-                             "text" "reasoning"))
+                              "text" "reasoning"))
                (stringp text) (not (string-empty-p text))
                (not (and ending
                          (equal key (plist-get dsh-emacs--streamed-step :key))
@@ -1745,7 +1627,7 @@ providers may close earlier blocks after later blocks have already streamed."
       (when (integerp index)
         (cl-pushnew index
                     (plist-get (dsh-emacs-render--step-record key) :blocks)))))
-  (dsh-emacs-render--event-seq event))
+  (dsh-protocol-event-sequence--from-alist event))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: inline image attachments (session/attachment)
@@ -1758,16 +1640,6 @@ providers may close earlier blocks after later blocks have already streamed."
     (define-key map [mouse-1] #'dsh-emacs-render--image-open)
     map)
   "Keymap on `[image …]' placeholders: opens the picture in its own buffer.")
-
-(defun dsh-emacs-render--image-block-field (block field)
-  "Read FIELD from image BLOCK or its nested `attachment' ref.
-The wire may carry inline base64 (`{type:image, mediaType, data,
-name}') or a persistent ref (`ImageAttachmentRef' under `attachment',
-see rpc.md §4.1); read both placements so live events and history
-render identically."
-  (or (dsh-emacs-render--aget field block)
-      (dsh-emacs-render--aget field
-                              (dsh-emacs-render--aget "attachment" block))))
 
 (defun dsh-emacs-render--image-type-from-media (media-type)
   "Map MEDIA-TYPE (e.g. \"image/png\") to an Emacs image type symbol, or nil."
@@ -1837,7 +1709,7 @@ or nil when the RPC fails or the payload is malformed."
                     (and ok value
                          (ignore-errors
                            (base64-decode-string
-                            (dsh-emacs-render--aget "data" value)))))
+                            (dsh-protocol-attachment-data--from-alist value)))))
          (quit nil))))))
 
 (defun dsh-emacs-render--apply-attachment (buffer id image data)
@@ -1865,9 +1737,9 @@ Inline base64 applies immediately (no round-trip — the bytes are
 already in the event); an attachment ref is fetched via
 `session/attachment' and applied when the RPC settles."
   (let* ((buffer (current-buffer))
-         (media-type (dsh-emacs-render--image-block-field block "mediaType"))
-         (data-b64 (dsh-emacs-render--image-block-field block "data"))
-         (attachment-id (dsh-emacs-render--image-block-field block "attachmentId"))
+         (media-type (dsh-protocol-content-block-media-type block))
+         (data-b64 (dsh-protocol-content-block-data block))
+         (attachment-id (dsh-protocol-content-block-attachment-id block))
          (data (and data-b64 (ignore-errors (base64-decode-string data-b64)))))
     (if data
         (dsh-emacs-render--apply-attachment
@@ -1883,8 +1755,8 @@ already in the event); an attachment ref is fetched via
 
 (defun dsh-emacs-render--image-placeholder (id block)
   "Build the `[image …]' placeholder string tagged ID for image BLOCK."
-  (let ((name (dsh-emacs-render--image-block-field block "name"))
-        (attachment-id (dsh-emacs-render--image-block-field block "attachmentId")))
+  (let ((name (dsh-protocol-content-block-name block))
+        (attachment-id (dsh-protocol-content-block-attachment-id block)))
     (propertize (if name (format "[image: %s]" name) "[image]")
                 'dsh-emacs-image-id id
                 'dsh-emacs-attachment-id attachment-id
@@ -1899,8 +1771,7 @@ reference carries the sanitized leaf name and the exact byte count, so the
 line says what the model received.  The bytes live on the host as a
 content-addressed session attachment with no read path of its own, so the
 line is display-only (unlike an image, which has `session/attachment')."
-  (let* ((ref (dsh-protocol-file-ref--from-alist
-               (or (dsh-emacs-render--aget "attachment" block) block)))
+  (let* ((ref (dsh-protocol-content-block-file block))
          (name (dsh-protocol-file-ref-name ref))
          (bytes (dsh-protocol-file-ref-bytes ref)))
     (propertize (format "[file: %s%s]" (or name "file")
@@ -1928,8 +1799,8 @@ the rest, and `M-p' recall must not offer it back.  A goal round
 continuation is the one exception: it is not author text either, but it
 opens a turn the user should see, so it renders as a trigger notice
 \(`dsh-emacs-render--goal-trigger-block')."
-  (let ((kind (dsh-emacs-render--aget-nested
-               '("source" "kind") (dsh-emacs-render--event-data event))))
+  (let ((kind (dsh-protocol-message-source-kind
+               (dsh-protocol-message--from-alist event))))
     (or (null kind) (equal kind "user"))))
 
 (defun dsh-emacs-render--insert-user-block (event references)
@@ -1944,8 +1815,8 @@ behaves as in `dsh-emacs-render-user-message'.  Split out of that renderer so
 the optimistic echo path can capture the inserted region and roll it back
 when its submit is rejected, while the canonical render keeps returning the
 event seq."
-  (let* ((data (dsh-emacs-render--event-data event))
-         (content (dsh-emacs-render--aget "content" data))
+  (let* ((message (dsh-protocol-message--from-alist event))
+         (content (dsh-protocol-message-content message))
          (text (dsh-emacs-command-fontify-gestures
                 (dsh-emacs-reference-fontify
                  (dsh-emacs-render--text-from-content content)
@@ -1961,8 +1832,8 @@ event seq."
           ;; fill-in can locate its line, a file is a static chip (the
           ;; durable reference keeps no local path to open).
           (let ((index 0))
-            (dolist (block (append content nil))
-              (pcase (dsh-emacs-render--aget "type" block)
+            (dolist (block content)
+              (pcase (dsh-protocol-content-block-kind block)
                 ("image"
                  (setq index (1+ index))
                  (let ((id (format "%s-img-%d" block-id index)))
@@ -1997,10 +1868,9 @@ event seq."
 The host appends one hidden `user/message' per `/name' gesture it expanded
 for a step, carrying `data.source = {kind: \"skill-invocation\", name: …}'
 \(see dsh-tool-skill); the transcript reads it as evidence, never as text."
-  (let ((source (dsh-emacs-render--aget
-                 "source" (dsh-emacs-render--event-data event))))
-    (when (equal (dsh-emacs-render--aget "kind" source) "skill-invocation")
-      (dsh-emacs-render--aget "name" source))))
+  (let ((message (dsh-protocol-message--from-alist event)))
+    (when (equal (dsh-protocol-message-source-kind message) "skill-invocation")
+      (dsh-protocol-message-source-name message))))
 
 (defun dsh-emacs-render--last-user-message-region ()
   "Return (BEG . END) of the user message before the insertion point, or nil.
@@ -2034,9 +1904,8 @@ revision, round}' (see dsh-goal-round-driver).  dsh web paints such a message
 as a turn-trigger notice (`TurnTriggerNodeView') instead of author text; the
 transcript shows the same notice."
   (equal "goal"
-         (dsh-emacs-render--aget
-          "kind" (dsh-emacs-render--aget
-                  "source" (dsh-emacs-render--event-data event)))))
+         (dsh-protocol-message-source-kind
+          (dsh-protocol-message--from-alist event))))
 
 (defun dsh-emacs-render--goal-trigger-block (event)
   "Insert EVENT's goal round continuation as a collapsed trigger notice.
@@ -2045,8 +1914,8 @@ goal' and the event clock over the injected round prompt, folded by default
 so the model-facing `<goal_round>' instruction stays out of the way until
 inspected.  An empty body leaves the row unfoldable."
   (let* ((body (dsh-emacs-render--text-from-content
-                (dsh-emacs-render--aget "content"
-                                        (dsh-emacs-render--event-data event))))
+                (dsh-protocol-message-content
+                 (dsh-protocol-message--from-alist event))))
          (body (and (stringp body) (not (string-empty-p body)) body))
          (time (dsh-emacs-render--event-time event)))
     (dsh-emacs-ui-update-fragment
@@ -2086,7 +1955,7 @@ recall event lets the readable `@label' session tokens the server persisted
   (if (dsh-emacs-render--goal-continuation-p event)
       (dsh-emacs-render--goal-trigger-block event)
     (dsh-emacs-render--insert-user-block event references))
-  (dsh-emacs-render--event-seq event))
+  (dsh-protocol-event-sequence--from-alist event))
 
 (defun dsh-emacs-render-delete-user-message (start end)
   "Delete the user message from START to END and reconcile reply footers.
@@ -2104,14 +1973,13 @@ submission was pending.  Reply text and per-turn facts remain unchanged."
 
 (defun dsh-emacs-render-assistant-message (event)
   "Render an `assistant/message' event with an assistant background color."
-  (let* ((seq (dsh-emacs-render--event-seq event))
-         (data (dsh-emacs-render--event-data event))
-         (message (dsh-emacs-render--aget "message" data))
-         (content (dsh-emacs-render--aget "content" message))
+  (let* ((seq (dsh-protocol-event-sequence--from-alist event))
+         (message (dsh-protocol-message--from-alist event :assistant t))
+         (content (dsh-protocol-message-content message))
          (text (dsh-emacs-render--text-from-content content))
          (reasoning (dsh-emacs-render--reasoning-from-content content))
          (ts (dsh-emacs-render--event-time event))
-         (key (dsh-emacs-render--stream-key event))
+         (key (dsh-protocol-stream-key--from-alist event))
          (ns (dsh-emacs-render--make-namespace))
          (block-id (dsh-emacs-render--make-block-id event))
          (step (dsh-emacs-render--step-record key))
@@ -2122,7 +1990,7 @@ submission was pending.  Reply text and per-turn facts remain unchanged."
             (copy-marker
              (or (plist-get (car (last (plist-get step :text-regions))) :start)
                  (and (equal key (plist-get dsh-emacs--streaming-assistant
-                                           :key))
+                                            :key))
                       (plist-get dsh-emacs--streaming-assistant :start))
                  (dsh-emacs-render--input-insert-point) (point-max)) nil))))
     ;; Blocks already folded into Think fragments or finished assistant
@@ -2230,25 +2098,6 @@ UPDATE refreshes the existing block while preserving its fold state."
   "Latest whole todo list snapshot as (\"content\" . \"status\") cells, or nil.
 nil (or empty) means there is no plan yet.")
 
-(defun dsh-emacs-render--todo-parse (args-raw)
-  "Parse a `todo_write' ARGS-RAW JSON string into an ordered list of
-\(\"content\" . \"status\") cells.  Empty/invalid content is dropped and a
-missing or unknown status defaults to \"pending\".  Returns nil on any error."
-  (let (result)
-    (when (and args-raw (stringp args-raw) (not (string-empty-p args-raw)))
-      (let* ((parsed (condition-case nil (json-read-from-string args-raw) (error nil)))
-             (todos (and (listp parsed) (dsh-emacs-render--aget "todos" parsed))))
-        (dolist (cell (append todos nil))
-          (when (consp cell)
-            (let ((content (dsh-emacs-render--aget "content" cell))
-                  (status (dsh-emacs-render--aget "status" cell)))
-              (when (and (stringp content) (not (string-empty-p content)))
-                (push (cons content
-                            (if (member status '("pending" "in_progress" "completed"))
-                                status "pending"))
-                      result)))))))
-    (nreverse result)))
-
 (defun dsh-emacs-render--todo-counts (list)
   "Return (DONE ACTIVE PENDING) counts for LIST of (\\\"content\\\" . STATUS) cells."
   (let ((done 0) (active 0))
@@ -2352,19 +2201,15 @@ transcript; they are removed with the buffer on a session reset/replay."
   (format "tool-%s" tool-call-id))
 
 (defun dsh-emacs-render--plan-text (name arguments)
-  "Decode the document in NAME's JSON ARGUMENTS, or nil for other calls."
+  "Read NAME's decoded Plan document, reporting malformed JSON."
   (when (and (equal name "exit_plan_mode") (stringp arguments))
-    (let* ((json-object-type 'alist)
-           (json-key-type 'symbol)
-           (decoded (condition-case err
-                        (json-read-from-string arguments)
-                      (json-error
-                       (message "Invalid plan document: %s"
-                                (error-message-string err))
-                       nil)))
-           (text (and (listp decoded)
-                      (dsh-protocol-plan-document-text
-                       (dsh-protocol-plan-document--from-alist decoded)))))
+    (let* ((document
+            (condition-case err
+                (dsh-protocol-plan-document--from-alist arguments t)
+              (json-error
+               (message "Invalid plan document: %s" (error-message-string err))
+               nil)))
+           (text (and document (dsh-protocol-plan-document-text document))))
       (and (stringp text) (not (string-empty-p (string-trim text))) text))))
 
 (defun dsh-emacs-render--open-plan (button)
@@ -2397,8 +2242,8 @@ transcript; they are removed with the buffer on a session reset/replay."
 Todo snapshots still apply when ordinary tool cards are hidden."
   (pcase-let* (((cl-struct dsh-protocol-tool-call name call-id (arguments args))
                 (dsh-protocol-tool-call--from-alist
-                 (dsh-emacs-render--event-data event)))
-               (seq (dsh-emacs-render--event-seq event))
+                 event t))
+               (seq (dsh-protocol-event-sequence--from-alist event))
                (plan-text (and dsh-emacs-show-tool-calls
                                (dsh-emacs-render--plan-text name args))))
     (cond
@@ -2406,7 +2251,7 @@ Todo snapshots still apply when ordinary tool cards are hidden."
       (dsh-emacs-render--plan-card call-id plan-text)
       seq)
      ((equal name "todo_write")
-      (setq dsh-emacs--todo-list (dsh-emacs-render--todo-parse args))
+      (setq dsh-emacs--todo-list (dsh-protocol-todos--from-alist args))
       (dsh-emacs-render--todo-row dsh-emacs--todo-list
                                   (or call-id (format "seq-%s" seq)))
       seq)
@@ -2422,7 +2267,7 @@ Todo snapshots still apply when ordinary tool cards are hidden."
              ;; body is the questionnaire (see the ask card section).  The
              ;; variant is the gate, like the bash and write/edit cards.
              (ask-questions (and (equal variant "question")
-                                 (dsh-emacs-render--ask-questions args)))
+                                 (dsh-protocol-ask-questions--from-alist args)))
              (summary (or (and ask-questions
                                (dsh-emacs-render--ask-summary
                                 nil nil nil))
@@ -2707,33 +2552,6 @@ result carries none; both keep the generic ioCard (web `readCardModel').
 The closing tag is checked separately to avoid regexp stack growth over
 large file contents.")
 
-(defun dsh-emacs-render--read-lines (meta offset)
-  "Narrow META's `lines' to a list of (NUMBER . TEXT) cells, or nil.
-META is the settled `tool/result' metadata alist.  The payload is validated
-as a whole (web `readMeta'), so a malformed one falls back to the generic
-card instead of printing a half-read file: `lines' must be an array whose
-NUMBERs are strictly increasing from the 1-based OFFSET through
-`totalLines', each with a string TEXT."
-  (when (listp meta)
-    (let ((raw (dsh-emacs-render--aget "lines" meta))
-          (total (dsh-emacs-render--aget "totalLines" meta)))
-      (when (and (vectorp raw) (integerp total) (>= total 0)
-                 (integerp offset) (>= offset 1))
-        (catch 'bad
-          (let ((previous (1- offset)) (out '()))
-            (dotimes (i (length raw))
-              (let ((cell (aref raw i)))
-                (unless (listp cell) (throw 'bad nil))
-                (let ((number (dsh-emacs-render--aget "number" cell))
-                      (text (dsh-emacs-render--aget "text" cell)))
-                  (unless (and (integerp number) (>= number 1)
-                               (> number previous) (<= number total)
-                               (stringp text))
-                    (throw 'bad nil))
-                  (setq previous number)
-                  (push (cons number text) out))))
-            (nreverse out)))))))
-
 (defun dsh-emacs-render--read-card-body (name args-raw meta result-text)
   "Compose the expanded body of a `read' card, or nil for the generic ioCard.
 Mirrors dsh web's ReadBlock: the file's lines with their numbers in a muted
@@ -2748,12 +2566,12 @@ file whose arguments, metadata and result envelope agree; a directory or image
 read, a failed call, or a truncated payload returns nil so the caller keeps
 the generic card."
   (when (and (equal name "read") (listp meta))
-    (let* ((args (condition-case nil (json-read-from-string args-raw) (error nil)))
-           (path (and (listp args) (dsh-emacs-render--aget "file_path" args)))
-           (offset (dsh-emacs-render--aget "offset" meta))
-           (total (dsh-emacs-render--aget "totalLines" meta))
-           (lang (dsh-emacs-render--aget "lang" meta))
-           (lines (dsh-emacs-render--read-lines meta offset)))
+    (let* ((file (dsh-protocol-read-file--from-alist args-raw meta))
+           (path (dsh-protocol-read-file-path file))
+           (offset (dsh-protocol-read-file-offset file))
+           (total (dsh-protocol-read-file-total file))
+           (lang (dsh-protocol-read-file-language file))
+           (lines (dsh-protocol-read-file-lines file)))
       (when (and (stringp path) (not (string-empty-p (string-trim path)))
                  (integerp offset) (>= offset 1)
                  (integerp total) (>= total 0)
@@ -2803,48 +2621,6 @@ further empty line is a real line, so a blank line inside a hunk survives."
       nil
     (split-string (if (string-suffix-p "\n" text) (substring text 0 -1) text)
                   "\n")))
-
-(defun dsh-emacs-render--diff-args (name args-raw)
-  "Return the hunk NAME/ARGS-RAW intend as (PATH OLD-TEXT NEW-TEXT), or nil.
-Mirrors dsh web's `intendedDiff': `write' contributes a whole-file creation
-(OLD-TEXT nil) from its `content', `edit' the `old_string' → `new_string'
-replacement (an empty old string means insertion, so OLD-TEXT is nil).
-Returns nil when the arguments are not a usable file mutation."
-  (let ((args (condition-case nil (json-read-from-string args-raw) (error nil))))
-    (when (listp args)
-      (let ((path (dsh-emacs-render--aget "file_path" args)))
-        (when (and (stringp path) (not (string-empty-p (string-trim path))))
-          (pcase name
-            ("write"
-             (let ((content (dsh-emacs-render--aget "content" args)))
-               (when (stringp content) (list path nil content))))
-            ("edit"
-             (let ((old (dsh-emacs-render--aget "old_string" args))
-                   (new (dsh-emacs-render--aget "new_string" args)))
-               (when (and (stringp old) (stringp new))
-                 (list path (unless (string-empty-p old) old) new))))))))))
-
-(defun dsh-emacs-render--diff-hunks (meta)
-  "Return META's applied `diffs' as (PATH OLD-TEXT NEW-TEXT) hunks, or nil.
-Mirrors dsh web's `narrowDiffs': any malformed hunk invalidates the whole
-payload, and an empty array is no hunk list (the caller then keeps the
-argument-derived diff for a `write' and the generic ioCard for an `edit')."
-  (let ((raw (and (listp meta) (dsh-emacs-render--aget "diffs" meta))))
-    (when (and (vectorp raw) (> (length raw) 0))
-      (catch 'bad
-        (let (out)
-          (dotimes (i (length raw))
-            (let ((hunk (aref raw i)))
-              (unless (listp hunk) (throw 'bad nil))
-              (let ((path (dsh-emacs-render--aget "path" hunk))
-                    (old (dsh-emacs-render--aget "oldText" hunk))
-                    (new (dsh-emacs-render--aget "newText" hunk)))
-                (unless (and (stringp path)
-                             (or (null old) (stringp old))
-                             (stringp new))
-                  (throw 'bad nil))
-                (push (list path old new) out))))
-          (nreverse out))))))
 
 (defun dsh-emacs-render--diff-align (old new)
   "Align OLD and NEW text as (KIND . LINE) cells.
@@ -2953,13 +2729,13 @@ While STATE is `pending' the body is the diff the arguments intend.  On
 records none falls back to the generic ioCard (an edit can match nothing)
 while a `write' keeps its intended whole-file diff.  Other states or
 unusable arguments return nil so the caller preserves diagnostic output."
-  (let* ((intended (dsh-emacs-render--diff-args name args-raw))
+  (let* ((intended (dsh-protocol-intended-diff--from-alist name args-raw))
          (hunks (cond ((null intended) nil)
                       ((eq state 'pending) (list intended))
                       ((not (eq state 'success)) nil)
                       ((equal name "write")
-                       (or (dsh-emacs-render--diff-hunks meta) (list intended)))
-                      (t (dsh-emacs-render--diff-hunks meta)))))
+                       (or (dsh-protocol-applied-diffs--from-alist meta) (list intended)))
+                      (t (dsh-protocol-applied-diffs--from-alist meta)))))
     (when hunks
       (pcase-let ((`(,rows ,added ,removed ,files)
                    (dsh-emacs-render--diff-rows hunks)))
@@ -3092,75 +2868,9 @@ generic card."
 ;;; `Not answered' where the batch settled empty.  A call whose arguments name
 ;;; no usable question keeps the generic ioCard.
 
-(defun dsh-emacs-render--ask-json (text)
-  "Decode TEXT as one JSON document, or return nil.
-Nil for a non-string, an empty document, or anything `json-read-from-string'
-rejects: the ask card declines instead of signalling on malformed wire data,
-so its caller keeps the generic card."
-  (when (and (stringp text) (not (string-empty-p (string-trim text))))
-    (let ((parsed (condition-case nil
-                      (json-read-from-string (string-trim text))
-                    (error nil))))
-      (and (listp parsed) parsed))))
-
-(defun dsh-emacs-render--ask-questions (args-raw)
-  "Decode an `ask_user_question' call's ARGS-RAW into question structs.
-Returns the questions in their offered order, or nil when the arguments name
-no usable question — a missing `questions' array, a question without text, or
-malformed JSON — so the caller keeps the generic ioCard.  The protocol module
-owns both argument spellings of the multi-select flag and drops a malformed
-element instead of signalling."
-  (let ((parsed (dsh-emacs-render--ask-json args-raw)))
-    (when parsed
-      (delq nil
-            (mapcar
-             (lambda (item)
-               (let ((question (dsh-protocol-question--from-alist item)))
-                 (when (and (dsh-protocol-question-p question)
-                            (let ((text (dsh-protocol-question-text question)))
-                              (and (stringp text)
-                                   (not (string-empty-p text)))))
-                   question)))
-             (dsh-protocol--objects
-              (dsh-emacs-render--aget "questions" parsed)))))))
-
-(defun dsh-emacs-render--ask-answers (text)
-  "Decode an `ask_user_question' result TEXT into (ID SELECTED CUSTOM) cells.
-SELECTED is the list of labels the user chose; CUSTOM is the free-text answer,
-or nil when none was typed.  Returns nil when TEXT is not the tool's answer
-document — an error message or an empty result — so the card renders its
-questions unanswered."
-  (let* ((parsed (dsh-emacs-render--ask-json text))
-         (answers (and parsed (dsh-protocol--objects
-                               (dsh-emacs-render--aget "answers" parsed)))))
-    (when answers
-      (mapcar
-       (lambda (answer)
-         (list (dsh-emacs-render--aget "id" answer)
-               (delq nil
-                     (mapcar (lambda (label) (and (stringp label) label))
-                             (dsh-emacs-render--wire-list
-                              (dsh-emacs-render--aget "selected" answer))))
-               (let ((custom (dsh-emacs-render--aget "custom" answer)))
-                 (and (stringp custom)
-                      (not (string-empty-p custom))
-                      custom))))
-       answers))))
-
-(defun dsh-emacs-render--ask-pending-p (text)
-  "Whether ask result TEXT is the timed tool's pending payload.
-dsh 0.2.0's timed `ask_user_question' returns `{pending:true, callId,
-message}' when the foreground window expired before an answer batch arrived;
-the questions stay answerable, so this is not an empty result and the card
-must say so.  Mirrors the host's own `isPendingResult'."
-  (let ((parsed (and (stringp text) (dsh-emacs-render--ask-json text))))
-    (and (listp parsed)
-         (eq t (dsh-emacs-render--json-bool
-                (dsh-emacs-render--aget "pending" parsed))))))
-
 (defun dsh-emacs-render--ask-summary (answers error-code settled &optional pending)
   "Collapsed-row summary for an ask call, or nil to keep the caller's summary.
-ANSWERS is `dsh-emacs-render--ask-answers' output, nil while the call runs or
+ANSWERS is `dsh-protocol-ask-answers--from-alist' output, nil while the call runs or
 when its result carried no answer entry; ERROR-CODE is the settled
 `data.error.code'; SETTLED non-nil means the call has a result; PENDING means
 the result is the timed tool's pending payload.  Mirrors dsh web, whose total
@@ -3247,7 +2957,7 @@ face), and a settled question closes with its free-text answer or
 
 (defun dsh-emacs-render--ask-body (questions answers status-text)
   "Compose the expanded body of an ask card, or nil without QUESTIONS.
-ANSWERS is `dsh-emacs-render--ask-answers' output (nil while the call runs);
+ANSWERS is `dsh-protocol-ask-answers--from-alist' output (nil while the call runs);
 STATUS-TEXT, when non-empty, is the settled call's failure line or the ask
 verdict for a cancelled / interrupted set, printed above the questions like
 the other cards' status lines.  One question is one block of rows; a batch
@@ -3306,8 +3016,8 @@ everything else `success'."
   (when dsh-emacs-show-tool-calls
     (dsh-emacs-render--apply-tool-result
      (dsh-protocol-tool-result--from-alist
-      (dsh-emacs-render--event-data event)))
-    (dsh-emacs-render--event-seq event)))
+      event t))
+    (dsh-protocol-event-sequence--from-alist event)))
 
 (cl-defun dsh-emacs-render--apply-tool-result (result)
   "Update an existing tool card from decoded RESULT.
@@ -3340,7 +3050,7 @@ tracking belongs to `dsh-emacs-render-tool-result'."
              (settled-question
               (and (equal variant "question")
                    dsh-emacs--session-questions
-                   (dsh-emacs-render--ask-pending-p full-text)
+                   (dsh-protocol-ask-pending--from-alist full-text)
                    (cl-find call-id
                             (dsh-protocol-user-questions-settled
                              dsh-emacs--session-questions)
@@ -3380,16 +3090,16 @@ tracking belongs to `dsh-emacs-render-tool-result'."
                                  ("ASK_ABORTED"
                                   "This question set was interrupted before answers were submitted."))))
              (ask-questions (and (equal variant "question")
-                                 (dsh-emacs-render--ask-questions
+                                 (dsh-protocol-ask-questions--from-alist
                                   args-raw)))
              (ask-answers (and ask-questions
-                               (dsh-emacs-render--ask-answers full-text)))
+                               (dsh-protocol-ask-answers--from-alist full-text)))
              ;; dsh 0.2.0's timed tool reports an expired foreground
              ;; window as a successful pending result; the questions stay
              ;; answerable (`dsh-emacs-answer-question'), so the row must
              ;; not read as an answered or failed set.
              (ask-pending (and ask-questions
-                               (dsh-emacs-render--ask-pending-p full-text)))
+                               (dsh-protocol-ask-pending--from-alist full-text)))
              ;; The three goal tools carry dsh web's structured card: the
              ;; objective is the summary and the body is State / Rounds
              ;; (+ Blocker).  A cleared `{goal: null}' answer is that
@@ -3397,7 +3107,7 @@ tracking belongs to `dsh-emacs-render-tool-result'."
              ;; or malformed result keeps the generic ioCard.
              (goal-card (and (equal variant "goal")
                              (eq state 'success)
-                             (dsh-emacs-render--goal-card-value full-text)))
+                             (dsh-protocol-goal-result--from-alist full-text)))
              (goal-value (car-safe goal-card))
              (goal-cleared (cdr-safe goal-card))
              (goal-body (cond ((null goal-card) nil)
@@ -3515,7 +3225,7 @@ buffer still tracks CALL-ID's row and that row is showing the pending result."
   (let ((prev (dsh-emacs-render--tool-state call-id)))
     (when (and dsh-emacs-show-tool-calls prev
                (equal (plist-get prev :variant) "question")
-               (dsh-emacs-render--ask-pending-p (plist-get prev :result)))
+               (dsh-protocol-ask-pending--from-alist (plist-get prev :result)))
       (dsh-emacs-render--apply-tool-result
        (dsh-protocol--make-tool-result :call-id call-id :text answers-json)))))
 
@@ -3540,42 +3250,16 @@ buffer still tracks CALL-ID's row and that row is showing the pending result."
   (and (stringp name) (member name dsh-emacs--goal-tools)))
 
 (defun dsh-emacs-render--goal-call-summary (name args-raw)
-  "Pending summary of a goal call NAME from ARGS-RAW, or nil.
-dsh web shows `create_goal's objective while the call runs; `update_goal'
-carries none for its phase-only verbs, so name the action there rather than
-let the generic fallback print the opaque goal id, and `get_goal' takes no
-arguments."
+  "Format a goal call NAME's objective or update action from ARGS-RAW."
   (when (dsh-emacs-render--goal-tool-p name)
-    (let ((parsed (and (stringp args-raw)
-                       (not (string-empty-p args-raw))
-                       (condition-case nil
-                           (json-read-from-string args-raw)
-                         (error nil)))))
-      (when (listp parsed)
-        (let ((objective (dsh-emacs-render--aget "objective" parsed))
-              (action (dsh-emacs-render--aget "action" parsed)))
-          (cond
-           ((and (stringp objective) (not (string-empty-p objective)))
-            (dsh-emacs-render--first-line objective))
-           ((and (stringp action) (not (string-empty-p action)))
-            (capitalize action))))))))
-
-(defun dsh-emacs-render--goal-card-value (text)
-  "Decode goal tool result TEXT into (GOAL . CLEARED-P), or nil.
-The three tools answer with the GoalView in `goal' plus the process-local
-`activation' beside it (see dsh-tool-goal), or `{goal: null}' after a clear.
-GOAL is a `dsh-protocol-goal' decoded by the protocol module, CLEARED-P marks
-the empty answer, and an unrecognized document yields nil so the caller keeps
-the generic ioCard."
-  (when (and (stringp text) (not (string-empty-p (string-trim text))))
-    (let ((parsed (condition-case nil
-                      (json-read-from-string (string-trim text))
-                    (error nil))))
-      (when-let* ((cell (and (listp parsed) (assoc 'goal parsed))))
-        (if (null (cdr cell))
-            (cons nil t)
-          (when-let* ((goal (dsh-protocol-goal-tool--from-alist parsed)))
-            (cons goal nil)))))))
+    (let* ((args (dsh-protocol-tool-arguments--from-alist args-raw))
+           (objective (dsh-protocol-tool-arguments-objective args))
+           (action (dsh-protocol-tool-arguments-action args)))
+      (cond
+       ((and (stringp objective) (not (string-empty-p objective)))
+        (dsh-emacs-render--first-line objective))
+       ((and (stringp action) (not (string-empty-p action)))
+        (capitalize action))))))
 
 (defun dsh-emacs-render--goal-state-text (goal)
   "Human state of GOAL, mirroring dsh web's `detail.goal.*' copy."
@@ -3836,7 +3520,7 @@ running spinner (idempotent — the send path already lit it, and a
   (when (and (not (dsh-emacs-render--history-page-p))
              (fboundp 'dsh-emacs--ml-busy-set))
     (dsh-emacs--ml-busy-set t))
-  (dsh-emacs-render--event-seq event))
+  (dsh-protocol-event-sequence--from-alist event))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Native desktop notification when a run ends
@@ -3892,8 +3576,7 @@ spinner."
   ;; A turn's declared deliverables close the transcript after its final
   ;; message (web's turnTail), so they are rendered here, not at their own
   ;; event position.
-  (let ((turn (dsh-emacs-render--aget
-               "turn" (dsh-emacs-render--event-data event))))
+  (let ((turn (dsh-protocol-turn--from-alist event)))
     (when (integerp turn)
       (dsh-emacs-render--flush-deliverables turn)))
   ;; The turn finished: stop the mode-line running spinner.
@@ -3903,7 +3586,7 @@ spinner."
   ;; A failed run must not be silently swallowed: dsh signals it as
   ;; `turn/end' + data.reason.kind = \"error\", mirroring dsh web's
   ;; turn-error node.
-  (let ((failure (dsh-emacs-render--turn-failure event)))
+  (let ((failure (dsh-protocol-turn-failure--from-alist event)))
     (when failure
       (dsh-emacs-render-info
        "Model error" (car failure) nil (cdr failure)))
@@ -3916,26 +3599,7 @@ spinner."
             dsh-emacs--buffer-session)
        (if failure (format "✗ Run failed — %s" (car failure))
          "✓ Run finished"))))
-  (dsh-emacs-render--event-seq event))
-
-(defun dsh-emacs-render--turn-failure (event)
-  "Return (MESSAGE . CODE) for EVENT's terminal turn failure, or nil.
-Mirrors dsh web's turn-error definition: a `turn/end' event whose
-DATA.REASON.KIND is \"error\" carries the provider failure in
-DATA.REASON.ERROR ({code, message, ...})."
-  (let* ((data (dsh-emacs-render--event-data event))
-         (reason (dsh-emacs-render--aget "reason" data))
-         (kind (dsh-emacs-render--aget "kind" reason))
-         (error (dsh-emacs-render--aget "error" reason)))
-    (when (equal kind "error")
-      (cond
-       ((stringp error) (cons error nil))
-       ((listp error)
-        (cons (or (dsh-emacs-render--aget "message" error)
-                  (format "%S" error))
-              (let ((code (dsh-emacs-render--aget "code" error)))
-                (and (stringp code) (not (string-empty-p code)) code))))
-       (t (cons "Model run failed" nil))))))
+  (dsh-protocol-event-sequence--from-alist event))
 
 (defun dsh-emacs-render-info (label text &optional block-id detail)
   "Render a compact event row with LABEL, TEXT and optional muted DETAIL.
@@ -4017,24 +3681,23 @@ Steps are boundaries of a turn, not transcript content: the transcript stays
 content-only, and the badge shows which step of the running turn is active.
 Returns the event seq so the follow stream's dedup anchor advances."
   (when (fboundp 'dsh-emacs-modeline-note-step)
-    (let ((data (dsh-emacs-render--event-data event)))
+    (let ((position (dsh-protocol-turn-step-event--from-alist event)))
       (dsh-emacs-modeline-note-step
-       (dsh-emacs-render--aget "turn" data)
-       (dsh-emacs-render--aget "step" data)
-       (equal (dsh-emacs-render--aget "type" event) "step/start"))))
-  (dsh-emacs-render--event-seq event))
+       (dsh-protocol-turn-step-event-turn position)
+       (dsh-protocol-turn-step-event-step position)
+       (equal (dsh-protocol-turn-step-event-kind position) "step/start"))))
+  (dsh-protocol-event-sequence--from-alist event))
 
 (defun dsh-emacs-render--assistant-stream-text (stream)
   "Reconstruct the visible text of an assistant attempt STREAM.
-STREAM is the compact `AssistantStreamRecord' array of `assistant/attempt'
+STREAM is the decoded `AssistantStreamRecord' list of `assistant/attempt'
 (and `assistant/message'): deltas are packed into `text-chunks' /
 `reasoning-chunks' runs (parallel `texts' arrays) and tool calls into
 `tool-call-chunks'.  Reasoning is included only when reasoning display is on.
 Returns the record-ordered content as one newline-joined string."
   (let ((parts '()))
-    (dolist (raw (dsh-protocol--objects stream))
-      (let* ((record (dsh-protocol-assistant-record--from-alist raw))
-             (type (dsh-protocol-assistant-record-type record)))
+    (dolist (record stream)
+      (let ((type (dsh-protocol-assistant-record-type record)))
         (pcase type
           ((or "text-chunks" "reasoning-chunks")
            (when (or dsh-emacs-show-reasoning
@@ -4237,11 +3900,11 @@ An attempt that settled without committing a surface message (failure,
 retry, cancellation) has no `assistant/message'; its exact stream is the only
 record of what the model produced.  The card opens expanded when it replaced
 a visible live body, collapsed when replayed from history."
-  (let* ((data (dsh-emacs-render--event-data event))
+  (let* ((position (dsh-protocol-turn-step-event--from-alist event))
          (live (dsh-emacs-render--discard-stream
-                (dsh-emacs-render--stream-key event)))
+                (dsh-protocol-stream-key--from-alist event)))
          (body (dsh-emacs-render--assistant-stream-text
-                (dsh-emacs-render--aget "stream" data)))
+                (dsh-protocol-turn-step-event-stream position)))
          (empty (string-empty-p body)))
     (dsh-emacs-ui-update-fragment
      (dsh-emacs-ui-make-fragment
@@ -4254,8 +3917,8 @@ a visible live body, collapsed when replayed from history."
                           'help-echo "Uncommitted output; may follow failure, retry or cancellation"))
       :label-right
       (propertize (format "turn %s · step %s"
-                          (dsh-emacs-render--aget "turn" data)
-                          (dsh-emacs-render--aget "step" data))
+                          (dsh-protocol-turn-step-event-turn position)
+                          (dsh-protocol-turn-step-event-step position))
                   'face 'dsh-emacs-timestamp-face)
       :body (unless empty body)
       :style 'minimal
@@ -4265,7 +3928,7 @@ a visible live body, collapsed when replayed from history."
      :create-new t
      :expanded (and live (not empty))
      :insert-before (dsh-emacs-render--input-insert-point)))
-  (dsh-emacs-render--event-seq event))
+  (dsh-protocol-event-sequence--from-alist event))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: deliverables/presented (files the present tool declared)
@@ -4287,36 +3950,23 @@ FILES and ADDITION are (PATH . DESCRIPTION) lists; returns the new list."
           (setcdr cell (cdr file))
         (setq files (append files (list file)))))))
 
-(defun dsh-emacs-render--deliverables-files (data)
-  "Return the (PATH . DESCRIPTION) list of `deliverables/presented' DATA.
-Empty paths are dropped and an empty description becomes nil."
-  (let (files)
-    (dolist (file (append (dsh-emacs-render--aget "files" data) nil))
-      (when (consp file)
-        (let ((path (dsh-emacs-render--aget "path" file))
-              (description (dsh-emacs-render--aget "description" file)))
-          (when (and (stringp path) (not (string-empty-p path)))
-            (push (cons path (and (stringp description)
-                                  (not (string-empty-p description))
-                                  description))
-                  files)))))
-    (nreverse files)))
-
 (defun dsh-emacs-render-deliverables (event)
   "Collect a `deliverables/presented' EVENT for its turn's closing row.
 The row itself is rendered by `dsh-emacs-render--flush-deliverables' from
 `turn/end' (or at the end of a history batch whose snapshot cut the turn
 before its `turn/end').  Returns the event seq."
-  (let* ((data (dsh-emacs-render--event-data event))
-         (turn (dsh-emacs-render--aget "turn" data))
-         (files (dsh-emacs-render--deliverables-files data)))
+  (let* ((view (dsh-protocol--struct
+                #'dsh-protocol-deliverables-p
+                #'dsh-protocol-deliverables--from-alist event))
+         (turn (dsh-protocol-deliverables-turn view))
+         (files (dsh-protocol-deliverables-files view)))
     (when (and (integerp turn) files)
       (let ((cell (assq turn dsh-emacs-render--turn-deliverables)))
         (if cell
             (setcdr cell (dsh-emacs-render--deliverables-merge
                           (cdr cell) files))
-          (push (cons turn files) dsh-emacs-render--turn-deliverables)))))
-  (dsh-emacs-render--event-seq event))
+          (push (cons turn files) dsh-emacs-render--turn-deliverables))))
+    (dsh-protocol-deliverables-seq view)))
 
 (defun dsh-emacs-render--deliverable-line (file)
   "Return one deliverables body line for FILE, a (PATH . DESCRIPTION) cell.
@@ -4410,8 +4060,6 @@ row animates with familiar 4-frame terminal rhythm.")
 (defconst dsh-emacs--command-spinner-interval 0.1
   "Seconds between running-command animation frames (~10fps, like the
 classic shell spinner in slash.sh).")
-
-
 
 (defvar-local dsh-emacs--command-spinners (make-hash-table :test 'equal)
   "Live running-command animations, keyed by COMMAND-ID.
@@ -4558,7 +4206,7 @@ Run creates the node; done (matched by commandId) restyles it — success
 turns the row green, error red.  Events on load render in seq order, so
 a run followed by its done (the usual shape) becomes a single node.
 Returns the event seq."
-  (let ((seq (dsh-emacs-render--event-seq event)))
+  (let ((seq (dsh-protocol-event-sequence--from-alist event)))
     (when dsh-emacs-show-commands
       (pcase-let (((cl-struct dsh-protocol-command-event
                               type command-id name kind text)
@@ -4706,33 +4354,14 @@ a finished row never animates again."
 ;;; Top-level dispatcher
 ;;; ---------------------------------------------------------------------------
 
-(defun dsh-emacs-render--replacement-p (event)
-  "Whether EVENT is a model-only surface replacement copy.
-A message-producing event carries `surfaceOp' either \"append\" (it entered
-the transcript at its own log position) or `{op:\"replace\", startSeq,
-endSeq}' (it shadows an existing surface range so the MODEL sees the newer
-copy).  dsh-session's `isAppendSurfaceEvent' exists for exactly that split:
-replacements are the wrong source for a human transcript, because painting
-one would show conversation the user already saw a second time.  The record
-still belongs in the log — it is the state the next request is built from.
-
-Compaction checkpoints are already skipped by the `user/message' source
-filter (their source kind is `plugin'), but a pruned `tool/result'
-replacement shares its `callId' with the record it shadows and has no
-source filter, so without this check the same tool card is painted twice."
-  (equal "replace"
-         (dsh-emacs-render--aget
-          "op" (dsh-emacs-render--aget "surfaceOp" event))))
-
 (defun dsh-emacs-render-event (event)
   "Dispatch EVENT to the appropriate renderer. Returns the event seq, or nil."
-  (let* ((type (dsh-emacs-render--aget "type" event))
+  (let* ((type (dsh-protocol-event-kind--from-alist event))
          (execution (dsh-protocol-execution-event--from-alist event))
-         (replacement (dsh-emacs-render--replacement-p event))
+         (replacement (dsh-protocol-replacement--from-alist event))
          (chunk-type (and (equal type "assistant/chunk")
-                          (dsh-emacs-render--aget
-                           "type" (dsh-emacs-render--aget
-                                   "chunk" (dsh-emacs-render--event-data event)))))
+                          (dsh-protocol-chunk-kind
+                           (dsh-protocol-chunk--from-alist event))))
          (seq nil))
     ;; Publish queued text before another event can insert transcript content.
     (when (and (plist-get dsh-emacs--streaming-assistant :timer)
@@ -4746,11 +4375,11 @@ source filter, so without this check the same tool card is painted twice."
       (dsh-emacs-modeline-note-execution execution))
     (pcase type
       ((or "llm/retry" "llm/retry-started" "compaction/start")
-       (setq seq (dsh-emacs-render--event-seq event)))
+       (setq seq (dsh-protocol-event-sequence--from-alist event)))
       ("compaction/summary"
        (setq seq (dsh-emacs-render-compaction-summary event)))
       ("compaction/end"
-       (setq seq (dsh-emacs-render--event-seq event))
+       (setq seq (dsh-protocol-event-sequence--from-alist event))
        ;; Slash-command failures already have a command/done card.  An
        ;; automatic compaction needs its own durable, inspectable failure.
        (when (and (dsh-protocol-execution-event-message execution)
@@ -4768,12 +4397,12 @@ source filter, so without this check the same tool card is painted twice."
          (dsh-emacs-modeline-note-event event)))
       ;; A `plan/mode' record is durable but paints no row: the `plan'
       ;; projection owns the badge, so the event is only consumed.
-      ("plan/mode" (setq seq (dsh-emacs-render--event-seq event)))
-      ("request/context" (setq seq (dsh-emacs-render--event-seq event))
+      ("plan/mode" (setq seq (dsh-protocol-event-sequence--from-alist event)))
+      ("request/context" (setq seq (dsh-protocol-event-sequence--from-alist event))
        (when (and (not (dsh-emacs-render--history-page-p))
                   (fboundp 'dsh-emacs-modeline-note-request))
          (dsh-emacs-modeline-note-request event)))
-      ("request/header" (setq seq (dsh-emacs-render--event-seq event))
+      ("request/header" (setq seq (dsh-protocol-event-sequence--from-alist event))
        (when (and (not (dsh-emacs-render--history-page-p))
                   (fboundp 'dsh-emacs-modeline-note-header))
          (dsh-emacs-modeline-note-header event)))
@@ -4782,7 +4411,7 @@ source filter, so without this check the same tool card is painted twice."
       ;; card keeps the append-origin record.  Skipping the copy still counts
       ;; the event as consumed (seq returned), so the dedup anchor advances.
       ("tool/result" (if replacement
-                         (setq seq (dsh-emacs-render--event-seq event))
+                         (setq seq (dsh-protocol-event-sequence--from-alist event))
                        (setq seq (dsh-emacs-render-tool-result event))))
       ("command/run" (setq seq (dsh-emacs-render-command event)))
       ("command/done" (setq seq (dsh-emacs-render-command event)))
@@ -4790,11 +4419,11 @@ source filter, so without this check the same tool card is painted twice."
       ("turn/end" (setq seq (dsh-emacs-render-turn-end event)))
       ((or "step/start" "step/end")
        (setq seq (if (dsh-emacs-render--history-page-p)
-                     (dsh-emacs-render--event-seq event)
+                     (dsh-protocol-event-sequence--from-alist event)
                    (dsh-emacs-render-step-event event))))
       ("assistant/attempt"
        (setq seq (dsh-emacs-render-assistant-attempt event)))
-      ("session/end-seed" (setq seq (dsh-emacs-render--event-seq event)))
+      ("session/end-seed" (setq seq (dsh-protocol-event-sequence--from-alist event)))
       ("deliverables/presented"
        (setq seq (dsh-emacs-render-deliverables event)))
       (_ nil))
@@ -4819,10 +4448,10 @@ collapsing canonical mentions to `@label') equals the echoed text — otherwise
 the optimistic copy would survive next to the echoed one and the message would
 render twice."
   (when (and (boundp 'dsh-emacs--pending-user-messages)
-             (equal (dsh-emacs-render--aget "type" event) "user/message"))
-    (let* ((data (dsh-emacs-render--event-data event))
+             (equal (dsh-protocol-event-kind--from-alist event) "user/message"))
+    (let* ((message (dsh-protocol-message--from-alist event))
            (text (dsh-emacs-render--text-from-content
-                  (dsh-emacs-render--aget "content" data)))
+                  (dsh-protocol-message-content message)))
            (pending dsh-emacs--pending-user-messages)
            (matched nil)
            remaining)
@@ -4881,12 +4510,6 @@ draft.  The size limit is soft in all three cases."
                (remhash turn dsh-emacs-render--reply-turns)))
            dsh-emacs-render--reply-turns))))))
 
-(defun dsh-emacs-render--json-boolean (value)
-  "Return VALUE as a Lisp boolean, mapping JSON `false' to nil.
-`json-read' decodes false as the truthy symbol `:json-false', so a flag read
-straight from a response would otherwise never be false."
-  (and value (not (eq value :json-false)) t))
-
 (defun dsh-emacs-render--note-history-window (entries has-more)
   "Record the pagination frontier of a freshly seeded history tail.
 ENTRIES is the snapshot's message-aligned records (ascending seq) and
@@ -4896,38 +4519,15 @@ as the next page's exclusive cursor.  The frontier only moves EARLIER: a
 reconnect snapshot's tail can start newer than pages this buffer already
 loaded, and moving the cursor past them would make the next page re-fetch
 history that is already on screen.  An empty tail leaves it unchanged."
-  (when-let* ((event (dsh-emacs-render--aget "event" (car entries)))
-              (seq (dsh-emacs-render--event-seq event)))
+  (when-let* ((event (dsh-protocol-record-event--from-alist (car entries)))
+              (seq (dsh-protocol-event-sequence--from-alist event)))
     (when (integerp seq)
       (setq dsh-emacs--history-earliest-seq
             (if (integerp dsh-emacs--history-earliest-seq)
                 (min dsh-emacs--history-earliest-seq seq)
               seq))))
   (setq dsh-emacs--history-has-more
-        (dsh-emacs-render--json-boolean has-more)))
-
-(defun dsh-emacs-render--session-refs-from-event (event)
-  "References list of a `session-reference' EVENT, or nil.
-A recall context `user/message' (source.kind = \"session-reference\")
-carries the real session id + label for the message that cited it in
-`data.source.references' (a vector of {sessionId, label, …}); dsh persists
-that citing message with only the readable `@label' text, so this is the
-sole place its id+label survive.  Returns a list of (LABEL . SESSION-ID) in
-citation order."
-  (let* ((data (dsh-emacs-render--event-data event))
-         (source (dsh-emacs-render--aget "source" data))
-         (refs (dsh-emacs-render--aget "references" source)))
-    (when (and (equal (dsh-emacs-render--aget "kind" source) "session-reference")
-               refs)
-      (delq nil
-            (mapcar
-             (lambda (r)
-               (when (consp r)
-                 (let ((sid (dsh-emacs-render--aget "sessionId" r))
-                       (label (dsh-emacs-render--aget "label" r)))
-                   (and (stringp sid) (stringp label) (not (string-empty-p sid))
-                        (cons label sid)))))
-             (append refs nil))))))
+        (dsh-protocol--boolean has-more)))
 
 (defun dsh-emacs-render--recall-refs-by-message-seq (events)
   "Map referencing message seq -> its session references in EVENTS.
@@ -4938,11 +4538,12 @@ so a recall's references are keyed by `recall.seq - 1'.  Returns an alist
 (SEQ . REFERENCES)."
   (let ((map '()))
     (dolist (entry events)
-      (let* ((ev (and entry (dsh-emacs-render--aget "event" entry)))
-             (seq (and ev (dsh-emacs-render--event-seq ev))))
+      (let* ((ev (and entry (dsh-protocol-record-event--from-alist entry)))
+             (seq (and ev (dsh-protocol-event-sequence--from-alist ev))))
         (when (and ev (integerp seq)
-                   (equal (dsh-emacs-render--aget "type" ev) "user/message"))
-          (let ((refs (dsh-emacs-render--session-refs-from-event ev)))
+                   (equal (dsh-protocol-event-kind--from-alist ev) "user/message"))
+          (let ((refs (dsh-protocol-message-references
+                       (dsh-protocol-message--from-alist ev))))
             (when refs
               (push (cons (- seq 1) refs) map))))))
     map))
@@ -4993,8 +4594,8 @@ re-delivered and the running animation had no later event to stop it."
          (counter 0))
     (cl-flet ((consume-entry (entry)
                 "Render one history ENTRY; return non-nil when it painted."
-                (let* ((ev (dsh-emacs-render--aget "event" entry))
-                       (seq (and ev (dsh-emacs-render--event-seq ev)))
+                (let* ((ev (dsh-protocol-record-event--from-alist entry))
+                       (seq (and ev (dsh-protocol-event-sequence--from-alist ev)))
                        (refs (and (integerp seq)
                                   (cdr (assq seq refs-map))))
                        (within (and ev
@@ -5003,7 +4604,7 @@ re-delivered and the running animation had no later event to stop it."
                                       (> (or seq 0) anchor)))))
                   (when (and within
                              (or stream
-                                 (not (equal (dsh-emacs-render--aget "type" ev)
+                                 (not (equal (dsh-protocol-event-kind--from-alist ev)
                                              "assistant/chunk"))))
                     (if (and (not prepend-p)
                              (dsh-emacs-render--consume-pending-user-message ev))
@@ -5014,7 +4615,7 @@ re-delivered and the running animation had no later event to stop it."
                           (setq dsh-emacs--anchor-seq
                                 (max (or dsh-emacs--anchor-seq 0) seq)))
                       (if (and refs
-                               (equal (dsh-emacs-render--aget "type" ev)
+                               (equal (dsh-protocol-event-kind--from-alist ev)
                                       "user/message"))
                           ;; Render the citing message with the recall's real
                           ;; session refs so its readable @label is a jumpable

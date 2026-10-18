@@ -161,7 +161,6 @@ generation and a new clientId.")
 (declare-function dsh-emacs--approval-cancelled "dsh-emacs" (event-id))
 (declare-function dsh-emacs--events-result-async "dsh-emacs" (client-id event-id outcome callback))
 (declare-function dsh-emacs--waterfall-generation-retired "dsh-emacs" ())
-(declare-function dsh-emacs-render--aget "dsh-emacs-render" (key alist))
 (declare-function dsh-emacs-session--render "dsh-emacs-session" ())
 (declare-function dsh-emacs--normalize-archived "dsh-emacs" (archived))
 (declare-function dsh-emacs-modeline-set-context-snapshot "dsh-emacs-modeline" (pressure window))
@@ -189,7 +188,6 @@ generation and a new clientId.")
 (declare-function dsh-emacs-render-history-events "dsh-emacs-render" (events &optional stream bound &key insert-before follow-p))
 (declare-function dsh-emacs-render--note-history-window "dsh-emacs-render" (entries has-more))
 (declare-function dsh-emacs-render--consume-pending-user-message "dsh-emacs-render" (event))
-(declare-function dsh-emacs-render--event-seq "dsh-emacs-render" (event))
 (declare-function dsh-emacs-render-event "dsh-emacs-render" (event))
 (declare-function dsh-emacs-render--follow-stream "dsh-emacs-render" (&optional windows))
 
@@ -392,7 +390,7 @@ socket was down carry seq > anchor and render here as the catch-up, exactly
 like the follow snapshot's reseed is anchor-gated."
   (when (and (buffer-live-p chat) (listp event))
     (with-current-buffer chat
-      (let ((seq (dsh-emacs-render--event-seq event)))
+      (let ((seq (dsh-protocol-event-sequence--from-alist event)))
         (when (or (not (integerp seq))
                   (> seq (or dsh-emacs--anchor-seq 0)))
           (if (dsh-emacs-render--consume-pending-user-message event)
@@ -685,9 +683,8 @@ session; transcript events render into CHAT's own buffer."
   (when (and (buffer-live-p chat) (listp event))
     (let ((session-id (with-current-buffer chat
                         dsh-emacs--buffer-session)))
-      (when (equal (dsh-emacs-render--aget "type" event) "session/title")
-        (let ((title (dsh-emacs-render--aget "title"
-                                             (dsh-emacs-render--aget "data" event))))
+      (when-let* ((update (dsh-protocol-session-title--from-alist event)))
+        (let ((title (dsh-protocol-session-title-title update)))
           (dsh-emacs-events--apply-title chat session-id title)
           (dsh-emacs-events--host-frame-record
            (list :apply-title session-id title))))

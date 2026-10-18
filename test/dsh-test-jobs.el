@@ -34,7 +34,7 @@
            proc (concat "{\"type\":\"item\",\"streamId\":\"jobs-1\","
                         "\"value\":{\"type\":\"rows\",\"jobs\":[]}}"))
           (ert-info ((format "%s" "job-stream-routed-to-handler"))
-            (should (equal "rows" (dsh-emacs-render--aget "type" job-seen))))
+            (should (equal "rows" (dsh-protocol--field "type" job-seen))))
           (setq job-seen nil)
           (dsh-emacs-events--dispatch-json
            proc (concat "{\"type\":\"item\",\"streamId\":\"follow-1\","
@@ -84,10 +84,10 @@
                                               proc 'dsh-emacs-stream-handlers))))))
               (ert-info ((format "%s" "open-stream-sends-open-frame"))
                 (should (and sent
-                             (equal "open" (dsh-emacs-render--aget "type" sent))
+                             (equal "open" (dsh-protocol--field "type" sent))
                              (equal "job/list"
-                                    (dsh-emacs-render--aget "endpoint" sent))
-                             (equal id (dsh-emacs-render--aget "streamId" sent))))))
+                                    (dsh-protocol--field "endpoint" sent))
+                             (equal id (dsh-protocol--field "streamId" sent))))))
             (ert-info ((format "%s" "open-stream-refuses-dead-process"))
               (should (null (dsh-emacs-events-open-stream
                              nil "job/list" nil "job/list" (lambda (_v) nil)))))))
@@ -100,15 +100,15 @@
   (let* ((json (dsh-emacs-events--open-message
                 "s1" "job/list" '((request . ((sessionId . "sess-1"))))))
          (msg (json-read-from-string json))
-         (payload (dsh-emacs-render--aget "payload" msg))
-         (args (dsh-emacs-render--aget "args" payload))
-         (request (dsh-emacs-render--aget "request" args)))
+         (payload (dsh-protocol--field "payload" msg))
+         (args (dsh-protocol--field "args" payload))
+         (request (dsh-protocol--field "request" args)))
     (ert-info ((format "%s" "job-open-is-open-frame"))
-      (should (equal "open" (dsh-emacs-render--aget "type" msg))))
+      (should (equal "open" (dsh-protocol--field "type" msg))))
     (ert-info ((format "%s" "job-open-carries-endpoint"))
-      (should (equal "job/list" (dsh-emacs-render--aget "endpoint" msg))))
+      (should (equal "job/list" (dsh-protocol--field "endpoint" msg))))
     (ert-info ((format "%s" "job-open-wraps-request-args"))
-      (should (equal "sess-1" (dsh-emacs-render--aget "sessionId" request))))))
+      (should (equal "sess-1" (dsh-protocol--field "sessionId" request))))))
 
 ;; A roster frame replaces the previous set wholesale (the host's frame is
 ;; the authoritative whole set), so a job that left the frame leaves the

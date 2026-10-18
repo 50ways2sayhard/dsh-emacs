@@ -100,7 +100,7 @@ ID is the message id, TEXT its single text block, KIND its source kind
   "Return the canonical `dsh-session:' URI for SESSION-ID.
 Mirrors the host's `encodeSessionReferenceUri': base64url of the JSON string
 literal, padding stripped — the test-only inverse of
-`dsh-emacs-reference--decode-session-uri'."
+`dsh-protocol-session-uri--from-string'."
   (let* ((b64 (base64-encode-string
                (encode-coding-string (json-encode session-id) 'utf-8) t))
          (plain (replace-regexp-in-string "=" "" b64 t t))

@@ -560,14 +560,44 @@ protocol field changes stay in the decoder. Covered payloads:
   repaints the list once after all sessions. Missing goal/inbox keys preserve
   state; explicit nil cells clear it. See
   [127](../postmortem/127-control-projection-boundary.md).
+- `session/title` → `dsh-protocol-session-title`, or nil for unrelated events.
+  A matching event with no title still produces a view, preserving refresh
+  replay recording. Events owns cache application and buffer renaming without
+  reading the payload through renderer helpers.
+- `deliverables/presented` → `dsh-protocol-deliverables` (seq, turn, files).
+  Files are ordered `(path . description)` pairs; decoding drops unusable paths
+  and normalizes absent descriptions. The renderer owns merging declarations,
+  last-description-wins behavior, links and deferred turn-tail placement.
+  See [133](../postmortem/133-title-and-deliverables-boundaries.md).
 - `tool/call` data → `dsh-protocol-tool-call` (name, call-id, arguments).
   The renderer decodes once, then selects a Plan card, todo snapshot, hidden
-  call or ordinary tool card. Arguments stay opaque for the existing tool
-  variants to interpret; sequence and time remain in the event envelope.
+  call or ordinary tool card. Protocol decoders interpret tool arguments and
+  results; the renderer owns titles, summaries, formatting and card selection.
   See [131](../postmortem/131-tool-call-dispatch.md).
 - `tool/result` → `dsh-protocol-tool-result` (call-id, text, outcome and
   metadata). The event renderer decodes once and returns the event sequence;
   late question settlement constructs the same decoded type directly.
+- Durable event metadata (kind, sequence, clock, replacement and stream identity)
+  is decoded in protocol. Message views normalize content, sources, references
+  and attachment fields; chunk and turn/step views cover incremental output and
+  uncommitted attempts. History records and recallable prompts use the same
+  boundaries, including typeless optimistic/test messages.
+- Request model selection and message usage decode in protocol. Mode-line owns
+  accumulation and refresh policy; token helpers adapt decoded counts to the
+  existing mutable usage plist.
+- Tool arguments, todo snapshots, ask questions/answers, goal results and read/
+  diff metadata have semantic decoders. Ordered pairs/triples suffice for rows;
+  read-file and tool-argument views expose related facts together. Generic JSON
+  display may retain an opaque object, but does not inspect its fields. No
+  generic wire reader remains in renderer, events, modeline or input history.
+  See [134](../postmortem/134-event-consumer-boundaries.md).
+- RPC result envelopes and bare upload results use
+  `dsh-protocol-rpc-result--from-alist`; transport retains callbacks and error
+  reporting. Session lists reuse one list decoder; workspace order and job-kill
+  outcomes have scalar/list decoders. Plan argument JSON and encoded session
+  reference URIs also decode in protocol. Local draft attachments and UI/cache
+  alists remain with their owners. See
+  [135](../postmortem/135-rpc-response-boundaries.md).
 - `session/list` → `dsh-protocol-session` (sessionId, title, cwd, agentPreset,
   updatedAt, blank, running, title-value, pending-interaction, context-pressure,
   context-window, context-projected)

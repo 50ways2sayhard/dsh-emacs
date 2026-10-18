@@ -591,7 +591,7 @@ Nil clears it."
 Other event types are ignored, so this can be called unconditionally from
 the renderer.  Usage is read from `data.usage' (see
 `dsh-emacs-usage-from-event')."
-  (when (equal (dsh-emacs--alist-state event "type") "assistant/message")
+  (when (equal (dsh-protocol-event-kind--from-alist event) "assistant/message")
     (dsh-emacs-modeline-add-usage (dsh-emacs-usage-from-event event))))
 
 (defun dsh-emacs-modeline-note-request (event)
@@ -599,10 +599,10 @@ the renderer.  Usage is read from `data.usage' (see
 The model id refreshes whenever the agent issues a new model request, so
 the mode-line segment always reflects the live model.  Context-window
 data rides the `session/projection' frames, not this event."
-  (let ((data (dsh-emacs--alist-state event "data")))
+  (let ((data (dsh-protocol-request-model--from-alist event)))
     (when data
-      (let ((model (dsh-emacs--alist-state data "model"))
-            (provider (dsh-emacs--alist-state data "provider")))
+      (let ((model (dsh-protocol-model-selection-model data))
+            (provider (dsh-protocol-model-selection-provider data)))
         (when (and model (not (string-empty-p model)))
           (setq dsh-emacs--modeline-model model))
         (when (and provider (not (string-empty-p provider)))
@@ -614,13 +614,11 @@ data rides the `session/projection' frames, not this event."
 `request/header' carries the model config (data.header.config) when a run
 starts; consuming it makes the model, effort and provider segments live on
 open, before any later context data arrives."
-  (let* ((data (dsh-emacs--alist-state event "data"))
-         (header (and data (dsh-emacs--alist-state data "header")))
-         (config (and header (dsh-emacs--alist-state header "config"))))
+  (let ((config (dsh-protocol-request-model--from-alist event t)))
     (when config
-      (let ((model (dsh-emacs--alist-state config "model"))
-            (effort (dsh-emacs--alist-state config "reasoningEffort"))
-            (provider (dsh-emacs--alist-state config "provider")))
+      (let ((model (dsh-protocol-model-selection-model config))
+            (effort (dsh-protocol-model-selection-reasoning-effort config))
+            (provider (dsh-protocol-model-selection-provider config)))
         (when (and model (not (string-empty-p model)))
           (setq dsh-emacs--modeline-model model))
         (when (and effort (not (string-empty-p effort)))

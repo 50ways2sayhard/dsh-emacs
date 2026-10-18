@@ -63,7 +63,6 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'json)
 (require 'subr-x)
 (require 'dsh-emacs-protocol)
 
@@ -918,7 +917,7 @@ the read-only transcript (`insert-for-yank: Text is read-only').")
   "Regexp matching a completed session mention `@[label](dsh-session:…)'.
 Group 1 is the raw label interior (possibly carrying `\\]' / `\\\\' escapes),
 group 2 the base64url URI payload that encodes the session id (see
-`dsh-emacs-reference--decode-session-uri') — not the id itself.")
+`dsh-protocol-session-uri--from-string') — not the id itself.")
 
 (defconst dsh-emacs-reference--file-mention-re
   "\\(?:^\\|[ \t\r\n\f]\\)\\(@\"[^\"]*\"\\|@[^ \t\r\n\f@]+\\)"
@@ -932,30 +931,6 @@ character, so a lone `@' and prose like `mail@example' are not linked.")
 Decodes the `\\\\X' escapes the host emits (`\\\\]' → `]', `\\\\\\\\' → `\\')."
   (replace-regexp-in-string
    "\\\\\\(.\\)" "\\1" raw t t))
-
-(defun dsh-emacs-reference--decode-session-uri (payload)
-  "Return the session id the `dsh-session:' URI PAYLOAD encodes, or nil.
-The host writes base64url(JSON.stringify(ID)) into a mention (see the
-harness's `encodeSessionReferenceUri'), so the id every RPC expects is the
-decoded JSON string; treating PAYLOAD itself as the identity asks the host
-for a session named after the encoding and earns `session/not-found'.  Nil
-when PAYLOAD is no decodable session reference."
-  (when (and (stringp payload)
-             (string-match-p "\\`[A-Za-z0-9_-]+\\'" payload))
-    (let* ((b64 (replace-regexp-in-string
-                 "-" "+" (replace-regexp-in-string "_" "/" payload t t) t t))
-           (pad (mod (- 4 (mod (length b64) 4)) 4))
-           (decoded (ignore-errors
-                      (base64-decode-string (concat b64 (make-string pad ?=))))))
-      (when (stringp decoded)
-        ;; JSON numbers/escapes use match data; preserve the mention scan.
-        (let ((id (ignore-errors
-                    (save-match-data
-                      (json-read-from-string
-                       (if (multibyte-string-p decoded)
-                           decoded
-                         (decode-coding-string decoded 'utf-8)))))))
-          (and (stringp id) id))))))
 
 (defun dsh-emacs-reference--link-spans (string &optional references)
   "Reference spans (BEG END KIND VALUE) in STRING, non-overlapping, by start.
@@ -977,7 +952,7 @@ matcher)."
     (let ((pos 0))
       (while (and (<= pos limit) (string-match sm string pos))
         (push (list (match-beginning 0) (match-end 0) 'session
-                    (dsh-emacs-reference--decode-session-uri
+                    (dsh-protocol-session-uri--from-string
                      (match-string 2 string)))
               spans)
         (setq pos (match-end 0))))
@@ -1134,7 +1109,7 @@ ID is the session id the mention's URI payload encodes, not the payload."
   (let ((m dsh-emacs-reference--session-mention-re))
     (and (string-match (concat "\\`" m "\\'") text)
          (cons (dsh-emacs-reference--unescape-label (match-string 1 text))
-               (dsh-emacs-reference--decode-session-uri
+               (dsh-protocol-session-uri--from-string
                 (match-string 2 text))))))
 
 (defun dsh-emacs-reference-open-at-point ()
@@ -1322,7 +1297,6 @@ style from bleeding onto following typed text."
                  (t nil))))
     (and (stringp p) (> (length p) 0)
          (if (string-suffix-p "/" p) (substring p 0 -1) p))))
-
 
 ;; ---------------------------------------------------------------------------
 ;; M-x entry point

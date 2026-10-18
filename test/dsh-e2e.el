@@ -140,7 +140,7 @@ A token without a saved base URL belongs only to the default local server."
   "Whether CALL-ID's card displays QUESTION-ID answered with LABEL."
   (with-current-buffer dsh-e2e--chat
     (let* ((state (dsh-emacs-render--tool-state call-id))
-           (answers (dsh-emacs-render--ask-answers (plist-get state :result)))
+           (answers (dsh-protocol-ask-answers--from-alist (plist-get state :result)))
            (block (dsh-emacs-ui-find-block
                    (plist-get state :ns) (concat "tool-" call-id))))
       (and (equal answers (list (list question-id (list label) nil)))
@@ -319,7 +319,7 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
                "timed-expiry-pending-card"
                (dsh-e2e--wait-until
                 (lambda ()
-                  (dsh-emacs-render--ask-pending-p
+                  (dsh-protocol-ask-pending--from-alist
                    (plist-get (dsh-emacs-render--tool-state call-id) :result)))
                 10))
               (dsh-e2e--check

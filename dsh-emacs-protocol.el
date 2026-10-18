@@ -110,14 +110,29 @@ must decline rather than break the caller."
                     (dsh-protocol--list value))))
 
 (defun dsh-protocol--field (key alist)
-  "Return KEY's value from wire ALIST, accepting string and symbol keys.
-`json-read' normally produces symbol-keyed alists while fixtures and renderer
-call sites use JSON field names, so a `--from-alist' constructor must accept
-both.  A non-list ALIST (a number, symbol, or string where the wire promised
-an object) yields nil rather than signalling."
-  (when (listp alist)
-    (cdr (or (assoc key alist)
-             (assoc (if (stringp key) (intern key) (symbol-name key)) alist)))))
+  "Return KEY's value from ALIST (a list or vector of (KEY . VALUE) cells).
+Accept both string and symbol keys because `json-read' normally produces
+symbol-keyed alists while renderer call sites use JSON field names.  A
+non-sequence ALIST (a number, symbol, or string where the wire promised an
+object) yields nil rather than signalling: this accessor is the protocol's
+wire boundary, and a malformed field must select a fallback, not break the
+event stream."
+  (when (or (listp alist) (vectorp alist))
+    (let* ((alternate-key (cond
+                           ((stringp key) (intern key))
+                           ((symbolp key) (symbol-name key))
+                           (t key)))
+           (entry (if (listp alist)
+                      (or (assoc key alist)
+                          (assoc alternate-key alist))
+                    (catch 'found
+                      (dotimes (i (length alist))
+                        (let ((pair (aref alist i)))
+                          (when (and (consp pair)
+                                     (or (equal (car pair) key)
+                                         (equal (car pair) alternate-key)))
+                            (throw 'found pair))))))))
+      (and (consp entry) (cdr entry)))))
 
 (defun dsh-protocol--boolean (value)
   "Return wire VALUE as a strict boolean, mapping JSON `false' to nil.
@@ -142,6 +157,46 @@ struct never hands a caller `:json-false'."
                                     (error (dsh-protocol--field 'error alist)))))
   "Shared mux envelope; VALUE and ERROR retain their logical payloads."
   type stream-id value error)
+
+;; ---------------------------------------------------------------------------
+;; Durable session title and deliverables
+;; ---------------------------------------------------------------------------
+
+(cl-defstruct (dsh-protocol-session-title
+               (:constructor dsh-protocol--make-session-title))
+  "A session title event, including an explicitly absent TITLE."
+  title)
+
+(defun dsh-protocol-session-title--from-alist (event)
+  "Decode a session/title EVENT, returning nil for other event types.
+A matching event always produces a view, even when its title is nil."
+  (when (equal (dsh-protocol--field 'type event) "session/title")
+    (dsh-protocol--make-session-title
+     :title (dsh-protocol--field 'title (dsh-protocol--field 'data event)))))
+
+(cl-defstruct (dsh-protocol-deliverables
+               (:constructor dsh-protocol-deliverables--from-alist
+                             (event &aux
+                                    (seq (dsh-protocol--field 'seq event))
+                                    (data (dsh-protocol--field 'data event))
+                                    (turn (dsh-protocol--field 'turn data))
+                                    (files
+                                     (cl-loop
+                                      for file in (dsh-protocol--objects
+                                                   (dsh-protocol--field 'files data))
+                                      for path = (dsh-protocol--field 'path file)
+                                      for description =
+                                      (dsh-protocol--field 'description file)
+                                      when (and (stringp path) (not (equal path "")))
+                                      collect
+                                      (cons path (and (stringp description)
+                                                      (not (equal description ""))
+                                                      description)))))))
+  "Declared files for one turn, preserving wire order and duplicate paths.
+FILES contains (PATH . DESCRIPTION) pairs with nonempty paths.  Empty or
+non-string descriptions become nil; merging repeated declarations belongs
+to the renderer.  SEQ advances replay even when no file is usable."
+  seq turn files)
 
 ;; ---------------------------------------------------------------------------
 ;; Provider configuration (settings, llm directory and credentials)
@@ -468,10 +523,10 @@ only; CREATED is nil there)."
                (:constructor dsh-protocol-model-selection--from-alist
                              (alist
                               &aux
-                              (provider (cdr (assq 'provider alist)))
-                              (model (cdr (assq 'model alist)))
+                              (provider (dsh-protocol--field "provider" alist))
+                              (model (dsh-protocol--field "model" alist))
                               (reasoning-effort
-                               (cdr (assq 'reasoningEffort alist))))))
+                               (dsh-protocol--field "reasoningEffort" alist)))))
   "The session's live model selection (`current' / `selected')."
   provider
   model
@@ -803,13 +858,20 @@ in contribution order.  The derived `custom' state is not an option."
 
 (cl-defstruct (dsh-protocol-plan-document
                (:constructor dsh-protocol-plan-document--from-alist
-                             (alist &aux (text (cdr (assq 'plan alist))))))
+                             (value &optional json-p &aux
+                                    (alist (if json-p
+                                               (let ((json-object-type 'alist)
+                                                     (json-key-type 'symbol))
+                                                 (json-read-from-string value))
+                                             value))
+                                    (text (dsh-protocol--field 'plan alist)))))
   "The complete Markdown submitted by `exit_plan_mode'."
   text)
 
 (cl-defstruct (dsh-protocol-tool-call
                (:constructor dsh-protocol-tool-call--from-alist
-                             (data &aux
+                             (data &optional event-p &aux
+                                   (data (if event-p (dsh-protocol--field "data" data) data))
                                    (name (dsh-protocol--field 'name data))
                                    (call-id (dsh-protocol--field 'callId data))
                                    (arguments (dsh-protocol--field 'arguments data)))))
@@ -821,48 +883,49 @@ interpretation.  Sequence and time stay in the surrounding event envelope."
 (cl-defstruct (dsh-protocol-tool-result
                (:constructor dsh-protocol--make-tool-result)
                (:constructor dsh-protocol-tool-result--from-alist
-                             (alist
-                              &aux
-                              (message (dsh-protocol--field 'message alist))
-                              (content (dsh-protocol--objects
-                                        (dsh-protocol--field 'content message)))
-                              (nested
-                               (cl-remove-if-not
-                                (lambda (block)
-                                  (equal (dsh-protocol--field 'type block)
-                                         "tool-result"))
-                                content))
-                              (outcome (if nested (car (last nested)) message))
-                              (blocks
-                               (if nested
-                                   (cl-loop for block in nested append
-                                            (dsh-protocol--objects
-                                             (dsh-protocol--field 'content block)))
-                                 content))
-                              (failure (dsh-protocol--field 'error alist))
-                              (call-id
-                               (or (dsh-protocol--field 'toolCallId message)
-                                   (dsh-protocol--field 'callId message)
-                                   (dsh-protocol--field
-                                    'callId (dsh-protocol--field 'source message))
-                                   (dsh-protocol--field 'callId alist)))
-                              (text
-                               (mapconcat
-                                #'identity
-                                (cl-loop for block in blocks
-                                         for text = (dsh-protocol--field 'text block)
-                                         when (and (equal "text" (dsh-protocol--field
-                                                                  'type block))
-                                                   (stringp text))
-                                         collect text)
-                                "\n"))
-                              (is-error (dsh-protocol--boolean
-                                         (dsh-protocol--field 'isError outcome)))
-                              (exit-code (dsh-protocol--field 'exitCode outcome))
-                              (signal (dsh-protocol--field 'signal outcome))
-                              (error-code (dsh-protocol--field 'code failure))
-                              (error-reason (dsh-protocol--field 'reason failure))
-                              (meta (dsh-protocol--field 'meta alist)))))
+                             (alist &optional event-p
+                                    &aux
+                                    (alist (if event-p (dsh-protocol--field "data" alist) alist))
+                                    (message (dsh-protocol--field 'message alist))
+                                    (content (dsh-protocol--objects
+                                              (dsh-protocol--field 'content message)))
+                                    (nested
+                                     (cl-remove-if-not
+                                      (lambda (block)
+                                        (equal (dsh-protocol--field 'type block)
+                                               "tool-result"))
+                                      content))
+                                    (outcome (if nested (car (last nested)) message))
+                                    (blocks
+                                     (if nested
+                                         (cl-loop for block in nested append
+                                                  (dsh-protocol--objects
+                                                   (dsh-protocol--field 'content block)))
+                                       content))
+                                    (failure (dsh-protocol--field 'error alist))
+                                    (call-id
+                                     (or (dsh-protocol--field 'toolCallId message)
+                                         (dsh-protocol--field 'callId message)
+                                         (dsh-protocol--field
+                                          'callId (dsh-protocol--field 'source message))
+                                         (dsh-protocol--field 'callId alist)))
+                                    (text
+                                     (mapconcat
+                                      #'identity
+                                      (cl-loop for block in blocks
+                                               for text = (dsh-protocol--field 'text block)
+                                               when (and (equal "text" (dsh-protocol--field
+                                                                        'type block))
+                                                         (stringp text))
+                                               collect text)
+                                      "\n"))
+                                    (is-error (dsh-protocol--boolean
+                                               (dsh-protocol--field 'isError outcome)))
+                                    (exit-code (dsh-protocol--field 'exitCode outcome))
+                                    (signal (dsh-protocol--field 'signal outcome))
+                                    (error-code (dsh-protocol--field 'code failure))
+                                    (error-reason (dsh-protocol--field 'reason failure))
+                                    (meta (dsh-protocol--field 'meta alist)))))
   "Decoded tool/result data, including its message's text and outcome.
 Current hosts use direct text blocks and message-level isError; older
 hosts and fixtures wrap both in a tool-result content block."
@@ -1924,6 +1987,480 @@ LIMIT bounds messages in one response; ROUNDS is the remaining round target."
   "Decode the session list ALIST."
   (mapcar #'dsh-protocol-session--from-alist
           (dsh-protocol--list (cdr (assq 'items alist)))))
+
+(defun dsh-protocol-event-sequence--from-alist (event)
+  "Return the event seq."
+  (dsh-protocol--field "seq" event))
+
+(defun dsh-protocol-event-kind--from-alist (event)
+  "Return the wire EVENT kind without interpreting its payload."
+  (dsh-protocol--field 'type event))
+
+(defun dsh-protocol-event-clock--from-alist (event)
+  "Return EVENT's positive integer epoch milliseconds, or nil."
+  (let ((time (dsh-protocol--field 'time event)))
+    (and (integerp time) (> time 0) time)))
+
+(defun dsh-protocol-replacement--from-alist (event)
+  "Whether EVENT is a model-only surface replacement copy.
+A message-producing event carries `surfaceOp' either \"append\" (it entered
+the transcript at its own log position) or `{op:\"replace\", startSeq,
+endSeq}' (it shadows an existing surface range so the MODEL sees the newer
+copy).  dsh-session's `isAppendSurfaceEvent' exists for exactly that split:
+replacements are the wrong source for a human transcript, because painting
+one would show conversation the user already saw a second time.  The record
+still belongs in the log — it is the state the next request is built from.
+
+Compaction checkpoints are already skipped by the `user/message' source
+filter (their source kind is `plugin'), but a pruned `tool/result'
+replacement shares its `callId' with the record it shadows and has no
+source filter, so without this check the same tool card is painted twice."
+  (equal "replace"
+         (dsh-protocol--field
+          "op" (dsh-protocol--field "surfaceOp" event))))
+
+(defun dsh-protocol-stream-key--from-alist (event)
+  "Return the logical assistant stream key for EVENT."
+  (let ((data (dsh-protocol--field 'data event)))
+    (format "%s/%s"
+            (or (dsh-protocol--field "turn" data) "?")
+            (or (dsh-protocol--field "step" data) "?"))))
+
+(cl-defstruct (dsh-protocol-chunk
+               (:constructor dsh-protocol-chunk--from-alist
+                             (event &aux
+                                    (data (dsh-protocol--field 'data event))
+                                    (chunk (dsh-protocol--field 'chunk data))
+                                    (kind (dsh-protocol--field 'type chunk))
+                                    (ending (equal kind "block-end"))
+                                    (block (if ending (dsh-protocol--field 'block chunk) chunk))
+                                    (type (dsh-protocol--field 'type block))
+                                    (text (dsh-protocol--field 'text block))
+                                    (index (dsh-protocol--field 'index chunk)))))
+  "One assistant chunk; a block-end uses its nested block as content."
+  kind ending type text index)
+
+(defun dsh-protocol-chunk-index--from-alist (event)
+  "Return the block index identifying EVENT's live text or reasoning region."
+  (dsh-protocol--field 'index
+                       (dsh-protocol--field 'chunk
+                                            (dsh-protocol--field 'data event))))
+
+(defun dsh-protocol-turn--from-alist (event)
+  "Return the turn identity in EVENT without interpreting other payloads."
+  (dsh-protocol--field 'turn (dsh-protocol--field 'data event)))
+
+(defun dsh-protocol-turn-failure--from-alist (event)
+  "Return (MESSAGE . CODE) for EVENT's terminal turn failure, or nil.
+Mirrors dsh web's turn-error definition: a `turn/end' event whose
+DATA.REASON.KIND is \"error\" carries the provider failure in
+DATA.REASON.ERROR ({code, message, ...})."
+  (let* ((data (dsh-protocol--field 'data event))
+         (reason (dsh-protocol--field "reason" data))
+         (kind (dsh-protocol--field "kind" reason))
+         (error (dsh-protocol--field "error" reason)))
+    (when (equal kind "error")
+      (cond
+       ((stringp error) (cons error nil))
+       ((listp error)
+        (cons (or (dsh-protocol--field "message" error)
+                  (format "%S" error))
+              (let ((code (dsh-protocol--field "code" error)))
+                (and (stringp code) (not (string-empty-p code)) code))))
+       (t (cons "Model run failed" nil))))))
+
+(cl-defstruct (dsh-protocol-content-block
+               (:constructor dsh-protocol-content-block--from-alist
+                             (block &aux
+                                    (kind (dsh-protocol--field 'type block))
+                                    (text (dsh-protocol--field 'text block))
+                                    (ref (dsh-protocol--field 'attachment block))
+                                    (name (or (dsh-protocol--field 'name block)
+                                              (dsh-protocol--field 'name ref)))
+                                    (media-type (or (dsh-protocol--field 'mediaType block)
+                                                    (dsh-protocol--field 'mediaType ref)))
+                                    (data (or (dsh-protocol--field 'data block)
+                                              (dsh-protocol--field 'data ref)))
+                                    (attachment-id
+                                     (or (dsh-protocol--field 'attachmentId block)
+                                         (dsh-protocol--field 'attachmentId ref)))
+                                    (file (when (equal kind "file")
+                                            (dsh-protocol-file-ref--from-alist
+                                             (or ref block)))))))
+  "A message block with inline or referenced attachment fields normalized."
+  kind text name media-type data attachment-id file)
+
+(cl-defstruct (dsh-protocol-message
+               (:constructor dsh-protocol-message--from-alist
+                             (event &key assistant &aux
+                                    (data (dsh-protocol--field 'data event))
+                                    (source (dsh-protocol--field 'source data))
+                                    (source-kind (dsh-protocol--field 'kind source))
+                                    (source-name (dsh-protocol--field 'name source))
+                                    (content
+                                     (mapcar #'dsh-protocol-content-block--from-alist
+                                             (dsh-protocol--list
+                                              (dsh-protocol--field
+                                               'content
+                                               (if assistant
+                                                   (dsh-protocol--field 'message data)
+                                                 data)))))
+                                    (references
+                                     (when (equal source-kind "session-reference")
+                                       (cl-loop
+                                        for ref in (dsh-protocol--objects
+                                                    (dsh-protocol--field 'references source))
+                                        for id = (dsh-protocol--field 'sessionId ref)
+                                        for label = (dsh-protocol--field 'label ref)
+                                        when (and (stringp id) (not (equal id ""))
+                                                  (stringp label))
+                                        collect (cons label id)))))))
+  "Content and source evidence of a user or assistant message.
+Source-less optimistic user echoes use the same content boundary."
+  content source-kind source-name references)
+
+(defun dsh-protocol-attachment-data--from-alist (value)
+  "Return the encoded bytes in a session/attachment response VALUE."
+  (dsh-protocol--field 'data value))
+
+(defun dsh-protocol-record-event--from-alist (record)
+  "Return the durable event carried by history RECORD."
+  (dsh-protocol--field 'event record))
+
+(cl-defstruct (dsh-protocol-turn-step-event
+               (:constructor dsh-protocol-turn-step-event--from-alist
+                             (event &aux
+                                    (kind (dsh-protocol--field 'type event))
+                                    (data (dsh-protocol--field 'data event))
+                                    (turn (dsh-protocol--field 'turn data))
+                                    (step (dsh-protocol--field 'step data))
+                                    (stream (dsh-protocol--assistant-records
+                                             (dsh-protocol--field 'stream data))))))
+  "Turn/step position and any uncommitted assistant stream in an event."
+  kind turn step stream)
+
+(defun dsh-protocol-input-prompt--from-alist (entry)
+  "Return a recallable user prompt in history ENTRY, or nil.
+Only author text without attachments belongs in input history."
+  (let* ((event (dsh-protocol-record-event--from-alist entry))
+         (message (dsh-protocol-message--from-alist event))
+         (blocks (dsh-protocol-message-content message))
+         (source (dsh-protocol-message-source-kind message)))
+    (when (and (equal (dsh-protocol-event-kind--from-alist event) "user/message")
+               (or (null source) (equal source "user"))
+               (cl-every (lambda (block)
+                           (equal (dsh-protocol-content-block-kind block) "text"))
+                         blocks))
+      (mapconcat #'identity
+                 (delq nil (mapcar #'dsh-protocol-content-block-text blocks))
+                 "\n"))))
+
+(defun dsh-protocol-request-model--from-alist (event &optional header-p)
+  "Decode EVENT's model selection, or nil when its config is absent.
+HEADER-P selects the request/header envelope instead of request/context."
+  (let* ((data (dsh-protocol--field "data" event))
+         (config (if header-p
+                     (dsh-protocol--field
+                      "config" (dsh-protocol--field "header" data))
+                   data)))
+    (when config
+      (dsh-protocol-model-selection--from-alist config))))
+
+(defun dsh-protocol--usage-number (value)
+  "Normalize a numeric usage VALUE, preserving missing values."
+  (cond ((numberp value) value)
+        ((stringp value) (string-to-number value))))
+
+(defun dsh-protocol-message-usage--from-alist (value &optional event-p)
+  "Decode VALUE into an input/output/cache-read/cache-write/cost list.
+EVENT-P selects an event envelope rather than a raw usage object."
+  (let ((usage (if event-p
+                   (dsh-protocol--field
+                    "usage" (dsh-protocol--field "data" value))
+                 value)))
+    (list
+     (or (dsh-protocol--usage-number (dsh-protocol--field "inputTokens" usage))
+         (dsh-protocol--usage-number (dsh-protocol--field "input" usage)) 0)
+     (or (dsh-protocol--usage-number (dsh-protocol--field "outputTokens" usage))
+         (dsh-protocol--usage-number (dsh-protocol--field "output" usage)) 0)
+     (or (dsh-protocol--usage-number (dsh-protocol--field "cacheReadTokens" usage))
+         (dsh-protocol--usage-number (dsh-protocol--field "cacheRead" usage)) 0)
+     (or (dsh-protocol--usage-number (dsh-protocol--field "cacheWriteTokens" usage))
+         (dsh-protocol--usage-number (dsh-protocol--field "cacheWrite" usage)) 0)
+     (or (dsh-protocol--usage-number (dsh-protocol--field "cost" usage)) 0.0))))
+
+(defun dsh-protocol-todos--from-alist (args-raw)
+  "Parse a `todo_write' ARGS-RAW JSON string into an ordered list of
+\(\"content\" . \"status\") cells.  Empty/invalid content is dropped and a
+missing or unknown status defaults to \"pending\".  Returns nil on any error."
+  (let (result)
+    (when (and args-raw (stringp args-raw) (not (string-empty-p args-raw)))
+      (let* ((parsed (condition-case nil (json-read-from-string args-raw) (error nil)))
+             (todos (and (listp parsed) (dsh-protocol--field "todos" parsed))))
+        (dolist (cell (append todos nil))
+          (when (consp cell)
+            (let ((content (dsh-protocol--field "content" cell))
+                  (status (dsh-protocol--field "status" cell)))
+              (when (and (stringp content) (not (string-empty-p content)))
+                (push (cons content
+                            (if (member status '("pending" "in_progress" "completed"))
+                                status "pending"))
+                      result)))))))
+    (nreverse result)))
+
+(defun dsh-protocol-read-lines--from-alist (meta offset)
+  "Narrow META's `lines' to a list of (NUMBER . TEXT) cells, or nil.
+META is the settled `tool/result' metadata alist.  The payload is validated
+as a whole (web `readMeta'), so a malformed one falls back to the generic
+card instead of printing a half-read file: `lines' must be an array whose
+NUMBERs are strictly increasing from the 1-based OFFSET through
+`totalLines', each with a string TEXT."
+  (when (listp meta)
+    (let ((raw (dsh-protocol--field "lines" meta))
+          (total (dsh-protocol--field "totalLines" meta)))
+      (when (and (vectorp raw) (integerp total) (>= total 0)
+                 (integerp offset) (>= offset 1))
+        (catch 'bad
+          (let ((previous (1- offset)) (out '()))
+            (dotimes (i (length raw))
+              (let ((cell (aref raw i)))
+                (unless (listp cell) (throw 'bad nil))
+                (let ((number (dsh-protocol--field "number" cell))
+                      (text (dsh-protocol--field "text" cell)))
+                  (unless (and (integerp number) (>= number 1)
+                               (> number previous) (<= number total)
+                               (stringp text))
+                    (throw 'bad nil))
+                  (setq previous number)
+                  (push (cons number text) out))))
+            (nreverse out)))))))
+
+(defun dsh-protocol-intended-diff--from-alist (name args-raw)
+  "Return the hunk NAME/ARGS-RAW intend as (PATH OLD-TEXT NEW-TEXT), or nil.
+Mirrors dsh web's `intendedDiff': `write' contributes a whole-file creation
+(OLD-TEXT nil) from its `content', `edit' the `old_string' → `new_string'
+replacement (an empty old string means insertion, so OLD-TEXT is nil).
+Returns nil when the arguments are not a usable file mutation."
+  (let ((args (condition-case nil (json-read-from-string args-raw) (error nil))))
+    (when (listp args)
+      (let ((path (dsh-protocol--field "file_path" args)))
+        (when (and (stringp path) (not (string-empty-p (string-trim path))))
+          (pcase name
+            ("write"
+             (let ((content (dsh-protocol--field "content" args)))
+               (when (stringp content) (list path nil content))))
+            ("edit"
+             (let ((old (dsh-protocol--field "old_string" args))
+                   (new (dsh-protocol--field "new_string" args)))
+               (when (and (stringp old) (stringp new))
+                 (list path (unless (string-empty-p old) old) new))))))))))
+
+(defun dsh-protocol-applied-diffs--from-alist (meta)
+  "Return META's applied `diffs' as (PATH OLD-TEXT NEW-TEXT) hunks, or nil.
+Mirrors dsh web's `narrowDiffs': any malformed hunk invalidates the whole
+payload, and an empty array is no hunk list (the caller then keeps the
+argument-derived diff for a `write' and the generic ioCard for an `edit')."
+  (let ((raw (and (listp meta) (dsh-protocol--field "diffs" meta))))
+    (when (and (vectorp raw) (> (length raw) 0))
+      (catch 'bad
+        (let (out)
+          (dotimes (i (length raw))
+            (let ((hunk (aref raw i)))
+              (unless (listp hunk) (throw 'bad nil))
+              (let ((path (dsh-protocol--field "path" hunk))
+                    (old (dsh-protocol--field "oldText" hunk))
+                    (new (dsh-protocol--field "newText" hunk)))
+                (unless (and (stringp path)
+                             (or (null old) (stringp old))
+                             (stringp new))
+                  (throw 'bad nil))
+                (push (list path old new) out))))
+          (nreverse out))))))
+
+(defun dsh-protocol-ask-questions--from-alist (args-raw)
+  "Decode an `ask_user_question' call's ARGS-RAW into question structs.
+Returns the questions in their offered order, or nil when the arguments name
+no usable question — a missing `questions' array, a question without text, or
+malformed JSON — so the caller keeps the generic ioCard.  The protocol module
+owns both argument spellings of the multi-select flag and drops a malformed
+element instead of signalling."
+  (let ((parsed (dsh-protocol--tool-json args-raw)))
+    (when parsed
+      (delq nil
+            (mapcar
+             (lambda (item)
+               (let ((question (dsh-protocol-question--from-alist item)))
+                 (when (and (dsh-protocol-question-p question)
+                            (let ((text (dsh-protocol-question-text question)))
+                              (and (stringp text)
+                                   (not (string-empty-p text)))))
+                   question)))
+             (dsh-protocol--objects
+              (dsh-protocol--field "questions" parsed)))))))
+
+(defun dsh-protocol-ask-answers--from-alist (text)
+  "Decode an `ask_user_question' result TEXT into (ID SELECTED CUSTOM) cells.
+SELECTED is the list of labels the user chose; CUSTOM is the free-text answer,
+or nil when none was typed.  Returns nil when TEXT is not the tool's answer
+document — an error message or an empty result — so the card renders its
+questions unanswered."
+  (let* ((parsed (dsh-protocol--tool-json text))
+         (answers (and parsed (dsh-protocol--objects
+                               (dsh-protocol--field "answers" parsed)))))
+    (when answers
+      (mapcar
+       (lambda (answer)
+         (list (dsh-protocol--field "id" answer)
+               (delq nil
+                     (mapcar (lambda (label) (and (stringp label) label))
+                             (dsh-protocol--list
+                              (dsh-protocol--field "selected" answer))))
+               (let ((custom (dsh-protocol--field "custom" answer)))
+                 (and (stringp custom)
+                      (not (string-empty-p custom))
+                      custom))))
+       answers))))
+
+(defun dsh-protocol-ask-pending--from-alist (text)
+  "Whether ask result TEXT is the timed tool's pending payload.
+dsh 0.2.0's timed `ask_user_question' returns `{pending:true, callId,
+message}' when the foreground window expired before an answer batch arrived;
+the questions stay answerable, so this is not an empty result and the card
+must say so.  Mirrors the host's own `isPendingResult'."
+  (let ((parsed (and (stringp text) (dsh-protocol--tool-json text))))
+    (and (listp parsed)
+         (eq t (dsh-protocol--boolean
+                (dsh-protocol--field "pending" parsed))))))
+
+(defun dsh-protocol-goal-result--from-alist (text)
+  "Decode goal tool result TEXT into (GOAL . CLEARED-P), or nil.
+The three tools answer with the GoalView in `goal' plus the process-local
+`activation' beside it (see dsh-tool-goal), or `{goal: null}' after a clear.
+GOAL is a `dsh-protocol-goal' decoded by the protocol module, CLEARED-P marks
+the empty answer, and an unrecognized document yields nil so the caller keeps
+the generic ioCard."
+  (when (and (stringp text) (not (string-empty-p (string-trim text))))
+    (let ((parsed (condition-case nil
+                      (json-read-from-string (string-trim text))
+                    (error nil))))
+      (when-let* ((cell (and (listp parsed) (assoc 'goal parsed))))
+        (if (null (cdr cell))
+            (cons nil t)
+          (when-let* ((goal (dsh-protocol-goal-tool--from-alist parsed)))
+            (cons goal nil)))))))
+
+(defun dsh-protocol--tool-json (text)
+  "Decode TEXT as one JSON document, or return nil.
+Nil for a non-string, an empty document, or anything `json-read-from-string'
+rejects: the ask card declines instead of signalling on malformed wire data,
+so its caller keeps the generic card."
+  (when (and (stringp text) (not (string-empty-p (string-trim text))))
+    (let ((parsed (condition-case nil
+                      (json-read-from-string (string-trim text))
+                    (error nil))))
+      (and (listp parsed) parsed))))
+
+(cl-defstruct (dsh-protocol-read-file
+               (:constructor dsh-protocol-read-file--from-alist
+                             (args-raw meta &aux
+                                       (args (dsh-protocol--tool-json args-raw))
+                                       (path (dsh-protocol--field "file_path" args))
+                                       (offset (dsh-protocol--field "offset" meta))
+                                       (total (dsh-protocol--field "totalLines" meta))
+                                       (language (dsh-protocol--field "lang" meta))
+                                       (lines (dsh-protocol-read-lines--from-alist
+                                               meta offset)))))
+  "Decoded read arguments and numbered result lines."
+  path offset total language lines)
+
+(cl-defstruct (dsh-protocol-tool-arguments
+               (:constructor dsh-protocol--make-tool-arguments))
+  "Tool argument facts; OBJECT is retained only for generic JSON display."
+  object command summary paths objective action)
+
+(defun dsh-protocol-tool-arguments--from-alist (text &optional name variant)
+  "Decode tool argument TEXT, selecting summary fields for NAME and VARIANT."
+  (let* ((object (dsh-protocol--tool-json text))
+         (priorities '(("bash" . ("description" "command"))
+                       ("read" . ("path" "file_path" "url"))
+                       ("search" . ("query" "pattern" "url"))
+                       ("write" . ("path" "file_path"))
+                       ("edit" . ("path" "file_path"))
+                       ("code" . ("description"))
+                       ("job_output" . ("job_id"))
+                       ("job_kill" . ("job_id"))
+                       ("others")))
+         (keys (cdr (or (assoc name priorities) (assoc variant priorities))))
+         (summary
+          (or (cl-loop for key in keys
+                       for value = (dsh-protocol--field key object)
+                       when (and (stringp value) (not (string-empty-p value)))
+                       return value)
+              (cl-loop for pair in object
+                       for value = (cdr pair)
+                       when (and (stringp value) (not (string-empty-p value)))
+                       return value))))
+    (dsh-protocol--make-tool-arguments
+     :object object
+     :command (or (dsh-protocol--field "command" object)
+                  (dsh-protocol--field "code" object))
+     :summary summary
+     :paths (cl-loop for file in (dsh-protocol--list
+                                  (dsh-protocol--field "files" object))
+                     for path = (dsh-protocol--field "path" file)
+                     when (and (stringp path) (not (string-empty-p path)))
+                     collect path)
+     :objective (dsh-protocol--field "objective" object)
+     :action (dsh-protocol--field "action" object))))
+
+(defun dsh-protocol-rpc-result--from-alist (response &optional direct-p)
+  "Decode RESPONSE into (OK-P . VALUE-OR-ERROR).
+DIRECT-P selects the upload route's bare result.  Ordinary RPC failures
+prefer their result error, then a provider message or error at the root."
+  (let* ((result (if direct-p response (dsh-protocol--field 'result response)))
+         (ok (dsh-protocol--boolean (dsh-protocol--field 'ok result))))
+    (if ok
+        (cons t (dsh-protocol--field 'value result))
+      (cons nil (or (dsh-protocol--field 'error result)
+                    (unless direct-p
+                      (or (dsh-protocol--field 'message response)
+                          (dsh-protocol--field 'error response))))))))
+
+(defun dsh-protocol-error-message--from-alist (value)
+  "Return the message in an error object VALUE, if present."
+  (dsh-protocol--field 'message value))
+
+(defun dsh-protocol-workspace-order--from-alist (value)
+  "Return the authoritative workspace order in RPC VALUE as a list."
+  (dsh-protocol--list (dsh-protocol--field 'workspaceIds value)))
+
+(defun dsh-protocol-job-kill--from-alist (value)
+  "Return the server's job kill outcome in VALUE, if present."
+  (dsh-protocol--field 'outcome value))
+
+(defun dsh-protocol-session-uri--from-string (payload)
+  "Return the session id the `dsh-session:' URI PAYLOAD encodes, or nil.
+The host writes base64url(JSON.stringify(ID)) into a mention (see the
+harness's `encodeSessionReferenceUri'), so the id every RPC expects is the
+decoded JSON string; treating PAYLOAD itself as the identity asks the host
+for a session named after the encoding and earns `session/not-found'.  Nil
+when PAYLOAD is no decodable session reference."
+  (when (and (stringp payload)
+             (string-match-p "\\`[A-Za-z0-9_-]+\\'" payload))
+    (let* ((b64 (replace-regexp-in-string
+                 "-" "+" (replace-regexp-in-string "_" "/" payload t t) t t))
+           (pad (mod (- 4 (mod (length b64) 4)) 4))
+           (decoded (ignore-errors
+                      (base64-decode-string (concat b64 (make-string pad ?=))))))
+      (when (stringp decoded)
+        ;; JSON numbers/escapes use match data; preserve the mention scan.
+        (let ((id (ignore-errors
+                    (save-match-data
+                      (json-read-from-string
+                       (if (multibyte-string-p decoded)
+                           decoded
+                         (decode-coding-string decoded 'utf-8)))))))
+          (and (stringp id) id))))))
 
 (provide 'dsh-emacs-protocol)
 

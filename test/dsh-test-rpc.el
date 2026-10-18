@@ -33,7 +33,7 @@
   :tags '(dsh-unit)
   (let* ((response (json-read-from-string
                     "{\"result\":{\"ok\":false,\"error\":{\"code\":\"bad-request\"}}}"))
-         (unwrapped (dsh-emacs--unwrap-response response)))
+         (unwrapped (dsh-protocol-rpc-result--from-alist response)))
     (ert-info ((format "%s" "rpc-false-result-is-error"))
       (should (and (not (car unwrapped))
                    (equal (cdr (assq 'code (cdr unwrapped))) "bad-request"))))))
@@ -81,7 +81,7 @@
   (ert-info ((format "%s" "json-array-and-symbol-keys-supported"))
     (should (and (equal '(a b) (dsh-emacs--sequence-list [a b]))
                  (equal "assistant/message"
-                        (dsh-emacs-render--aget "type"
+                        (dsh-protocol--field "type"
                                                 '((type . "assistant/message"))))))))
 
 (ert-deftest dsh-emacs-test-rpc-client-time-zone-is-iana ()

@@ -173,25 +173,15 @@ inputTokens / outputTokens / cacheReadTokens (plus cacheWriteTokens and
 cost when the server reports them).  The legacy short keys
 (input/output/cacheRead/cacheWrite/cost) are also tolerated.  Returns a
 zero usage when USAGE-ALIST is nil or carries no token numbers."
-  (dsh-emacs-make-usage
-   (or (dsh-emacs-usage-get usage-alist "inputTokens")
-       (dsh-emacs-usage-get usage-alist "input") 0)
-   (or (dsh-emacs-usage-get usage-alist "outputTokens")
-       (dsh-emacs-usage-get usage-alist "output") 0)
-   (or (dsh-emacs-usage-get usage-alist "cacheReadTokens")
-       (dsh-emacs-usage-get usage-alist "cacheRead") 0)
-   (or (dsh-emacs-usage-get usage-alist "cacheWriteTokens")
-       (dsh-emacs-usage-get usage-alist "cacheWrite") 0)
-   (or (dsh-emacs-usage-get usage-alist "cost") 0.0)))
+  (apply #'dsh-emacs-make-usage
+         (dsh-protocol-message-usage--from-alist usage-alist)))
 
 (defun dsh-emacs-usage-from-event (event-alist)
   "From an `assistant/message' EVENT-ALIST, return its usage struct.
 Real dsh events carry the usage object at `data.usage'; an event without
 one yields a zero struct."
-  (dsh-emacs-usage-from-message
-   (dsh-emacs--alist-state
-    (dsh-emacs--alist-state event-alist "data")
-    "usage")))
+  (apply #'dsh-emacs-make-usage
+         (dsh-protocol-message-usage--from-alist event-alist t)))
 
 (defun dsh-emacs-ctx-face (pct)
   "Return the appropriate mode-line context face for PCT."
@@ -200,39 +190,6 @@ one yields a zero struct."
    ((< pct 50.0) 'dsh-emacs-modeline-ctx-ok-face)
    ((< pct 80.0) 'dsh-emacs-modeline-ctx-warn-face)
    (t 'dsh-emacs-modeline-ctx-crit-face)))
-
-;;; ---------------------------------------------------------------------------
-;;; alist helpers (not dsh-emacs.el's internal dsh-emacs--alist-get)
-;;; ---------------------------------------------------------------------------
-
-(defun dsh-emacs--alist-state (alist key)
-  "Get KEY's value from ALIST, or nil.
-Tolerates both string and symbol keys: real dsh payloads decoded by
-`json-read' are symbol-keyed, while render call sites and tests use JSON
-field names (strings).  ALIST may also be a vector of (KEY . VALUE) cells."
-  (let ((alternate (if (stringp key) (intern key) (symbol-name key))))
-    (cond
-     ((listp alist)
-      (or (cdr (assoc key alist))
-          (cdr (assoc alternate alist))))
-     ((vectorp alist)
-      (catch 'found
-        (dotimes (i (length alist))
-          (let ((pair (aref alist i)))
-            (when (and (consp pair)
-                       (or (equal (car pair) key)
-                           (equal (car pair) alternate)))
-              (throw 'found (cdr pair))))))))))
-
-(defun dsh-emacs-usage-get (usage-alist key)
-  "Get numeric KEY's value from a usage alist (tolerates strings / numbers)."
-  (let ((raw (dsh-emacs--alist-state usage-alist key)))
-    (cond
-     ((null raw) nil)
-     ((numberp raw) raw)
-     ((stringp raw)
-      (condition-case nil (string-to-number raw) (error nil)))
-     (t nil))))
 
 (defun dsh-emacs-subagent-token-total (usage)
   "Total decoded cumulative USAGE, including both cache components."

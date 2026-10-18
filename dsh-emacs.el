@@ -469,23 +469,6 @@ value is an empty hash table (an empty Elisp list would encode as JSON
 `null' and fail boundary validation)."
   (list (cons '_request (make-hash-table))))
 
-(defun dsh-emacs--unwrap-response (response)
-  "Unwrap a DSH RPC RESPONSE, returning (ok-p . value-or-error).
-RESPONSE is the parsed JSON object from the server."
-  (let* ((result (cdr (assq 'result response)))
-         (ok (cdr (assq 'ok result))))
-    ;; `json-read' represents JSON false as :json-false, which is non-nil    ;; in Elisp.  Test the boolean explicitly instead of using `if ok'.
-    (if (and ok (not (eq ok :json-false)))
-        (cons t (cdr (assq 'value result)))
-      ;; Not an ok envelope: prefer the envelope's error, then a provider
-      ;; error body that leaked through the HTTP response (no `result' key,
-      ;; e.g. a model-studio quota rejection) so callers show the real
-      ;; reason instead of nil.
-      (cons nil (or (cdr (assq 'error result))
-                    (cdr (assq 'message response))
-                    (cdr (assq 'error response))
-                    nil)))))
-
 (defun dsh-emacs--decode-response-body ()
   "Decode the current HTTP response body as UTF-8 in place.
 `url-retrieve' may leave an application/json response in a unibyte buffer
@@ -530,7 +513,7 @@ methods).  Returns (ok-p . value) or nil."
                 (delete-region (point) (point-min))
                 (dsh-emacs--decode-response-body)
                 (goto-char (point-min))
-                (dsh-emacs--unwrap-response (dsh-protocol-read-json)))
+                (dsh-protocol-rpc-result--from-alist (dsh-protocol-read-json)))
             (kill-buffer buf)))
       (error
        ;; A 401 while we sent a cookie means the cached cookie is stale (an
@@ -654,7 +637,7 @@ content — see `dsh-emacs--wrap-request'."
    (encode-coding-string (dsh-emacs--wrap-request method params) 'utf-8)
    (lambda (response)
      (let ((unwrapped (and response
-                           (dsh-emacs--unwrap-response response))))
+                           (dsh-protocol-rpc-result--from-alist response))))
        (funcall callback (car unwrapped) (cdr unwrapped))))))
 
 ;;; ---------------------------------------------------------------------------
@@ -865,10 +848,7 @@ known value."
                                     ;; `dsh-protocol-session' struct so field
                                     ;; access is centralized (protoco.el).
                                     (setq dsh-emacs--sessions
-                                          (mapcar
-                                           #'dsh-protocol-session--from-alist
-                                           (dsh-emacs--sequence-list
-                                            (cdr (assq 'items value)))))
+                                          (dsh-protocol-session-list--from-alist value))
                                     ;; Title/workspace may have drifted
                                     ;; (auto summary/rename/session move):
                                     ;; re-sync all live chat buffers' name and
@@ -1479,7 +1459,6 @@ always reached through advice."
     (advice-add 'kill-region :around #'dsh-emacs--composer-kill-region)
     (advice-add 'delete-forward-char :around #'dsh-emacs--composer-delete-forward)))
 
-
 ;;;###autoload
 (defun dsh-emacs-open-session (session-id &optional address other-window)
   "Open SESSION-ID, optionally with subagent ADDRESS in OTHER-WINDOW.
@@ -1997,10 +1976,7 @@ preset, context snapshot, title and workspace in one round trip."
     (dsh-emacs--rpc-async "session/list" (dsh-emacs--session-list-args)
                           (lambda (ok value)
                             (when ok
-                              (let ((items (mapcar
-                                            #'dsh-protocol-session--from-alist
-                                            (dsh-emacs--sequence-list
-                                             (cdr (assq 'items value))))))
+                              (let ((items (dsh-protocol-session-list--from-alist value)))
                                 ;; A brand-new session on first open is missing
                                 ;; from the cache: refresh the whole cache so
                                 ;; the buffer name (`dsh: <title>') and the
@@ -2188,8 +2164,7 @@ repaints)."
                         (lambda (ok value)
                           (if ok
                               (progn
-                                (let* ((ids (dsh-emacs--sequence-list
-                                             (cdr (assq 'workspaceIds value))))
+                                (let* ((ids (dsh-protocol-workspace-order--from-alist value))
                                        (ids-by-local
                                         (delq nil
                                               (mapcar
@@ -2252,7 +2227,6 @@ repaints)."
     (define-key map [drag-n-drop] #'dsh-emacs--dnd-attach)
     map)
   "Keymap for chat mode.")
-
 
 (defun dsh-emacs--chat-buffer-clear-modified ()
   "`kill-buffer-query-functions' hook: drop the modified flag so killing a
@@ -2893,7 +2867,6 @@ when an asynchronous completion arrives for an older draft."
             dsh-emacs--input-history-pending nil)
       (goto-char dsh-emacs--input-marker))))
 
-
 (defun dsh-emacs--valid-iana-time-zone-p (zone)
   "Return non-nil when ZONE names an installed IANA timezone."
   (and (stringp zone)
@@ -2975,34 +2948,11 @@ attachment-bearing prompt."
     (let ((own (gethash session-id dsh-emacs--input-history-by-session))
           (missing nil))
       (dolist (entry (dsh-emacs--sequence-list events))
-        (let* ((ev (and entry (dsh-emacs--alist-state entry "event")))
-               (data (and ev (dsh-emacs--alist-state ev "data")))
-               (blocks (and data
-                            (append (dsh-emacs--alist-state data "content")
-                                    nil))))
-          (when (and data
-                     (string= (dsh-emacs--alist-state ev "type")
-                              "user/message")
-                     (dsh-emacs-render--user-authored-p ev)
-                     ;; Text-only, or it is not recallable.
-                     (cl-every (lambda (block)
-                                 (equal (dsh-emacs--alist-state block "type")
-                                        "text"))
-                               blocks))
-            (let ((text (mapconcat
-                         #'identity
-                         (delq nil
-                               (mapcar
-                                (lambda (block)
-                                  (and (equal (dsh-emacs--alist-state block "type")
-                                              "text")
-                                       (dsh-emacs--alist-state block "text")))
-                                blocks))
-                         "\n")))
-              (when (and (not (string-empty-p text))
-                         (not (member text own))
-                         (not (member text missing)))
-                (push text missing))))))
+        (let ((text (dsh-protocol-input-prompt--from-alist entry)))
+          (when (and text (not (string-empty-p text))
+                     (not (member text own))
+                     (not (member text missing)))
+            (push text missing))))
       (setq own (if older (append own missing) (append missing own)))
       (when (> (length own) dsh-emacs-input-history-length)
         (setcdr (nthcdr (1- dsh-emacs-input-history-length) own) nil))
@@ -3059,7 +3009,7 @@ is not recorded for `M-p' recall: every submit path skips it."
              ;; unless a newer draft has taken its place.
              (dsh-emacs--restore-draft message attachments)
              (message "File upload failed: %s"
-                      (or (and (listp err) (cdr (assq 'message err)))
+                      (or (dsh-protocol-error-message--from-alist err)
                           err "transport error"))))))
     (dsh-emacs--submit-dispatch
      message :parts (delq nil (mapcar #'dsh-emacs--attachment-part attachments))
@@ -3496,15 +3446,12 @@ errors, or nil for transport failures already reported by HTTP."
              ;; exceptions into a second, failed upload completion.
              (setq callback-started t)
              ;; The route has its own {ok, value|error} discriminant.
-             (let ((ok (and (consp body) (cdr (assq 'ok body)))))
-               (if (and ok (not (eq ok :json-false)))
-                   (funcall callback
-                            t
-                            (dsh-protocol-file-receipt--from-alist
-                             (cdr (assq 'value body)))
-                            nil)
-                 (funcall callback nil nil
-                          (and (consp body) (cdr (assq 'error body)))))))))
+             (pcase-let ((`(,ok . ,value)
+                          (dsh-protocol-rpc-result--from-alist body t)))
+               (if ok
+                   (funcall callback t
+                            (dsh-protocol-file-receipt--from-alist value) nil)
+                 (funcall callback nil nil value))))))
       (error
        (if callback-started
            (signal (car err) (cdr err))

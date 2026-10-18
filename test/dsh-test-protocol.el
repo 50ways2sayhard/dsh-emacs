@@ -4,6 +4,48 @@
 
 (require 'dsh-test-support)
 
+(ert-deftest dsh-emacs-test-protocol-session-title-event ()
+  :tags '(dsh-unit)
+  (dolist (wire '(((type . "session/title") (data (title . "Renamed")))
+                  (("type" . "session/title")
+                   ("data" ("title" . "Renamed")))))
+    (should (equal "Renamed"
+                   (dsh-protocol-session-title-title
+                    (dsh-protocol-session-title--from-alist wire)))))
+  ;; Absence is distinct from an unrelated event: callers still record it.
+  (let ((view (dsh-protocol-session-title--from-alist
+               '((type . "session/title")))))
+    (should (dsh-protocol-session-title-p view))
+    (should-not (dsh-protocol-session-title-title view)))
+  (should-not (dsh-protocol-session-title--from-alist
+               '((type . "assistant/message") (data (title . "Ignore"))))))
+
+(ert-deftest dsh-emacs-test-protocol-deliverables-event ()
+  :tags '(dsh-unit)
+  (dolist (wire
+           '(((seq . 17) (data (turn . 4)
+                               (files . [((path . "a.md") (description . "old"))
+                                         ((path . "a.md") (description . "new"))
+                                         ((path . "b.txt") (description . ""))
+                                         ((path . "c.txt") (description . 42))
+                                         ((path . "") (description . "drop"))
+                                         ((path . 42)) nil "invalid"])))
+             (("seq" . 17) ("data" ("turn" . 4)
+                            ("files" . [(("path" . "a.md") ("description" . "old"))
+                                        (("path" . "a.md") ("description" . "new"))
+                                        (("path" . "b.txt"))
+                                        (("path" . "c.txt"))])))))
+    (let ((view (dsh-protocol-deliverables--from-alist wire)))
+      (should (= 17 (dsh-protocol-deliverables-seq view)))
+      (should (= 4 (dsh-protocol-deliverables-turn view)))
+      (should (equal '(("a.md" . "old") ("a.md" . "new")
+                       ("b.txt") ("c.txt"))
+                     (dsh-protocol-deliverables-files view)))))
+  (let ((view (dsh-protocol-deliverables--from-alist '((seq . 19)))))
+    (should (= 19 (dsh-protocol-deliverables-seq view)))
+    (should-not (dsh-protocol-deliverables-turn view))
+    (should-not (dsh-protocol-deliverables-files view))))
+
 (ert-deftest dsh-emacs-test-protocol-command-event-fields ()
   :tags '(dsh-unit)
   (dolist (keys '((type data commandId name kind text)
@@ -666,6 +708,88 @@
                    (string= (dsh-protocol-model-selection-model sel) "deepseek-chat")
                    (string= (dsh-protocol-model-selection-reasoning-effort sel)
                             "high"))))))
+
+(ert-deftest dsh-emacs-test-protocol-message-envelope-and-attachments ()
+  :tags '(dsh-unit)
+  (let* ((event '((data . ((content . [((type . "text") (text . "user"))])
+                           (message . ((content . [((type . "text") (text . "assistant"))])))
+                           (source . ((kind . "session-reference")
+                                      (references . [((sessionId . "s1") (label . "one"))])))))))
+         (user (dsh-protocol-message--from-alist event))
+         (assistant (dsh-protocol-message--from-alist event :assistant t))
+         (image (dsh-protocol-content-block--from-alist
+                 '((type . "image") (name . "inline")
+                   (attachment . ((name . "nested") (attachmentId . "img")
+                                  (mediaType . "image/png")))))))
+    (should (equal (dsh-protocol-content-block-text
+                    (car (dsh-protocol-message-content user))) "user"))
+    (should (equal (dsh-protocol-content-block-text
+                    (car (dsh-protocol-message-content assistant))) "assistant"))
+    (should (equal (dsh-protocol-message-references user) '(("one" . "s1"))))
+    (should (equal (dsh-protocol-content-block-name image) "inline"))
+    (should (equal (dsh-protocol-content-block-attachment-id image) "img"))
+    (should (equal (dsh-protocol-content-block-media-type image) "image/png"))))
+
+(ert-deftest dsh-emacs-test-protocol-request-and-usage-envelopes ()
+  :tags '(dsh-unit)
+  (let ((config (dsh-protocol-request-model--from-alist
+                 '(("data" . (("header" . (("config" . (("model" . "m")
+                                                        ("provider" . "p")
+                                                        ("reasoningEffort" . "high")))))))) t)))
+    (should (equal (dsh-protocol-model-selection-model config) "m"))
+    (should (equal (dsh-protocol-model-selection-provider config) "p"))
+    (should (equal (dsh-protocol-model-selection-reasoning-effort config) "high")))
+  (should-not (dsh-protocol-request-model--from-alist '((data . ((other . t)))) t))
+  (should (equal (dsh-protocol-message-usage--from-alist
+                  '((data . ((usage . ((inputTokens . "11") (input . 99)
+                                       (output . 7) (cacheReadTokens . 3)
+                                       (cacheWrite . "2") (cost . "0.25")))))) t)
+                 '(11 7 3 2 0.25)))
+  (should (equal (dsh-protocol-message-usage--from-alist nil t) '(0 0 0 0 0.0))))
+
+(ert-deftest dsh-emacs-test-protocol-tool-arguments-precedence-and-fallback ()
+  :tags '(dsh-unit)
+  (let ((args (dsh-protocol-tool-arguments--from-alist
+               "{\"description\":\"wrong\",\"job_id\":\"job-7\",\"command\":\"pwd\"}"
+               "job_output" "bash")))
+    (should (equal (dsh-protocol-tool-arguments-summary args) "job-7"))
+    (should (equal (dsh-protocol-tool-arguments-command args) "pwd")))
+  (let ((args (dsh-protocol-tool-arguments--from-alist
+               "{\"files\":[{\"path\":\"a\"},{\"path\":\"\"},{\"path\":\"b\"}]}" "present")))
+    (should (equal (dsh-protocol-tool-arguments-paths args) '("a" "b"))))
+  (should-not (dsh-protocol-tool-arguments-object
+               (dsh-protocol-tool-arguments--from-alist "{broken"))))
+
+(ert-deftest dsh-emacs-test-protocol-rpc-and-upload-envelopes ()
+  :tags '(dsh-unit)
+  (should (equal (dsh-protocol-rpc-result--from-alist
+                  '((result . ((ok . t) (value . 42))))) '(t . 42)))
+  (should (equal (dsh-protocol-rpc-result--from-alist
+                  '((result . ((ok . :json-false) (error . "inner")))
+                    (message . "outer"))) '(nil . "inner")))
+  (should (equal (dsh-protocol-rpc-result--from-alist
+                  '((message . "provider message") (error . "provider error")))
+                 '(nil . "provider message")))
+  (should (equal (dsh-protocol-rpc-result--from-alist
+                  '((ok . t) (value . "receipt")) t) '(t . "receipt")))
+  (should (equal (dsh-protocol-rpc-result--from-alist
+                  '((ok . :json-false) (error . "upload error")) t)
+                 '(nil . "upload error")))
+  (should (equal (dsh-protocol-rpc-result--from-alist
+                  '((message . "not an upload error")) t) '(nil))))
+
+(ert-deftest dsh-emacs-test-protocol-plan-json-boundary ()
+  :tags '(dsh-unit)
+  (let ((json-object-type 'hash-table)
+        (json-key-type 'string))
+    (should (equal (dsh-protocol-plan-document-text
+                    (dsh-protocol-plan-document--from-alist
+                     "{\"plan\":\"# Next\\nDo work\"}" t))
+                   "# Next\nDo work")))
+  (should-not (dsh-protocol-plan-document-text
+               (dsh-protocol-plan-document--from-alist "42" t)))
+  (should-error (dsh-protocol-plan-document--from-alist "{broken" t)
+                :type 'json-error))
 
 (provide 'dsh-test-protocol)
 ;;; dsh-test-protocol.el ends here

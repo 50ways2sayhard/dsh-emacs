@@ -461,8 +461,7 @@ the owning agent its completion notice; the roster converges through the
            (if ok
                (message "Stopping %s (%s)"
                         job-id
-                        (or (and (listp value)
-                                 (cdr (assq 'outcome value)))
+                        (or (dsh-protocol-job-kill--from-alist value)
                             "requested"))
              (message "Could not stop %s: %S" job-id value))))))))
 
