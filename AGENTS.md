@@ -4,10 +4,10 @@ Emacs client for the dsh server: chat UI, session/workspace management, RPC
 over HTTP with a WebSocket event stream. Entry file `dsh-emacs.el`; module
 ownership map in `docs/architecture.md`.
 
-- **Baseline: Emacs 27.1** (`;; Package-Requires: ((emacs "27.1"))` in every
+- **Baseline: Emacs 28.1** (`;; Package-Requires: ((emacs "28.1"))` in every
   file header). Do not silently raise it; a raise must update all headers,
   README, and CHANGELOG in the same change.
-- Do not use Emacs 28+/30+ APIs without a version guard or a local fallback.
+- Do not use Emacs 29+/30+ APIs without a version guard or a local fallback.
 
 ## Core principles
 
@@ -38,7 +38,7 @@ load silent, `git diff --check`, tree junk scan). Exit 0 only when everything
 passes; any FAIL is a blocker (see rule 6 below).
 
 **CI runs the same gate** on every push and pull request
-(`.github/workflows/ci.yml`) on Emacs 27.1 and a current stable release. A red
+(`.github/workflows/ci.yml`) on Emacs 28.1 and a current stable release. A red
 run is a blocker even when the local gate passed; fix it before merging.
 
 The manual loop, in order:

@@ -1,6 +1,6 @@
 ;;; dsh-test-markdown.el --- Markdown tests -*- lexical-binding: t; -*-
 
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 (require 'dsh-test-support)
 
@@ -319,12 +319,12 @@
           (ert-info ((format "%s" "markdown-highlight-reuses-mode-buffer"))
             (should (= setups 1))
             (should (memq 'font-lock-string-face
-                          (dsh-test--ensure-list (get-text-property 1 'face first))))
+                          (ensure-list (get-text-property 1 'face first))))
             (should (equal-including-properties
                      second (dsh-emacs-markdown--highlight-code "(foo)" "emacs-lisp")))
             (should (string= second "(foo)"))
             (should (not (memq 'font-lock-string-face
-                               (dsh-test--ensure-list (get-text-property 1 'face second)))))))
+                               (ensure-list (get-text-property 1 'face second)))))))
       (advice-remove 'emacs-lisp-mode count))))
 
 ;; Emacs draws adjacent characters whose `display' values are `eq' once, so

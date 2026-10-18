@@ -232,7 +232,7 @@ Height scales were global per character; face-width ratios persisted per
 buffer, with no font-change invalidation. Height probes measured a temporary
 buffer in the selected window without copying the destination's remapping.
 The cache now belongs to one table render, and all pixel paths use the target
-window/frame. Emacs 29+ measures height in an undisplayed buffer; the 27.1
+window/frame. Emacs 29+ measures height in an undisplayed buffer; the pre-29
 fallback preserves the window configuration. ASCII characters in mixed text
 skip height probes while variation selectors retain their correction.
 
@@ -327,7 +327,7 @@ ticks; it does not repeatedly rearm an already elapsed idle deadline.
   can flush before 50/100ms, and expensive callbacks can delay timers.
 - Verification covers syntax, checker self-tests, compilation, the full unit
   suite, silent clean load and repository hygiene. The real-server e2e path
-  is unchanged and was not exercised. Emacs 27.1 compatibility is retained
+  is unchanged and was not exercised. Emacs 28.1 compatibility is retained
   in the API choices; runtime measurements here use Emacs 31.1.50.
 
 ## Continuation: GUI event loop and viewport correction (037)

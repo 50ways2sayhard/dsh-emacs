@@ -4,7 +4,7 @@
 
 ;; Author: vritser
 ;; Version: 0.6.1
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 ;; URL: https://github.com/vritser/dsh-emacs
 ;; License: GPL-3.0-or-later
 ;; Keywords: ai, tools, convenience
@@ -917,8 +917,8 @@ resolves one for the CWD, see `dsh-emacs-new-session'."
 Prefers project.el (`project-current' / `project-root', built-in from
 Emacs 28 — this also reaches a user's `project-find-functions' finders
 such as projectile), then the VC root, then a `.git' directory walk
-(the Emacs 27.1 baseline has neither project.el nor its completion
-machinery).  Any failure in the chain yields nil (no detection)."
+(for directories project.el does not recognize).  Any failure in the
+chain yields nil (no detection)."
   (condition-case nil
       (let* ((dir (expand-file-name (or dir default-directory)))
              (root (or
@@ -1645,7 +1645,7 @@ METADATA is an alist of completion metadata (see `completion-metadata'),
 e.g. `display-sort-function' pinned to identity to stop a frontend from
 reordering the candidates.  Uses the Emacs 31 built-in when present and
 the equivalent table lambda otherwise; the built-in is Emacs 31-only,
-while the package baseline is 27.1."
+while the package baseline is 28.1."
   (if (fboundp 'completion-table-with-metadata)
       (completion-table-with-metadata collection metadata)
     (lambda (string pred action)

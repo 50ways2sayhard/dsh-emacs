@@ -1,5 +1,5 @@
 ;;; render-report.el --- Scoped render diagnostics -*- lexical-binding: t; -*-
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 ;; Usage: emacs -Q --batch -l scripts/render-report.el -f dsh-render-report-batch
 ;; This developer tool is not loaded by dsh-emacs.  Use interpreted sources:
 ;; primitive advice does not observe every byte/native-compiled instruction.

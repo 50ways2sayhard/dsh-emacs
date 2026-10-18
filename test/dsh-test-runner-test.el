@@ -1,5 +1,5 @@
 ;;; dsh-test-runner-test.el --- ERT runner contract tests -*- lexical-binding: t; -*-
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 ;;; Usage: emacs -Q --batch -l test/dsh-test-runner-test.el
 
 (require 'cl-lib)

@@ -185,8 +185,8 @@ The session cache supplies live activity and availability separately:
 
 The existing session list owns its child expansion and row identities; there
 is no separate tree mode or display timer. Xref's public marker stack is sufficient; a full
-`M-.` backend is not installed. On Emacs 27.1 the default return command is
-`xref-pop-marker-stack`; newer Emacs versions may use `xref-go-back`. Existing
+`M-.` backend is not installed. On Emacs 28.1 the default return command is
+`xref-pop-marker-stack`; Emacs 29+ may use `xref-go-back`. Existing
 user bindings are left intact.
 
 ## Metrics

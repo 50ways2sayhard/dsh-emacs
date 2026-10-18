@@ -1,6 +1,6 @@
 ;;; dsh-test-model-selection.el --- Model selection tests -*- lexical-binding: t; -*-
 
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 (require 'dsh-test-support)
 
@@ -448,7 +448,7 @@
 ;; --- Test 47h: the completion-table-with-metadata compatibility shim ---
 ;; Session/model pickers, ask multi-select and @ references all hand sort
 ;; metadata to the completion frontend through this table.  The built-in is
-;; Emacs 31-only, so the 27.1 baseline must take the local fallback branch
+;; Emacs 31-only, so the 28.1 baseline must take the local fallback branch
 ;; with identical behavior: answer metadata verbatim, complete normally for
 ;; every other ACTION.  Removing the built-in forces that branch, which
 ;; otherwise never runs on Emacs 31.

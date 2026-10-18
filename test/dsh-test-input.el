@@ -1,6 +1,6 @@
 ;;; dsh-test-input.el --- Input tests -*- lexical-binding: t; -*-
 
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 (require 'dsh-test-support)
 

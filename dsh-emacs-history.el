@@ -5,7 +5,7 @@
 ;; URL: https://github.com/vritser/dsh-emacs
 ;; Version: 0.6.1
 ;; License: GPL-3.0-or-later
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 ;;; Commentary:
 

@@ -1,6 +1,6 @@
 ;;; dsh-test.el --- Unit-suite loader and batch entry point -*- lexical-binding: t; -*-
 
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 ;;; Commentary:
 ;; Run all unit tests: emacs -Q --batch -l test/dsh-test.el

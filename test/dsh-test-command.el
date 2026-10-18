@@ -1,6 +1,6 @@
 ;;; dsh-test-command.el --- Command tests -*- lexical-binding: t; -*-
 
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 (require 'dsh-test-support)
 
@@ -485,7 +485,7 @@
                               (seq-every-p
                                (lambda (pos)
                                  (memq 'dsh-emacs-tool-pending-face
-                                       (dsh-test--ensure-list (get-text-property pos 'face))))
+                                       (ensure-list (get-text-property pos 'face))))
                                (number-sequence (car blk) (1- (cdr blk)))))))
             (ert-info ((format "%s" "command-running-tints-header"))
               (should tinted)))
@@ -500,7 +500,7 @@
                            (seq-every-p
                             (lambda (pos)
                               (memq 'dsh-emacs-tool-pending-face
-                                    (dsh-test--ensure-list (get-text-property pos 'face))))
+                                    (ensure-list (get-text-property pos 'face))))
                             (number-sequence (car blk) (1- (cdr blk)))))))))
       (setq dsh-emacs--command-spinners old-spinners)
       (kill-buffer buf))))
@@ -527,7 +527,7 @@
                              (seq-every-p
                               (lambda (pos)
                                 (memq 'dsh-emacs-tool-pending-face
-                                      (dsh-test--ensure-list (get-text-property pos 'face))))
+                                      (ensure-list (get-text-property pos 'face))))
                               (number-sequence (car blk) (1- (cdr blk))))))))))
       (setq dsh-emacs--command-spinners old-spinners)
       (kill-buffer buf))))

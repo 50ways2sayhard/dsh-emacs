@@ -4,7 +4,7 @@
 
 ;; Author: dsh-emacs contributors
 ;; Keywords: tools
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 ;;; Commentary:
 

@@ -10,6 +10,10 @@ minor) and stay undated until the release is cut.
 
 ### Breaking Changes
 
+- **Emacs 28.1 is now the minimum**: 27.1 support is removed. The code
+  already relied on 28.1 APIs (`setf` on `plist-get`, `ensure-list`),
+  and CI now runs the gate on 28.1 and a current stable release.
+  (rationale: postmortem/136)
 - **Remove inactive transcript options**: `dsh-emacs-group-consecutive-tools`
   and `dsh-emacs-assistant-divider` are removed without compatibility aliases.
   Neither affected the transcript: tool cards continue to fold independently,
@@ -25,9 +29,6 @@ minor) and stay undated until the release is cut.
   signals (for example while another minibuffer owns the prompt), the client
   now declines the question or rejects the approval instead of leaving the
   host waiting for an outcome.
-- **Keep the declared Emacs 27.1 baseline working**: the slash-command skill
-  gesture no longer calls Emacs 28's `ensure-list`, so skill completion works
-  on 27.1 again.
 
 ## 0.6.1 - 2026-10-18
 

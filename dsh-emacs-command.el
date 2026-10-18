@@ -5,7 +5,7 @@
 ;; Author: vritser
 ;; Version: 0.6.1
 ;; License: GPL-3.0-or-later
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 ;;; Commentary:
 
@@ -694,9 +694,7 @@ one gesture was chipped."
             (while (< start token-end)
               (let ((next (next-single-property-change
                            start 'face nil token-end))
-                    (faces (let ((face (get-text-property start 'face)))
-                             ;; Emacs 27.1 has no `ensure-list'.
-                             (if (listp face) face (list face)))))
+                    (faces (ensure-list (get-text-property start 'face))))
                 (unless (memq 'dsh-emacs-slash-skill-face faces)
                   (put-text-property
                    start next 'face

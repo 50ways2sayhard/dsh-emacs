@@ -4,7 +4,7 @@
 
 Use [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`)
 from Emacs: streaming replies, tool calls, workspace sessions, subagent chats,
-file attachments, and model selection. Requires **Emacs 27.1+**, with no
+file attachments, and model selection. Requires **Emacs 28.1+**, with no
 mandatory third-party Emacs packages.
 
 ![Chat buffer with streaming replies and tool calls](assets/chat.png)
@@ -181,7 +181,7 @@ for local or TRAMP configuration files.
 Follow [AGENTS.md](AGENTS.md), keep changes focused, and run
 `scripts/verify.sh` before pushing. It checks syntax, byte compilation, unit
 tests, clean loading, and repository hygiene. CI runs the same gate on Emacs
-27.1 and a current stable release. Optional
+28.1 and a current stable release. Optional
 [GUI tests](docs/architecture.md#gui-display-regression-tests) and
 [real-server tests](docs/architecture.md#real-server-e2e-testing) cover display
 and transport behavior.

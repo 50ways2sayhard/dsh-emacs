@@ -1,6 +1,6 @@
 ;;; dsh-test-events.el --- Events tests -*- lexical-binding: t; -*-
 
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "28.1"))
 
 (require 'dsh-test-support)
 
@@ -1237,9 +1237,9 @@
 (defun dsh-emacs-test--buffer-copies (needle)
   "Count non-overlapping occurrences of NEEDLE in the current buffer."
   (let ((n 0) (text (buffer-substring-no-properties (point-min) (point-max))))
-    (while (dsh-test--string-search needle text)
+    (while (string-search needle text)
       (setq n (1+ n)
-            text (substring text (+ (dsh-test--string-search needle text)
+            text (substring text (+ (string-search needle text)
                                     (length needle)))))
     n))
 
