@@ -755,7 +755,7 @@ Muted like the Goal Row's action glyphs (dsh web tints its queue actions
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-muted-face
-  '((t :inherit font-lock-comment-face))
+  '((t :inherit shadow))
   "Muted text (e.g., 'No sessions', time)."
   :group 'dsh-emacs-faces)
 
@@ -777,7 +777,7 @@ so a user customization is not lost if that derivation is added later."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-status-idle-face
-  '((t :inherit font-lock-comment-face))
+  '((t :inherit shadow))
   "Idle status indicator (muted)."
   :group 'dsh-emacs-faces)
 

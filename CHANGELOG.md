@@ -16,6 +16,12 @@ minor) and stay undated until the release is cut.
   and assistant bodies retain their existing spacing. Remove these settings
   from personal configuration. (rationale: postmortem/122)
 
+### Fixed
+
+- **Keep idle session indicators muted**: idle dots and muted text inherit
+  `shadow`, so the default Emacs theme shows them in grey instead of the
+  red comment color. Running indicators remain orange.
+
 ## 0.6.1 - 2026-10-18
 
 Compatible with **dsh 0.2.1-rc.2**, the latest upstream release as of

@@ -52,6 +52,9 @@ before connecting. A `use-package` example is in
 From a local project, the command locates its existing workspace; from a chat,
 it locates that session. New sessions open an editable draft while connecting.
 
+Idle session dots and timestamps use the theme's `shadow` face (grey by
+default); running session dots are orange.
+
 ![Session list grouped by workspace](assets/sessions.png)
 
 ### Essential keys
