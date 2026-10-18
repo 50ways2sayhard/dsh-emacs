@@ -591,11 +591,24 @@ Protocol structs remain the only question wire decoder, and waterfall/RPC
 ownership is unchanged.
 See [decision record 042](../postmortem/042-question-prompts.md).
 
+Questions and approvals keep separate FIFO queues but share one interaction
+owner, `dsh-emacs--interaction-active`. It holds `(kind . event-id)` while a
+waterfall is read, or `(late-answer)` during the late picker and reader.
+`dsh-emacs--interaction-drain` finishes the current kind's queue before
+switching to the other kind; late-answer cleanup starts with questions.
+This preserves the existing service order, rather than imposing arrival
+order across both queues. Each handler owns its reader and result submission;
+dynamic bindings release the slot and its cancellation marker on exit.
+Remote cancellation must match both kind and event id before closing a
+minibuffer. Plan documents bypass this slot. See
+[decision record 124](../postmortem/124-shared-interaction-owner.md).
+
 dsh 0.2.0's **timed** form adds two rules on top of that reader, without
-changing it. While a timed question owns the answer slot, the drain claims the
+changing it. While a timed question owns the answer slot, its handler claims the
 host's foreground wait with `userQuestions/attachWait` (a stream on the chat
 socket). A submitted answer holds the claim until the asynchronous RPC
-response; other exits release it immediately. The host reschedules its original
+response, even after the prompt slot has moved to another frame; other exits
+release it immediately. The host reschedules its original
 deadline on release, so releasing before acknowledgement could discard an
 answer after a long read. A question whose window closed — `continued` in
 the `userQuestions` projection — is answered later by

@@ -271,8 +271,8 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
           (add-hook 'minibuffer-setup-hook setup)
           ;; Occupying the real prompt slot lets the second waterfall expire
           ;; naturally on the host, including its cancel frame and pending result.
-          (let ((dsh-emacs--question-active
-                 (if late 'e2e-occupied dsh-emacs--question-active)))
+          (let ((dsh-emacs--interaction-active
+                 (if late '(late-answer) dsh-emacs--interaction-active)))
             (dsh-e2e--rpc
              "session/prompt"
              `((request
@@ -721,8 +721,8 @@ With QUESTIONS (interactively, a prefix argument), include timed questions.
 They need a graphical Emacs and a preset with ask_user_question mode: timed.
 DSH_E2E_PRESET selects the preset; existing chats and connections are preserved."
   (interactive "P")
-  (when (or (active-minibuffer-window) dsh-emacs--question-active
-            dsh-emacs--approval-active dsh-emacs--question-queue
+  (when (or (active-minibuffer-window) dsh-emacs--interaction-active
+            dsh-emacs--question-queue
             dsh-emacs--approval-queue)
     (user-error "An interaction is active or queued"))
   (when (and questions noninteractive)

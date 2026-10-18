@@ -894,7 +894,7 @@
               (dsh-emacs--chat-buffers (make-hash-table :test 'equal))
               (dsh-emacs-enable-notifications nil))
           (setq dsh-emacs--question-queue nil
-                dsh-emacs--question-active nil)
+                dsh-emacs--interaction-active nil)
           (with-current-buffer chat-a
             (setq-local dsh-emacs--buffer-session "sess-a"))
           (with-current-buffer chat-b
@@ -963,7 +963,7 @@
             ;; into
             ;; later tests)
             (ert-info ((format "%s" "question-queue-drained-clean"))
-              (should (and (null dsh-emacs--question-active)
+              (should (and (null dsh-emacs--interaction-active)
                            (null dsh-emacs--question-queue))))))
       (when (buffer-live-p chat-a) (kill-buffer chat-a))
       (when (buffer-live-p chat-b) (kill-buffer chat-b)))))
@@ -984,7 +984,7 @@
               (dsh-emacs--chat-buffers (make-hash-table :test 'equal))
               (dsh-emacs-enable-notifications nil))
           (setq dsh-emacs--question-queue nil
-                dsh-emacs--question-active nil)
+                dsh-emacs--interaction-active nil)
           (with-current-buffer chat
             (setq-local dsh-emacs--buffer-session "sess-dup"))
           (cl-letf (((symbol-function 'dsh-emacs--events-result-async)
@@ -1021,7 +1021,7 @@
               (should (= 1 (length responds)))
               (should (equal '("rpc-dup") (mapcar #'car responds))))
             (ert-info ((format "%s" "question-replay-duplicate-drained-clean"))
-              (should (and (null dsh-emacs--question-active)
+              (should (and (null dsh-emacs--interaction-active)
                            (null dsh-emacs--question-queue))))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
 
@@ -1042,7 +1042,7 @@
               (dsh-emacs-enable-notifications nil))
           (puthash "sess-res" chat dsh-emacs--chat-buffers)
           (setq dsh-emacs--question-queue nil
-                dsh-emacs--question-active t)  ; another frame holds the answer slot
+                dsh-emacs--interaction-active '(question . "occupied"))
           (with-current-buffer chat
             (setq-local dsh-emacs--buffer-session "sess-res"))
           (cl-letf (((symbol-function 'dsh-emacs--events-result-async)
@@ -1070,8 +1070,8 @@
               (should (null dsh-emacs--question-queue)))
             ;; After the answer slot is cleared the queue is empty too -> no more popping
             ;; up, no more answering
-            (setq dsh-emacs--question-active nil)
-            (dsh-emacs--question-drain)
+            (setq dsh-emacs--interaction-active nil)
+            (dsh-emacs--interaction-drain 'question)
             (ert-info ((format "%s" "question-cancel-never-prompts"))
               (should (null prompted))
               (should (null responds))
@@ -1190,9 +1190,8 @@
             (system-messages-locale messages)
             (process-environment (copy-sequence process-environment))
             (dsh-emacs--chat-buffers (make-hash-table :test 'equal))
-            (dsh-emacs--question-active 'occupied)
+            (dsh-emacs--interaction-active '(question . "occupied"))
             (dsh-emacs--question-queue nil)
-            (dsh-emacs--approval-active nil)
             (dsh-emacs--approval-queue nil)
             (dsh-emacs-events--client-id "localized-client")
             prompted notified response)
@@ -1225,9 +1224,9 @@
                   (should (equal notified (concat "Approval: " expected))))
                 ;; Changing language after queueing does not make the prompt
                 ;; disagree with the notification already shown.
-                (setq dsh-emacs--question-active nil
+                (setq dsh-emacs--interaction-active nil
                       dsh-emacs-approval-language "de")
-                (dsh-emacs--approval-drain)
+                (dsh-emacs--interaction-drain 'approval)
                 (ert-info ((format "%s" (concat "approval-localized-reader-" name)))
                   (should (equal (substring-no-properties prompted) expected))
                   (should (eq (get-text-property 0 'face prompted)
@@ -1235,7 +1234,7 @@
                   (should (equal response '("localized-client" "localized-event"
                                             ((kind . "result") (value . "rejected")))))
                   (should (null dsh-emacs--approval-queue))
-                  (should (null dsh-emacs--approval-active)))))
+                  (should (null dsh-emacs--interaction-active)))))
           (kill-buffer chat))))))
 
 ;; --- Test 78a1: cancel closes a displayed question, no stale outcome sent back ---
@@ -1246,9 +1245,8 @@
         (aborted nil))
     (unwind-protect
         (let ((dsh-emacs--question-queue nil)
-              (dsh-emacs--question-active nil)
+              (dsh-emacs--interaction-active nil)
               (dsh-emacs--approval-queue nil)
-              (dsh-emacs--approval-active nil)
               (dsh-emacs--waterfall-cancelled-event-id nil)
               (dsh-emacs-enable-notifications nil))
           (cl-letf (((symbol-function 'dsh-emacs--events-result-async)
@@ -1268,7 +1266,7 @@
             (ert-info ((format "%s" "question-active-cancel-closes-without-response"))
               (should aborted)
               (should (null responds))
-              (should (null dsh-emacs--question-active))
+              (should (null dsh-emacs--interaction-active))
               (should (null dsh-emacs--waterfall-cancelled-event-id)))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
 
@@ -1325,7 +1323,7 @@
          (just "the command reads /etc/hostname outside the workspace so we can identify this machine"))
     (unwind-protect
         (let ((dsh-emacs--approval-queue nil)
-              (dsh-emacs--approval-active nil)
+              (dsh-emacs--interaction-active nil)
               (dsh-emacs-enable-notifications nil))
           (with-current-buffer chat
             (setq dsh-emacs--tool-states (make-hash-table :test 'equal))
@@ -1385,7 +1383,7 @@
                                   (list (list "rpc-cg"
                                               '((kind . "result")
                                                 (value . "rejected")))))
-                           (null dsh-emacs--approval-active)
+                           (null dsh-emacs--interaction-active)
                            (null dsh-emacs--approval-queue))))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
 
@@ -1396,8 +1394,7 @@
     (unwind-protect
         (let ((dsh-emacs--approval-queue
                (list (list chat "wf-d0" "sess-d" "bash" "reason" nil)))
-              (dsh-emacs--approval-active
-               (list chat "wf-d1" "sess-d" "bash" "reason" nil)))
+              (dsh-emacs--interaction-active '(approval . "wf-d1")))
           ;; mux replay of the same eventId: already queued -> not enqueued again
           (dsh-emacs--approval-requested
            chat "wf-d0" "sess-d" "bash" "reason" nil)
@@ -1429,12 +1426,12 @@
   :tags '(dsh-unit)
   (let ((chat (get-buffer-create " *dsh-test-approval-active-cancel*"))
         (responds nil)
+        (after-question-cancel nil)
         (aborted nil))
     (unwind-protect
         (let ((dsh-emacs--question-queue nil)
-              (dsh-emacs--question-active nil)
+              (dsh-emacs--interaction-active nil)
               (dsh-emacs--approval-queue nil)
-              (dsh-emacs--approval-active nil)
               (dsh-emacs--waterfall-cancelled-event-id nil)
               (dsh-emacs-enable-notifications nil))
           (cl-letf (((symbol-function 'dsh-emacs--events-result-async)
@@ -1445,14 +1442,23 @@
                      (lambda () (setq aborted t) (signal 'quit nil)))
                     ((symbol-function 'dsh-emacs--approval-prompt)
                      (lambda (&rest _)
+                       ;; Host cancel dispatch checks questions first.  The
+                       ;; matching id alone must not abort an approval reader.
+                       (dsh-emacs--question-cancelled "wf-active-a")
+                       (setq after-question-cancel
+                             (list aborted
+                                   dsh-emacs--waterfall-cancelled-event-id
+                                   dsh-emacs--interaction-active))
                        (dsh-emacs--approval-cancelled "wf-active-a")
                        t)))
             (dsh-emacs--approval-requested
              chat "wf-active-a" "sess-a" "bash" "reason" nil)
             (ert-info ((format "%s" "approval-active-cancel-closes-without-response"))
+              (should (equal after-question-cancel
+                             '(nil nil (approval . "wf-active-a"))))
               (should aborted)
               (should (null responds))
-              (should (null dsh-emacs--approval-active))
+              (should (null dsh-emacs--interaction-active))
               (should (null dsh-emacs--waterfall-cancelled-event-id)))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
 
@@ -1467,9 +1473,8 @@
          (trace nil))
     (unwind-protect
         (let ((dsh-emacs--question-queue nil)
-              (dsh-emacs--question-active t)      ; simulate a question being answered
+              (dsh-emacs--interaction-active '(question . "occupied"))
               (dsh-emacs--approval-queue nil)
-              (dsh-emacs--approval-active nil)
               (dsh-emacs-enable-notifications nil))
           (cl-letf (((symbol-function 'dsh-emacs--approval-prompt)
                      (lambda (&rest _) (push :approval-prompt trace) t))
@@ -1486,14 +1491,14 @@
               (should (and (null trace)
                            (= 1 (length dsh-emacs--approval-queue)))))
             ;; Question finished (queue empty) -> handoff takes over the queued approval
-            (setq dsh-emacs--question-active nil)
+            (setq dsh-emacs--interaction-active nil)
             (setq dsh-emacs--question-queue
                   (list (list chat "rpc-q" "sess-q"
                               (list (list (cons 'id "q1")
                                           (cons 'question "Proceed?")
                                           (cons 'options
                                                 (list (list (cons 'label "Yes")))))))))
-            (dsh-emacs--question-drain)
+            (dsh-emacs--interaction-drain 'question)
             (ert-info ((format "%s" "approval-handoff-after-question-drain"))
               (should (equal '(:question-prompt
                                (:respond "rpc-q")
@@ -1510,10 +1515,8 @@
          (trace nil))
     (unwind-protect
         (let ((dsh-emacs--question-queue nil)
-              (dsh-emacs--question-active nil)
               (dsh-emacs--approval-queue nil)
-              (dsh-emacs--approval-active
-               (list chat "rpc-ax" "sess-x" "bash" nil nil)) ; an approval is being answered
+              (dsh-emacs--interaction-active '(approval . "rpc-ax"))
               (dsh-emacs-enable-notifications nil))
           (cl-letf (((symbol-function 'dsh-emacs--approval-prompt)
                      (lambda (&rest _) (push :approval-prompt trace) t))
@@ -1533,12 +1536,54 @@
               (should (and (null trace)
                            (= 1 (length dsh-emacs--question-queue)))))
             ;; Approval answered -> handoff takes over the queued question
-            (setq dsh-emacs--approval-active nil)
-            (dsh-emacs--approval-drain)
+            (setq dsh-emacs--interaction-active nil)
+            (dsh-emacs--interaction-drain 'approval)
             (ert-info ((format "%s" "question-handoff-after-approval-drain"))
               (should (equal '(:question-prompt (:respond "rpc-qx"))
                              (nreverse trace))))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
+
+(ert-deftest dsh-emacs-test-questions-interaction-drains-own-kind-before-handoff ()
+  :tags '(dsh-unit)
+  (dolist (first-kind '(question approval))
+    (dolist (reader-error '(nil t))
+      (with-temp-buffer
+        (let* ((chat (current-buffer))
+               (dsh-emacs--interaction-active nil)
+               (dsh-emacs--question-queue
+                (list (list chat "q1" "q1" nil nil)
+                      (list chat "q2" "q2" nil nil)))
+               (dsh-emacs--approval-queue
+                (list (list chat "a1" "a1" "bash" nil nil)
+                      (list chat "a2" "a2" "bash" nil nil)))
+               (expected (if (eq first-kind 'question)
+                             '("q1" "q2" "a1" "a2")
+                           '("a1" "a2" "q1" "q2")))
+               order responses)
+          (cl-letf (((symbol-function 'dsh-emacs--collect-question-answers)
+                     (lambda (_questions session)
+                       (push session order)
+                       (when (and reader-error (equal session (car expected)))
+                         (error "Question reader failed"))
+                       '(((id . "answer") (selected . ["Yes"])))))
+                    ((symbol-function 'dsh-emacs--approval-prompt)
+                     (lambda (session &rest _)
+                       (push session order)
+                       (when (and reader-error (equal session (car expected)))
+                         (error "Approval reader failed"))
+                       t))
+                    ((symbol-function 'dsh-emacs--events-result-async)
+                     (lambda (_client event-id _outcome callback)
+                       (push event-id responses)
+                       (funcall callback t nil))))
+            (dsh-emacs--interaction-drain first-kind))
+          (ert-info ((format "first=%s reader-error=%s" first-kind reader-error))
+            (should (equal (nreverse order) expected))
+            (should (equal (nreverse responses)
+                           (if reader-error (cdr expected) expected)))
+            (should-not dsh-emacs--interaction-active)
+            (should-not dsh-emacs--question-queue)
+            (should-not dsh-emacs--approval-queue)))))))
 
 ;; --- Test 78i: desktop notification for questions/approvals (turn-finish style) ---
 ;; Notify once, when the frame enters the queue; replay copies (dropped as
@@ -1553,9 +1598,8 @@
         (let ((dsh-emacs--sessions nil)
               (dsh-emacs--chat-buffers (make-hash-table :test 'equal)))
           (setq dsh-emacs--question-queue nil
-                dsh-emacs--question-active nil
-                dsh-emacs--approval-queue nil
-                dsh-emacs--approval-active nil)
+                dsh-emacs--interaction-active nil
+                dsh-emacs--approval-queue nil)
           (with-current-buffer chat
             (setq-local dsh-emacs--buffer-session "sess-nt"))
           (cl-letf (((symbol-function 'dsh-emacs-notify--post)
@@ -1717,14 +1761,18 @@
   :tags '(dsh-unit)
   (let* ((chat (get-buffer-create " *t-uq-claim*"))
          (proc (make-pipe-process :name "t-uq-claim-proc" :buffer nil))
-         (opened nil) (closed nil) (reply nil))
+         (opened nil) (closed nil) (reply nil) (readers nil))
     (unwind-protect
         (progn
           (with-current-buffer chat
             (dsh-emacs-mode)
             (setq-local dsh-emacs--buffer-session "sess-uq")
             (setq-local dsh-emacs--event-process proc))
-          (let ((dsh-emacs-events--client-id "gen-uq"))
+          (let ((dsh-emacs-events--client-id "gen-uq")
+                (dsh-emacs--question-queue nil)
+                (dsh-emacs--approval-queue nil)
+                (dsh-emacs--interaction-active nil)
+                (dsh-emacs-enable-notifications nil))
             (cl-letf (((symbol-function 'dsh-emacs-events-open-stream)
                        (lambda (_p endpoint args _name _handler)
                          (setq opened (cons endpoint args)) "stream-uq"))
@@ -1732,10 +1780,17 @@
                        (lambda (_p id) (push id closed)))
                       ((symbol-function 'dsh-emacs--collect-question-answers)
                        (lambda (_questions _session)
+                         (push 'question readers)
                          '(((id . "q1") (selected . [])))))
+                      ((symbol-function 'dsh-emacs--approval-prompt)
+                       (lambda (&rest _)
+                         (push 'approval readers)
+                         t))
                       ((symbol-function 'dsh-emacs--events-result-async)
-                       (lambda (_client _event _outcome callback)
-                         (setq reply callback))))
+                       (lambda (_client event _outcome callback)
+                         (if (equal event "ev-uq")
+                             (setq reply callback)
+                           (funcall callback t nil)))))
               (dsh-emacs--question-requested
                chat "ev-uq" "sess-uq"
                (list (dsh-protocol-question--from-alist
@@ -1745,6 +1800,13 @@
               (ert-info ((format "%s" "question-claim-held-until-answer-acknowledged"))
                 (should reply)
                 (should (null closed)))
+              ;; The wait claim outlives its reader; a new prompt can use the
+              ;; shared minibuffer slot before the first answer is acknowledged.
+              (dsh-emacs--approval-requested
+               chat "ev-next" "sess-next" "bash" "Check next" nil)
+              (should (equal (nreverse readers) '(question approval)))
+              (should-not closed)
+              (should-not dsh-emacs--interaction-active)
               (funcall reply t nil)))
           (ert-info ((format "%s" "question-drain-claims-timed-wait"))
             (should (equal "userQuestions/attachWait" (car opened)))
@@ -1965,8 +2027,7 @@
     (with-temp-buffer
       (dsh-emacs-mode)
       (let ((chat (current-buffer))
-            (dsh-emacs--question-active nil)
-            (dsh-emacs--approval-active nil)
+            (dsh-emacs--interaction-active nil)
             (dsh-emacs--question-queue nil)
             (dsh-emacs--approval-queue nil)
             reply released)
@@ -1998,7 +2059,7 @@
             (funcall reply nil "offline")))
         (ert-info ((format "%s" (format "question-claim-released-on-%s" outcome)))
           (should (equal released '(claim)))
-          (should (null dsh-emacs--question-active)))))))
+          (should (null dsh-emacs--interaction-active)))))))
 
 ;; Envelope success does not imply that the host accepted a late answer.
 (ert-deftest dsh-emacs-test-questions-late-answer-reports-response-case-case ()
@@ -2130,8 +2191,7 @@
                                  (questions . [((id . "q2")
                                                 (question . "Second"))]))]))))
       (let ((chat (current-buffer))
-            (dsh-emacs--question-active nil)
-            (dsh-emacs--approval-active nil)
+            (dsh-emacs--interaction-active nil)
             (dsh-emacs--question-queue nil)
             (dsh-emacs--approval-queue nil)
             order)
@@ -2165,8 +2225,7 @@
             (error nil)))
         (ert-info ((format "%s" (format "late-answer-serializes-prompts-on-%s" outcome)))
           (should (equal (nreverse order) '(picker late question approval)))
-          (should (null dsh-emacs--question-active))
-          (should (null dsh-emacs--approval-active))
+          (should (null dsh-emacs--interaction-active))
           (should (null dsh-emacs--question-queue))
           (should (null dsh-emacs--approval-queue)))))))
 

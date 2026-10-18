@@ -4,6 +4,14 @@
 
 (require 'dsh-test-support)
 
+(ert-deftest dsh-emacs-test-reload-rejects-each-active-interaction ()
+  :tags '(dsh-unit)
+  (dolist (active '((question . "question-event")
+                    (approval . "approval-event")
+                    (late-answer)))
+    (let ((dsh-emacs--interaction-active active))
+      (should-error (dsh-emacs-reload) :type 'user-error))))
+
 ;; Exercise real source reload in a fresh Emacs, not this suite's mocks.
 (ert-deftest dsh-emacs-test-reload-reload-sources-preserve-state-and-refresh-definitions ()
   :tags '(dsh-unit)
