@@ -3558,7 +3558,8 @@ identifies the chat for the notification title."
             (start-process "dsh-notification" nil "osascript" "-e"
                            (format "display notification %S with title %S"
                                    body title)))
-           ((and (ignore-errors (require 'notifications nil t))
+           ((and (featurep 'dbusbind)
+                 (ignore-errors (require 'notifications nil t))
                  (fboundp 'notifications-notify))
             (notifications-notify :title title :body body
                                   :app-name "dsh-emacs"))

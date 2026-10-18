@@ -29,6 +29,9 @@ minor) and stay undated until the release is cut.
   no longer inserts the objective into the chat buffer or omits it from help.
 - **Keep unchanged cards untouched on Emacs 28**: streaming outside a card no
   longer causes its equivalent snapshot properties to be rewritten.
+- **Keep chat events working without D-Bus**: desktop notifications use the
+  existing fallback when Emacs lacks D-Bus support, so turn completion and
+  question prompts are no longer interrupted on affected Emacs 28 builds.
 - **Keep idle session indicators muted**: idle dots and muted text inherit
   `shadow`, so the default Emacs theme shows them in grey instead of the
   red comment color. Running indicators remain orange.

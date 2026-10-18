@@ -1074,5 +1074,38 @@
             (should (= dsh-emacs--anchor-seq 4))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest dsh-emacs-test-render-notification-without-dbus-uses-message ()
+  :tags '(dsh-unit)
+  (let ((system-type 'gnu/linux)
+        (dsh-emacs-enable-notifications t)
+        (original-featurep (symbol-function 'featurep))
+        (original-require (symbol-function 'require))
+        (calls 0)
+        notice)
+    (cl-letf (((symbol-function 'w32-notification-notify) nil)
+              ((symbol-function 'ns-do-applescript) nil)
+              ((symbol-function 'featurep)
+               (lambda (feature &optional subfeature)
+                 (and (not (eq feature 'dbusbind))
+                      (funcall original-featurep feature subfeature))))
+              ((symbol-function 'require)
+               (lambda (feature &rest args)
+                 (if (eq feature 'notifications)
+                     t
+                   (apply original-require feature args))))
+              ((symbol-function 'executable-find) #'ignore)
+              ((symbol-function 'dsh-emacs-notify--visible-p) #'ignore)
+              ((symbol-function 'notifications-notify)
+               (lambda (&rest _) (cl-incf calls)))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (setq notice (apply #'format format-string args)))))
+      (with-temp-buffer
+        (rename-buffer " *dsh-notify-no-dbus*" t)
+        (dsh-emacs-notify--post nil "Run finished")
+        (should (= calls 0))
+        (should (equal notice
+                       "dsh:  *dsh-notify-no-dbus* — Run finished"))))))
+
 (provide 'dsh-test-render)
 ;;; dsh-test-render.el ends here
