@@ -37,6 +37,10 @@ byte-compile with free-variable warnings as failures, full unit suite, clean
 load silent, `git diff --check`, tree junk scan). Exit 0 only when everything
 passes; any FAIL is a blocker (see rule 6 below).
 
+**CI runs the same gate** on every push and pull request
+(`.github/workflows/ci.yml`) on Emacs 27.1 and a current stable release. A red
+run is a blocker even when the local gate passed; fix it before merging.
+
 The manual loop, in order:
 
 1. **Syntax check with `scripts/check-lisp.el` — MANDATORY, always first.**

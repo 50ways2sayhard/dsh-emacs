@@ -1,0 +1,48 @@
+name: CI
+
+# The aggregate gate from AGENTS.md ("Definition of done"): syntax, checker /
+# runner self-tests, production byte-compile, the full unit suite, a clean
+# load, whitespace and tree junk.  Motion Line is optional and simply skips its
+# integration tests; the real-server E2E and GUI runs stay manual (they need a
+# live dsh server and a window system).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (Emacs ${{ matrix.emacs }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Baseline declared in every file header.
+          - emacs: '27.1'
+          # A current stable release; catches newer-API regressions.
+          - emacs: '30.1'
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Emacs
+        uses: jcs090218/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs }}
+
+      - name: Show Emacs version
+        run: emacs --version
+
+      - name: Run the verification gate
+        run: scripts/verify.sh
