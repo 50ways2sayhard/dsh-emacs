@@ -1,5 +1,8 @@
 # 073 — Timed `ask_user_question`: claim the wait, answer late
 
+Synthetic tool-result replay superseded by [123](123-decoded-stream-and-tool-results.md).
+Shared prompt-slot ownership superseded by [124](124-shared-interaction-owner.md).
+
 ## Background
 
 dsh-emacs presents an `ask_user_question` batch as the

@@ -29,7 +29,7 @@
          (width (frame-width frame))
          (height (frame-height frame))
          (text-scale-mode-step 1.2)
-         (goal (dsh-emacs-composer-goal-from-projection
+         (goal (dsh-protocol-goal-projection--from-alist
                 '((goal . ((objective . "short") (phase . "active")))))))
     (unwind-protect
         (save-window-excursion

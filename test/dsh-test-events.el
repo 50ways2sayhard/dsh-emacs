@@ -4,6 +4,185 @@
 
 (require 'dsh-test-support)
 
+(ert-deftest dsh-emacs-test-events-follow-projections-run-after-history ()
+  :tags '(dsh-unit)
+  (dolist (decoded '(nil t))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "follow-contract")
+      (let* ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+             (dsh-emacs--input-history-by-session (make-hash-table :test 'equal))
+             (dsh-emacs--subagent-catalogs (make-hash-table :test 'equal))
+             (apply-projections
+              (symbol-function 'dsh-emacs-events--apply-snapshot-projections))
+             (record
+              '((type . "event")
+                (event . ((type . "user/message") (seq . 3)
+                          (data . ((content . [((type . "text")
+                                                (text . "snapshot body"))])))))))
+             (projections
+              '((asOfSeq . 3)
+                (values . ((userQuestions
+                            . ((active . []) (settled . [])))))))
+             (wire
+              `((type . "snapshot") (cursor . 3) (hasMore . :json-false)
+                (records . ,(vector record)) (projections . ,projections)))
+             (item (if decoded (dsh-protocol-follow-item--from-alist wire) wire))
+             observed)
+        (puthash "follow-contract" (current-buffer) dsh-emacs--chat-buffers)
+        (cl-letf (((symbol-function 'dsh-emacs-events--apply-snapshot-projections)
+                   (lambda (session projections)
+                     (setq observed
+                           (list session
+                                 (and (string-match-p "snapshot body"
+                                                      (buffer-string)) t)
+                                 dsh-emacs--history-cursor
+                                 dsh-emacs--anchor-seq))
+                     (funcall apply-projections session projections))))
+          (dsh-emacs-events--follow-item (current-buffer) item))
+        (ert-info ((format "decoded=%s" decoded))
+          (should (equal observed '("follow-contract" t 3 3)))
+          (should-not dsh-emacs--history-has-more)
+          (should (dsh-protocol-user-questions-p dsh-emacs--session-questions))
+          (should (= 3 (dsh-protocol-user-questions-seq
+                        dsh-emacs--session-questions))))))))
+
+(ert-deftest dsh-emacs-test-events-follow-projections-distinguish-goal-and-values-shapes ()
+  :tags '(dsh-unit)
+  (dolist (case '((nil t nil)
+                  (((futureCell . "ignored")) t nil)
+                  (((goal . nil)) t nil)
+                  (((goal . :json-false)) nil nil)
+                  (((goal . 7)) nil nil)
+                  (((goal . "bad")) nil nil)
+                  (((goal . [])) nil nil)
+                  (:json-false nil t)
+                  ([] nil t)))
+    (pcase-let ((`(,values ,clears ,invalid) case))
+      (with-temp-buffer
+        (dsh-emacs-mode)
+        (setq-local dsh-emacs--buffer-session "follow-shapes")
+        (let* ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+               (dsh-emacs--subagent-catalogs (make-hash-table :test 'equal))
+               (dsh-emacs-sessions-buffer (generate-new-buffer-name " *absent-list*"))
+               (goal (dsh-protocol-goal--from-alist
+                      '((objective . "Existing goal") (phase . "active"))))
+               (questions (dsh-protocol-user-questions--from-alist nil 3))
+               (projections `((asOfSeq . 9) (values . ,values))))
+          (puthash "follow-shapes" (current-buffer) dsh-emacs--chat-buffers)
+          (dsh-emacs-composer-set-goal goal)
+          (dsh-emacs--session-questions-apply questions)
+          (ert-info ((format "values=%S" values))
+            (if invalid
+                (should-error
+                 (dsh-emacs-events--apply-snapshot-projections "follow-shapes" projections)
+                 :type 'wrong-type-argument)
+              (dsh-emacs-events--apply-snapshot-projections "follow-shapes" projections))
+            (if clears
+                (should-not dsh-emacs--composer-goal)
+              (should (eq goal dsh-emacs--composer-goal)))
+            (if invalid
+                (progn
+                  (should (eq questions dsh-emacs--session-questions))
+                  (should-not (gethash "follow-shapes" dsh-emacs--subagent-catalogs)))
+              (should (= 9 (dsh-protocol-user-questions-seq dsh-emacs--session-questions)))
+              (should (= 9 (dsh-protocol-subagent-cell-seq
+                            (dsh-emacs-subagent--cell "follow-shapes" 'subagentCatalog)))))))))))
+
+(ert-deftest dsh-emacs-test-events-follow-projections-apply-in-order-without-inbox ()
+  :tags '(dsh-unit)
+  (dolist (decoded '(nil t))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "follow-order")
+      (let* ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+             (dsh-emacs--subagent-catalogs (make-hash-table :test 'equal))
+             (dsh-emacs-sessions-buffer (generate-new-buffer-name " *absent-list*"))
+             (session (dsh-protocol-session--from-alist '((sessionId . "follow-order"))))
+             (dsh-emacs--sessions (list session))
+             (items (list (dsh-emacs-test--queue-item "keep" "queued" "Keep input")))
+             (plan (dsh-protocol-plan--from-alist '((active . t)) 3))
+             (projections
+              '((asOfSeq . 9)
+                (values . ((userQuestions . ((active . []) (settled . [])))
+                           (goal . ((goal . ((objective . "Follow goal") (phase . "active")))))
+                           (permissions . ((currentValue . "custom")))
+                           (contextPressure . ((pressureTokens . 40) (projectedTokens . 45)
+                                               (contextWindow . 100)))
+                           (title . "Follow title") (subagentCatalog . [])
+                           (plan . ((active . :json-false) (pending . t)))
+                           (inbox . nil) (futureCell . ((payload . "ignored")))))))
+             (expected '(dsh-emacs-subagent-apply
+                         dsh-emacs-events--apply-title
+                         dsh-emacs--events-apply-context-projection
+                         dsh-emacs--events-apply-permission-projection
+                         dsh-emacs-events--apply-goal-projection
+                         dsh-emacs--session-questions-apply))
+             calls advices)
+        (puthash "follow-order" (current-buffer) dsh-emacs--chat-buffers)
+        (dsh-emacs-queue-apply (current-buffer) 'queue-owner items)
+        (dsh-emacs-modeline-set-plan plan)
+        (unwind-protect
+            (progn
+              ;; Observe real consumers; every recorder forwards the same input.
+              (dolist (function expected)
+                (let* ((target function)
+                       (recorder (lambda (original &rest args)
+                                   (push target calls)
+                                   (apply original args))))
+                  (push (cons target recorder) advices)
+                  (advice-add target :around recorder)))
+              (dsh-emacs-events--apply-snapshot-projections
+               "follow-order"
+               (if decoded (dsh-protocol-follow-projections--from-alist projections) projections))
+              (should (equal (reverse calls) expected))
+              (should (equal "Follow title" (dsh-protocol-session-title-value session)))
+              (should (= 45 dsh-emacs--modeline-context-pressure))
+              (should (= 100 dsh-emacs--modeline-context-window-server))
+              (should (equal "custom" dsh-emacs--modeline-permission))
+              (should (equal "Follow goal" (dsh-protocol-goal-objective dsh-emacs--composer-goal)))
+              (should (= 9 (dsh-protocol-user-questions-seq dsh-emacs--session-questions)))
+              (should (= 9 (dsh-protocol-subagent-cell-seq
+                            (dsh-emacs-subagent--cell "follow-order" 'subagentCatalog))))
+              (should (eq items dsh-emacs--queue-items))
+              (should (eq 'queue-owner dsh-emacs--queue-process))
+              (should (eq plan dsh-emacs--modeline-plan))
+              (should (= 3 dsh-emacs--modeline-plan-seq)))
+          (dolist (entry advices)
+            (advice-remove (car entry) (cdr entry))))))))
+
+(ert-deftest dsh-emacs-test-events-follow-projection-error-follows-history-progress ()
+  :tags '(dsh-unit)
+  (dolist (decoded '(nil t))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "follow-migration"
+                  dsh-emacs--history-cursor 1
+                  dsh-emacs--anchor-seq 1
+                  dsh-emacs--ws-last-event-time 123.0)
+      (let* ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+             (dsh-emacs--input-history-by-session (make-hash-table :test 'equal))
+             (dsh-emacs--subagent-catalogs (make-hash-table :test 'equal))
+             (record
+              '((type . "event")
+                (event . ((type . "user/message") (seq . 7)
+                          (data . ((content . [((type . "text")
+                                                (text . "Applied before migration"))])))))))
+             (snapshot
+              `((cursor . 7) (records . ,(vector record))
+                (projections . ((kind . "migration-required") (asOfSeq . 7) (values))))))
+        (puthash "follow-migration" (current-buffer) dsh-emacs--chat-buffers)
+        (should-error
+         (dsh-emacs-events--follow-snapshot
+          (current-buffer)
+          (if decoded (dsh-protocol-follow-snapshot--from-alist snapshot) snapshot))
+         :type 'dsh-protocol-migration-required)
+        (should (string-match-p "Applied before migration" (buffer-string)))
+        (should (= 7 dsh-emacs--history-cursor))
+        (should (= 7 dsh-emacs--anchor-seq))
+        (should (= 123.0 dsh-emacs--ws-last-event-time))
+        (should-not (gethash "follow-migration" dsh-emacs--subagent-catalogs))))))
+
 ;; --- Test 28: frames after the WebSocket handshake are still consumed (live
 ;; fix) ---
 (ert-deftest dsh-emacs-test-events-websocket-frames-consumed-after-handshake ()
@@ -361,18 +540,21 @@
           (dsh-emacs--question-queue nil)
           (dsh-emacs--approval-queue nil))
       (dsh-emacs-events--host-item
-       'process '((type . "ready") (clientId . "gen-1")))
+       'process (dsh-protocol-core-item--from-alist
+                 '((type . "ready") (clientId . "gen-1"))))
       (should (equal "gen-1" dsh-emacs-events--client-id))
       (setq dsh-emacs--question-queue
             (list (list (current-buffer) "e-1" "sess-g" '((id . "q1")))))
       (dsh-emacs-events--host-item
-       'process '((type . "ready") (clientId . "gen-1")))
+       'process (dsh-protocol-core-item--from-alist
+                 '((type . "ready") (clientId . "gen-1"))))
       (ert-info ("Same generation retains pending questions")
         (should (= 1 (length dsh-emacs--question-queue))))
       (setq dsh-emacs--approval-queue
             (list (list (current-buffer) "e-2" "sess-g" "bash" "reason" nil)))
       (dsh-emacs-events--host-item
-       'process '((type . "ready") (clientId . "gen-2")))
+       'process (dsh-protocol-core-item--from-alist
+                 '((type . "ready") (clientId . "gen-2"))))
       (ert-info ("New generation retires both kinds of pending work")
         (should (equal "gen-2" dsh-emacs-events--client-id))
         (should-not dsh-emacs--question-queue)
@@ -427,18 +609,58 @@
                (list (list chat "a-cancel" "sess-q" "fs" "r" nil)
                      (list chat "a-keep" "sess-q" "bash" "r" nil))))
           (dsh-emacs-events--host-item
-           'process '((type . "cancel") (eventId . "q-cancel")))
+           'process (dsh-protocol-core-item--from-alist
+                     '((type . "cancel") (eventId . "q-cancel"))))
           (ert-info ((format "%s" "events-cancel-retires-matching-question"))
             (should (= 1 (length dsh-emacs--question-queue)))
             (should (equal "q-keep" (nth 1 (car dsh-emacs--question-queue))))
             (should (= 2 (length dsh-emacs--approval-queue))))
           (dsh-emacs-events--host-item
-           'process '((type . "cancel") (eventId . "a-cancel")))
+           'process (dsh-protocol-core-item--from-alist
+                     '((type . "cancel") (eventId . "a-cancel"))))
           (ert-info ((format "%s" "events-cancel-retires-matching-approval"))
             (should (= 1 (length dsh-emacs--approval-queue)))
             (should (equal "a-keep" (nth 1 (car dsh-emacs--approval-queue))))
             (should (= 1 (length dsh-emacs--question-queue)))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
+
+(ert-deftest dsh-emacs-test-events-waterfalls-route-before-request-decoding ()
+  :tags '(dsh-unit)
+  (dolist (decoded '(nil t))
+    (with-temp-buffer
+      (let ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+            (dsh-emacs-events--client-id "client")
+            calls responses)
+        (puthash "local" (current-buffer) dsh-emacs--chat-buffers)
+        (cl-letf (((symbol-function 'dsh-emacs--question-requested)
+                   (lambda (&rest args) (push args calls)))
+                  ((symbol-function 'dsh-emacs--approval-requested)
+                   (lambda (&rest args) (push args calls)))
+                  ((symbol-function 'dsh-emacs--events-result-async)
+                   (lambda (client event outcome callback)
+                     (push (list client event outcome) responses)
+                     (funcall callback t nil))))
+          (dolist (frame
+                   '(((type . "waterfall") (event . "approval/request")
+                      (eventId . "foreign-approval") (agentId . "foreign")
+                      (request . ((displayReason . ((en . "English") . bad)))))
+                     ((type . "waterfall") (event . "user-questions/request")
+                      (eventId . "foreign-question") (agentId . "foreign")
+                      (request . ((wait . ((callId . "call") . bad)))))
+                     ((type . "waterfall") (event . "future-request")
+                      (eventId . "foreign-unknown") (agentId . "foreign"))
+                     ((type . "waterfall") (event . "future-request")
+                      (eventId . "local-unknown") (agentId . "local"))
+                     ((type . "waterfall") (event . "approval/request")
+                      (agentId . "local")
+                      (request . ((displayReason . ((en . "English") . bad)))))))
+            (dsh-emacs-events--host-item
+             nil (if decoded (dsh-protocol-core-item--from-alist frame) frame)))
+          (should-not calls)
+          (should (equal responses
+                         '(("client" "foreign-unknown" ((kind . "next")))
+                           ("client" "foreign-question" ((kind . "next")))
+                           ("client" "foreign-approval" ((kind . "next")))))))))))
 
 ;; --- Test 93e: the WebSocket handshake carries the browser session cookie ---
 (ert-deftest dsh-emacs-test-events-websocket-auth-authority-case ()
@@ -493,21 +715,69 @@
     (ert-info ((format "%s" "mux-open-no-args-encodes-empty-object"))
       (should (and args (null (cdr args)))))))
 
-(ert-deftest dsh-emacs-test-events-mux-frame-parses-item-error-other ()
+(ert-deftest dsh-emacs-test-events-mux-malformed-input-stays-quiet ()
   :tags '(dsh-unit)
-  (ert-info ((format "%s" "mux-frame-parses-item-error-other"))
-    (should (let ((item (dsh-emacs-events--message-frame
-                         "{\"type\":\"item\",\"streamId\":\"f1\",\"value\":{\"type\":\"event\",\"event\":{}}}")))
-              (and (equal "item" (plist-get item :type))
-                   (equal "f1" (plist-get item :stream-id))
-                   (listp (plist-get item :value)))))
-    (should (let ((err (dsh-emacs-events--message-frame
-                        "{\"type\":\"error\",\"streamId\":\"f1\",\"error\":{\"code\":\"x\"}}")))
-              (and (equal "error" (plist-get err :type))
-                   (equal "x" (dsh-emacs-render--aget "code" (plist-get err :error))))))
-    (should (let ((ready (dsh-emacs-events--message-frame
-                          "{\"type\":\"ready\",\"clientId\":\"c1\"}")))
-              (equal "ready" (plist-get ready :type))))))
+  (let (chat-frames host-items messages)
+    (cl-letf (((symbol-function 'dsh-emacs-events--dispatch-stream)
+               (lambda (_process frame) (push frame chat-frames)))
+              ((symbol-function 'dsh-emacs-events--host-item)
+               (lambda (_process value) (push value host-items)))
+              ((symbol-function 'message)
+               (lambda (&rest args) (push args messages))))
+      (dolist (json '("{" "[]" "false" "5" "\"text\"" "{}"))
+        (dsh-emacs-events--dispatch-json nil json)
+        (dsh-emacs-events--host-dispatch nil json))
+      (dsh-emacs-events--dispatch-json
+       nil "{\"type\":\"item\",\"value\":{\"type\":\"event\"}}")
+      (should-not chat-frames)
+      (should-not host-items)
+      (should-not messages)
+      (dsh-emacs-events--dispatch-json
+       nil (concat "{\"type\":\"item\",\"streamId\":\"f1\","
+                   "\"value\":{\"type\":\"event\"}}"))
+      (dsh-emacs-events--host-dispatch
+       nil "{\"type\":\"item\",\"value\":{\"type\":\"ready\"}}")
+      (should (= 1 (length chat-frames)))
+      (should (equal "f1" (dsh-protocol-mux-frame-stream-id (car chat-frames))))
+      (should (equal '((type . "event"))
+                     (dsh-protocol-mux-frame-value (car chat-frames))))
+      (should (equal host-items '(((type . "ready")))))
+      (should-not messages))))
+
+(ert-deftest dsh-emacs-test-events-mux-custom-error-keeps-handler-until-end ()
+  :tags '(dsh-unit)
+  (let ((process (make-pipe-process :name "dsh-custom-mux" :noquery t))
+        values messages)
+    (unwind-protect
+        (cl-letf (((symbol-function 'process-send-string) #'ignore)
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (push (apply #'format format-string args) messages))))
+          (process-put process 'dsh-emacs-follow-stream-id "follow-1")
+          (process-put process 'dsh-emacs-stream-handlers
+                       (list (cons "custom-1"
+                                   (cons "custom/list"
+                                         (lambda (value) (push value values))))))
+          (dsh-emacs-events--dispatch-json
+           process (concat "{\"type\":\"error\",\"streamId\":\"custom-1\","
+                           "\"error\":{\"code\":\"unavailable\"}}"))
+          (should-not values)
+          (should (assoc "custom-1"
+                         (process-get process 'dsh-emacs-stream-handlers)))
+          (should (equal messages
+                         '("dsh custom-1 stream error: ((code . \"unavailable\"))")))
+          (dsh-emacs-events--dispatch-json
+           process (concat "{\"type\":\"item\",\"streamId\":\"custom-1\","
+                           "\"value\":{\"rows\":[1,2]}}"))
+          (should (equal values '(((rows . [1 2])))))
+          (dsh-emacs-events--dispatch-json
+           process "{\"type\":\"end\",\"streamId\":\"custom-1\"}")
+          (should (equal values '(nil ((rows . [1 2])))))
+          (should-not (process-get process 'dsh-emacs-stream-handlers))
+          (dsh-emacs-events--dispatch-json
+           process "{\"type\":\"end\",\"streamId\":\"custom-1\"}")
+          (should (equal values '(nil ((rows . [1 2]))))))
+      (delete-process process))))
 
 ;; --- Test 93f2: --frame still produces unibyte when encoding a multibyte
 ;; payload in a unibyte buffer ---
@@ -721,7 +991,7 @@
                             (event . ((type . "turn/start") (seq . 1))))
                            ((type . "event")
                             (event . ((type . "turn/end") (seq . 2))))])))
-            (dsh-emacs-events--host-session-status "settled-reconnect" :json-false)
+            (dsh-emacs-events--host-session-status "settled-reconnect" nil)
             (ert-info ((format "%s" "reconnect-deduped-completion-stays-idle"))
               (should (null dsh-emacs--ml-busy))
               (should (string-empty-p (dsh-emacs--ml-busy-indicator)))))
@@ -1719,15 +1989,17 @@
                 ;; Retired stream frames cannot corrupt the new baseline or
                 ;; schedule yet another recovery (including its end frame).
                 (dsh-emacs-events--dispatch-follow
-                 proc '((streamId . "old-follow") (type . "end")))
+                 proc (dsh-protocol-mux-frame--from-alist
+                       '((streamId . "old-follow") (type . "end"))))
                 (dsh-emacs-events--dispatch-follow
-                 proc '((streamId . "old-follow") (type . "item")
-                        (value . ((type . "assistant-stream")
-                                  (frame . ((type . "chunk") (revision . 5)
-                                            (attemptId . "a") (index . 3)
-                                            (chunk . ((type . "text-delta")
-                                                      (index . 0)
-                                                      (text . "STALE")))))))))
+                 proc (dsh-protocol-mux-frame--from-alist
+                       '((streamId . "old-follow") (type . "item")
+                         (value . ((type . "assistant-stream")
+                                   (frame . ((type . "chunk") (revision . 5)
+                                             (attemptId . "a") (index . 3)
+                                             (chunk . ((type . "text-delta")
+                                                       (index . 0)
+                                                       (text . "STALE"))))))))))
                 (dsh-emacs-events--follow-snapshot
                  (current-buffer)
                  '((type . "snapshot") (cursor . 7) (records . [])

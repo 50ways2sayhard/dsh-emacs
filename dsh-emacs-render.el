@@ -2343,19 +2343,6 @@ the transcript; a nil/empty LIST or `dsh-emacs-show-todos' nil renders nothing."
 transcript; they are removed with the buffer on a session reset/replay."
   (setq dsh-emacs--todo-list nil))
 
-(defun dsh-emacs-render-todo-write (event)
-  "Handle a `todo_write' tool event: render a new todo row at the event's
-position in the transcript, one row per snapshot (like a tool card).  Returns
-the event seq but renders no ordinary tool card."
-  (let* ((data (dsh-emacs-render--event-data event))
-         (args (dsh-emacs-render--aget "arguments" data))
-         (list (dsh-emacs-render--todo-parse args))
-         (call-id (or (dsh-emacs-render--aget "callId" data)
-                      (format "seq-%s" (dsh-emacs-render--event-seq event)))))
-    (setq dsh-emacs--todo-list list)
-    (dsh-emacs-render--todo-row list call-id)
-    (dsh-emacs-render--event-seq event)))
-
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: tool call
 ;;; ---------------------------------------------------------------------------
@@ -2405,88 +2392,87 @@ the event seq but renders no ordinary tool card."
      :create-new (null status) :expanded t
      :insert-before (dsh-emacs-render--input-insert-point))))
 
-(cl-defun dsh-emacs-render-tool-call (event)
-  "Render a `tool/call' event. Returns seq."
-  (let ((name (dsh-emacs-render--aget "name" (dsh-emacs-render--event-data event))))
-    (when-let* ((text (and dsh-emacs-show-tool-calls
-                           (dsh-emacs-render--plan-text
-                            name (dsh-emacs-render--aget
-                                  "arguments" (dsh-emacs-render--event-data event))))))
-      (dsh-emacs-render--plan-card
-       (dsh-emacs-render--aget "callId" (dsh-emacs-render--event-data event)) text)
-      (cl-return-from dsh-emacs-render-tool-call
-        (dsh-emacs-render--event-seq event)))
-    (if (equal name "todo_write")
-        ;; todo_write updates the live plan strip, not an ordinary tool card.
-        (dsh-emacs-render-todo-write event)
-      (if (not dsh-emacs-show-tool-calls)
-          nil
-        (let* ((data (dsh-emacs-render--event-data event))
-               (call-id (dsh-emacs-render--aget "callId" data))
-               (name (dsh-emacs-render--aget "name" data))
-               (args (dsh-emacs-render--aget "arguments" data))
-               (variant-info (dsh-emacs-render--tool-variant name))
-               (variant (car variant-info))
-               (icon (cdr variant-info))
-               (header (dsh-emacs-render--tool-header name variant args))
-               (title (car header))
-               ;; An ask call's questions were decoded from its arguments:
-               ;; its row states which stage the question set is in, and its
-               ;; body is the questionnaire (see the ask card section).  The
-               ;; variant is the gate, like the bash and write/edit cards.
-               (ask-questions (and (equal variant "question")
-                                   (dsh-emacs-render--ask-questions args)))
-               (summary (or (and ask-questions
-                                 (dsh-emacs-render--ask-summary
-                                  nil nil nil))
-                            (cdr header)))
-               (body-text (dsh-emacs-render--tool-body-text variant args))
-               ;; bash and file-mutation rows draw their (running) expanded body
-               ;; as the card the settled result will complete — the `$' prompt
-               ;; rows, or the intended diff — so the first frame already
-               ;; matches.  read waits for its metadata, like dsh web.  The
-               ;; variant gate keeps the other variants from re-parsing their
-               ;; arguments for a card they cannot have.
-               (display-body (cond (ask-questions
-                                    (dsh-emacs-render--ask-body
-                                     ask-questions nil nil))
-                                   ((equal variant "bash")
-                                    (or (dsh-emacs-render--bash-card-body body-text)
-                                        body-text))
-                                   ((member variant '("write" "edit"))
-                                    (or (dsh-emacs-render--diff-card-body
-                                         name args nil 'pending)
-                                        body-text))
-                                   (t body-text)))
-               (ns (dsh-emacs-render--make-namespace))
-               (insert-point (dsh-emacs-render--input-insert-point))
-               (ts (dsh-emacs-render--event-time event))
-               (label-left (concat icon " "
-                                   (propertize title 'face 'dsh-emacs-tool-title-face)))
-               (label-right (or summary ""))
-               (block-id (dsh-emacs-render--tool-call-block-id call-id)))
-          ;; Track state for later (tool/result will update this block).
-          (dsh-emacs-render--set-tool-state
-           call-id :state 'pending :variant variant :icon icon :title title
-           :name name :args body-text :args-raw args
-           :summary summary :call-time ts :ns ns)
-          (dsh-emacs-ui-update-fragment
-           (dsh-emacs-ui-make-fragment
-            :namespace-id ns
-            :block-id block-id
-            :label-left label-left
-            :label-right label-right
-            :body display-body
-            :style 'minimal
-            :status 'tool-pending
-            ;; The state tint covers the header row only, never the body: the
-            ;; expanded card content must not inherit the row's accent.
-            :header-face 'dsh-emacs-tool-pending-face)
-           :create-new t
-           :expanded dsh-emacs-tool-expand-by-default
-           :insert-before insert-point))
-        ;; Return seq via the helper to keep helper structure.
-        (dsh-emacs-render--event-seq event)))))
+(defun dsh-emacs-render-tool-call (event)
+  "Render a `tool/call' EVENT and return its seq, or nil when hidden.
+Todo snapshots still apply when ordinary tool cards are hidden."
+  (pcase-let* (((cl-struct dsh-protocol-tool-call name call-id (arguments args))
+                (dsh-protocol-tool-call--from-alist
+                 (dsh-emacs-render--event-data event)))
+               (seq (dsh-emacs-render--event-seq event))
+               (plan-text (and dsh-emacs-show-tool-calls
+                               (dsh-emacs-render--plan-text name args))))
+    (cond
+     (plan-text
+      (dsh-emacs-render--plan-card call-id plan-text)
+      seq)
+     ((equal name "todo_write")
+      (setq dsh-emacs--todo-list (dsh-emacs-render--todo-parse args))
+      (dsh-emacs-render--todo-row dsh-emacs--todo-list
+                                  (or call-id (format "seq-%s" seq)))
+      seq)
+     ((not dsh-emacs-show-tool-calls) nil)
+     (t
+      (let* ((variant-info (dsh-emacs-render--tool-variant name))
+             (variant (car variant-info))
+             (icon (cdr variant-info))
+             (header (dsh-emacs-render--tool-header name variant args))
+             (title (car header))
+             ;; An ask call's questions were decoded from its arguments:
+             ;; its row states which stage the question set is in, and its
+             ;; body is the questionnaire (see the ask card section).  The
+             ;; variant is the gate, like the bash and write/edit cards.
+             (ask-questions (and (equal variant "question")
+                                 (dsh-emacs-render--ask-questions args)))
+             (summary (or (and ask-questions
+                               (dsh-emacs-render--ask-summary
+                                nil nil nil))
+                          (cdr header)))
+             (body-text (dsh-emacs-render--tool-body-text variant args))
+             ;; bash and file-mutation rows draw their (running) expanded body
+             ;; as the card the settled result will complete — the `$' prompt
+             ;; rows, or the intended diff — so the first frame already
+             ;; matches.  read waits for its metadata, like dsh web.  The
+             ;; variant gate keeps the other variants from re-parsing their
+             ;; arguments for a card they cannot have.
+             (display-body (cond (ask-questions
+                                  (dsh-emacs-render--ask-body
+                                   ask-questions nil nil))
+                                 ((equal variant "bash")
+                                  (or (dsh-emacs-render--bash-card-body body-text)
+                                      body-text))
+                                 ((member variant '("write" "edit"))
+                                  (or (dsh-emacs-render--diff-card-body
+                                       name args nil 'pending)
+                                      body-text))
+                                 (t body-text)))
+             (ns (dsh-emacs-render--make-namespace))
+             (insert-point (dsh-emacs-render--input-insert-point))
+             (ts (dsh-emacs-render--event-time event))
+             (label-left (concat icon " "
+                                 (propertize title 'face 'dsh-emacs-tool-title-face)))
+             (label-right (or summary ""))
+             (block-id (dsh-emacs-render--tool-call-block-id call-id)))
+        ;; Track state for later (tool/result will update this block).
+        (dsh-emacs-render--set-tool-state
+         call-id :state 'pending :variant variant :icon icon :title title
+         :name name :args body-text :args-raw args
+         :summary summary :call-time ts :ns ns)
+        (dsh-emacs-ui-update-fragment
+         (dsh-emacs-ui-make-fragment
+          :namespace-id ns
+          :block-id block-id
+          :label-left label-left
+          :label-right label-right
+          :body display-body
+          :style 'minimal
+          :status 'tool-pending
+          ;; The state tint covers the header row only, never the body: the
+          ;; expanded card content must not inherit the row's accent.
+          :header-face 'dsh-emacs-tool-pending-face)
+         :create-new t
+         :expanded dsh-emacs-tool-expand-by-default
+         :insert-before insert-point))
+      seq))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: tool result (bash terminal card / ioCard for other tools)
@@ -3315,229 +3301,223 @@ everything else `success'."
         (signal 'error)
         (t 'success)))
 
-(cl-defun dsh-emacs-render-tool-result (event)
+(defun dsh-emacs-render-tool-result (event)
   "Render a `tool/result' event by appending to the corresponding tool-call block."
-  (if (not dsh-emacs-show-tool-calls)
-      nil
-    (pcase-let* (((cl-struct dsh-protocol-tool-result
-                             call-id (text full-text) is-error
-                             (exit-code block-exit-code) (signal block-signal)
-                             error-code error-reason meta)
-                  (dsh-protocol-tool-result--from-alist
-                   (dsh-emacs-render--event-data event))))
-      (let* ((ns (dsh-emacs-render--make-namespace))
-             (block-id (dsh-emacs-render--tool-call-block-id call-id)))
-        (when-let* ((prev (dsh-emacs-render--tool-state call-id)))
-          (when-let* ((text (plist-get prev :plan-text)))
-            (dsh-emacs-render--plan-card
-             call-id text (if is-error "Review ended" "Approved")
-             (and is-error (not (string-empty-p full-text)) full-text))
-            (cl-return-from dsh-emacs-render-tool-result
-              (dsh-emacs-render--event-seq event)))
-          (let* ((title (or (plist-get prev :title) "Tool"))
-                 (name (or (plist-get prev :name) ""))
-                 (args (or (plist-get prev :args) ""))
-                 (args-raw (or (plist-get prev :args-raw) ""))
-                 (summary (or (plist-get prev :summary) ""))
-                 (icon (or (plist-get prev :icon) ""))
-                 (variant (plist-get prev :variant))
-                 ;; Control can settle a question before its follow result or
-                 ;; older history page renders.  Reconcile at row creation as
-                 ;; well as on projection updates; the recorded result stays
-                 ;; pending forever even after the late answer is admitted.
-                 (settled-question
-                  (and (equal variant "question")
-                       dsh-emacs--session-questions
-                       (dsh-emacs-render--ask-pending-p full-text)
-                       (cl-find call-id
-                                (dsh-protocol-user-questions-settled
-                                 dsh-emacs--session-questions)
-                                :key #'dsh-protocol-settled-question-call-id
-                                :test #'equal)))
-                 (full-text
-                  (if settled-question
-                      (dsh-protocol-question-answers-json
-                       (dsh-protocol-settled-question-answers settled-question))
-                    full-text))
-                 ;; The shell status rides in the result text, not the wire
-                 ;; block: parse it before resolving the display state.
-                 (shell (and (equal variant "bash")
-                             (dsh-emacs-render--shell-status full-text)))
-                 (exit-code (or block-exit-code (nth 1 shell)))
-                 (signal (or block-signal (nth 2 shell)))
-                 (state (dsh-emacs-render--result-state
-                         is-error error-code exit-code signal))
-                 ;; The two user-driven ask outcomes are the human's own
-                 ;; decision, not a tool failure: a cancelled question set
-                 ;; settles and an abandoned one interrupts, the mapping dsh
-                 ;; web's AskQuestionRow applies.  `result-state' cannot know
-                 ;; that, so the ask call corrects its own state here.
-                 (state (if (equal variant "question")
-                            (pcase error-code
-                              ("ASK_CANCELLED" 'success)
-                              ("ASK_ABORTED" 'stopped)
-                              (_ state))
-                          state))
-                 ;; An ask call also explains those two outcomes in its body
-                 ;; (web's `ask.cancelledDetail' / `ask.interruptedDetail'),
-                 ;; where the generic status line would say only "interrupted".
-                 (ask-verdict (and (equal variant "question")
-                                   (pcase error-code
-                                     ("ASK_CANCELLED"
-                                      "This question set was cancelled before answers were submitted.")
-                                     ("ASK_ABORTED"
-                                      "This question set was interrupted before answers were submitted."))))
-                 (ask-questions (and (equal variant "question")
-                                     (dsh-emacs-render--ask-questions
-                                      args-raw)))
-                 (ask-answers (and ask-questions
-                                   (dsh-emacs-render--ask-answers full-text)))
-                 ;; dsh 0.2.0's timed tool reports an expired foreground
-                 ;; window as a successful pending result; the questions stay
-                 ;; answerable (`dsh-emacs-answer-question'), so the row must
-                 ;; not read as an answered or failed set.
-                 (ask-pending (and ask-questions
-                                   (dsh-emacs-render--ask-pending-p full-text)))
-                 ;; The three goal tools carry dsh web's structured card: the
-                 ;; objective is the summary and the body is State / Rounds
-                 ;; (+ Blocker).  A cleared `{goal: null}' answer is that
-                 ;; card's empty state, not an unrecognized payload; a failed
-                 ;; or malformed result keeps the generic ioCard.
-                 (goal-card (and (equal variant "goal")
-                                 (eq state 'success)
-                                 (dsh-emacs-render--goal-card-value full-text)))
-                 (goal-value (car-safe goal-card))
-                 (goal-cleared (cdr-safe goal-card))
-                 (goal-body (cond ((null goal-card) nil)
-                                  (goal-value
-                                   (dsh-emacs-render--goal-card-body goal-value))
-                                  (t "")))
-                 ;; An ask row's header states the outcome of its question
-                 ;; set (`2/3 answered', `pending', `interrupted',
-                 ;; `cancelled'); a settled set the card cannot describe falls
-                 ;; back to the result preview like any other row.
-                 (row-summary (cond
-                               (ask-questions
-                                (or (dsh-emacs-render--ask-summary
-                                     ask-answers error-code t ask-pending)
-                                    (dsh-emacs-render--tool-result-preview
-                                     full-text)))
-                               (goal-card
-                                (or (and goal-value
-                                         (when-let* ((objective
-                                                      (dsh-protocol-goal-objective
-                                                       goal-value)))
-                                           (dsh-emacs-reference-fontify
-                                            objective)))
-                                    "No goal"))
-                               (t summary)))
-                 (face (pcase state
-                         ('success 'dsh-emacs-tool-success-face)
-                         ('error 'dsh-emacs-tool-error-face)
-                         ('stopped 'dsh-emacs-tool-stopped-face)
-                         (_ 'dsh-emacs-tool-pending-face)))
-                 ;; The generic ioCard prints a status line only when the
-                 ;; call failed or was interrupted: the header's green tint
-                 ;; already says a clean call settled, and "✓ exit 0" is
-                 ;; shell news a non-shell tool never had (see the bash card,
-                 ;; which suppresses it too).  The line stays unstyled — a
-                 ;; state face tints the header row, never a body.
-                 (status-text (and (memq state '(error stopped))
-                                   (dsh-emacs-render--tool-status-text
-                                    state exit-code signal error-reason)))
-                 ;; A timed question whose window expired explains itself in
-                 ;; the body, where the questionnaire still is, and names the
-                 ;; command that answers it later.
-                 (pending-text (and ask-pending
-                                    (concat "This question set is pending — "
-                                            "answer it later with M-x "
-                                            "dsh-emacs-answer-question.")))
-                 ;; A settled bash/pwsh call expands into a terminal card
-                 ;; (`$' prompt rows + output + status footer), a file read into
-                 ;; the line-numbered read card, a write/edit into its diff
-                 ;; card, an ask call into its question/answer record; a call
-                 ;; the card models cannot describe (or a failed one) keeps the
-                 ;; generic ioCard (IN/OUT).  The variant gate keeps the other
-                 ;; variants from re-parsing their arguments.
-                 (body (or goal-body
-                           (and ask-questions
-                                (dsh-emacs-render--ask-body
-                                 ask-questions ask-answers
-                                 (or pending-text ask-verdict status-text)))
-                           (and (equal variant "bash")
-                                (dsh-emacs-render--bash-card-body
-                                 args (nth 0 shell) state exit-code signal
-                                 error-reason))
-                           (and (eq state 'success)
-                                (dsh-emacs-render--read-card-body
-                                 name args-raw meta full-text))
-                           (and (member variant '("write" "edit"))
-                                (dsh-emacs-render--diff-card-body
-                                 name args-raw meta state))
-                           (dsh-emacs-render--present-card-body name full-text)
-                           (dsh-emacs-render--job-card-body name full-text)
-                           (dsh-emacs-render--tool-body-io
-                            args full-text status-text))))
-            (dsh-emacs-ui-update-fragment
-             (dsh-emacs-ui-make-fragment
-              :namespace-id ns
-              :block-id block-id
-              :label-left (concat
-                           (dsh-emacs-render--tool-leading icon state)
-                           (propertize title 'face 'dsh-emacs-tool-title-face))
-              :label-right (if (string-empty-p row-summary)
-                               (dsh-emacs-render--tool-result-preview
-                                full-text)
-                             row-summary)
-              :body body
-              :style 'minimal
-              ;; A cleared goal has no fields to unfold.
-              :non-foldable goal-cleared
-              ;; State tint on the header row only: the ioCard body keeps its
-              ;; own neutral faces instead of inheriting the status accent.
-              :header-face face
-              :status (pcase state
-                        ('success 'tool-success)
-                        ('error 'tool-error)
-                        (_ 'tool-stopped)))
-             :create-new nil)
-            ;; Track the new state, keeping the call-time identity the card
-            ;; was built from: a later projection-driven settle
-            ;; (`dsh-emacs-render-question-settled') replays this row through
-            ;; the ordinary result path and needs the original arguments.
-            (dsh-emacs-render--set-tool-state
-             call-id :state state :result full-text :exit-code exit-code
-             :variant variant :title title :name name :args args
-             :args-raw args-raw :icon icon :summary summary
-             :call-time (plist-get prev :call-time) :ns (plist-get prev :ns))))))
+  (when dsh-emacs-show-tool-calls
+    (dsh-emacs-render--apply-tool-result
+     (dsh-protocol-tool-result--from-alist
+      (dsh-emacs-render--event-data event)))
     (dsh-emacs-render--event-seq event)))
+
+(cl-defun dsh-emacs-render--apply-tool-result (result)
+  "Update an existing tool card from decoded RESULT.
+Both stream results and late question answers use this path; event sequence
+tracking belongs to `dsh-emacs-render-tool-result'."
+  (pcase-let* (((cl-struct dsh-protocol-tool-result
+                           call-id (text full-text) is-error
+                           (exit-code block-exit-code) (signal block-signal)
+                           error-code error-reason meta)
+                result)
+               (ns (dsh-emacs-render--make-namespace))
+               (block-id (dsh-emacs-render--tool-call-block-id call-id)))
+    (when-let* ((prev (dsh-emacs-render--tool-state call-id)))
+      (when-let* ((text (plist-get prev :plan-text)))
+        (dsh-emacs-render--plan-card
+         call-id text (if is-error "Review ended" "Approved")
+         (and is-error (not (string-empty-p full-text)) full-text))
+        (cl-return-from dsh-emacs-render--apply-tool-result nil))
+      (let* ((title (or (plist-get prev :title) "Tool"))
+             (name (or (plist-get prev :name) ""))
+             (args (or (plist-get prev :args) ""))
+             (args-raw (or (plist-get prev :args-raw) ""))
+             (summary (or (plist-get prev :summary) ""))
+             (icon (or (plist-get prev :icon) ""))
+             (variant (plist-get prev :variant))
+             ;; Control can settle a question before its follow result or
+             ;; older history page renders.  Reconcile at row creation as
+             ;; well as on projection updates; the recorded result stays
+             ;; pending forever even after the late answer is admitted.
+             (settled-question
+              (and (equal variant "question")
+                   dsh-emacs--session-questions
+                   (dsh-emacs-render--ask-pending-p full-text)
+                   (cl-find call-id
+                            (dsh-protocol-user-questions-settled
+                             dsh-emacs--session-questions)
+                            :key #'dsh-protocol-settled-question-call-id
+                            :test #'equal)))
+             (full-text
+              (if settled-question
+                  (dsh-protocol-question-answers-json
+                   (dsh-protocol-settled-question-answers settled-question))
+                full-text))
+             ;; The shell status rides in the result text, not the wire
+             ;; block: parse it before resolving the display state.
+             (shell (and (equal variant "bash")
+                         (dsh-emacs-render--shell-status full-text)))
+             (exit-code (or block-exit-code (nth 1 shell)))
+             (signal (or block-signal (nth 2 shell)))
+             (state (dsh-emacs-render--result-state
+                     is-error error-code exit-code signal))
+             ;; The two user-driven ask outcomes are the human's own
+             ;; decision, not a tool failure: a cancelled question set
+             ;; settles and an abandoned one interrupts, the mapping dsh
+             ;; web's AskQuestionRow applies.  `result-state' cannot know
+             ;; that, so the ask call corrects its own state here.
+             (state (if (equal variant "question")
+                        (pcase error-code
+                          ("ASK_CANCELLED" 'success)
+                          ("ASK_ABORTED" 'stopped)
+                          (_ state))
+                      state))
+             ;; An ask call also explains those two outcomes in its body
+             ;; (web's `ask.cancelledDetail' / `ask.interruptedDetail'),
+             ;; where the generic status line would say only "interrupted".
+             (ask-verdict (and (equal variant "question")
+                               (pcase error-code
+                                 ("ASK_CANCELLED"
+                                  "This question set was cancelled before answers were submitted.")
+                                 ("ASK_ABORTED"
+                                  "This question set was interrupted before answers were submitted."))))
+             (ask-questions (and (equal variant "question")
+                                 (dsh-emacs-render--ask-questions
+                                  args-raw)))
+             (ask-answers (and ask-questions
+                               (dsh-emacs-render--ask-answers full-text)))
+             ;; dsh 0.2.0's timed tool reports an expired foreground
+             ;; window as a successful pending result; the questions stay
+             ;; answerable (`dsh-emacs-answer-question'), so the row must
+             ;; not read as an answered or failed set.
+             (ask-pending (and ask-questions
+                               (dsh-emacs-render--ask-pending-p full-text)))
+             ;; The three goal tools carry dsh web's structured card: the
+             ;; objective is the summary and the body is State / Rounds
+             ;; (+ Blocker).  A cleared `{goal: null}' answer is that
+             ;; card's empty state, not an unrecognized payload; a failed
+             ;; or malformed result keeps the generic ioCard.
+             (goal-card (and (equal variant "goal")
+                             (eq state 'success)
+                             (dsh-emacs-render--goal-card-value full-text)))
+             (goal-value (car-safe goal-card))
+             (goal-cleared (cdr-safe goal-card))
+             (goal-body (cond ((null goal-card) nil)
+                              (goal-value
+                               (dsh-emacs-render--goal-card-body goal-value))
+                              (t "")))
+             ;; An ask row's header states the outcome of its question
+             ;; set (`2/3 answered', `pending', `interrupted',
+             ;; `cancelled'); a settled set the card cannot describe falls
+             ;; back to the result preview like any other row.
+             (row-summary (cond
+                           (ask-questions
+                            (or (dsh-emacs-render--ask-summary
+                                 ask-answers error-code t ask-pending)
+                                (dsh-emacs-render--tool-result-preview
+                                 full-text)))
+                           (goal-card
+                            (or (and goal-value
+                                     (when-let* ((objective
+                                                  (dsh-protocol-goal-objective
+                                                   goal-value)))
+                                       (dsh-emacs-reference-fontify
+                                        objective)))
+                                "No goal"))
+                           (t summary)))
+             (face (pcase state
+                     ('success 'dsh-emacs-tool-success-face)
+                     ('error 'dsh-emacs-tool-error-face)
+                     ('stopped 'dsh-emacs-tool-stopped-face)
+                     (_ 'dsh-emacs-tool-pending-face)))
+             ;; The generic ioCard prints a status line only when the
+             ;; call failed or was interrupted: the header's green tint
+             ;; already says a clean call settled, and "✓ exit 0" is
+             ;; shell news a non-shell tool never had (see the bash card,
+             ;; which suppresses it too).  The line stays unstyled — a
+             ;; state face tints the header row, never a body.
+             (status-text (and (memq state '(error stopped))
+                               (dsh-emacs-render--tool-status-text
+                                state exit-code signal error-reason)))
+             ;; A timed question whose window expired explains itself in
+             ;; the body, where the questionnaire still is, and names the
+             ;; command that answers it later.
+             (pending-text (and ask-pending
+                                (concat "This question set is pending — "
+                                        "answer it later with M-x "
+                                        "dsh-emacs-answer-question.")))
+             ;; A settled bash/pwsh call expands into a terminal card
+             ;; (`$' prompt rows + output + status footer), a file read into
+             ;; the line-numbered read card, a write/edit into its diff
+             ;; card, an ask call into its question/answer record; a call
+             ;; the card models cannot describe (or a failed one) keeps the
+             ;; generic ioCard (IN/OUT).  The variant gate keeps the other
+             ;; variants from re-parsing their arguments.
+             (body (or goal-body
+                       (and ask-questions
+                            (dsh-emacs-render--ask-body
+                             ask-questions ask-answers
+                             (or pending-text ask-verdict status-text)))
+                       (and (equal variant "bash")
+                            (dsh-emacs-render--bash-card-body
+                             args (nth 0 shell) state exit-code signal
+                             error-reason))
+                       (and (eq state 'success)
+                            (dsh-emacs-render--read-card-body
+                             name args-raw meta full-text))
+                       (and (member variant '("write" "edit"))
+                            (dsh-emacs-render--diff-card-body
+                             name args-raw meta state))
+                       (dsh-emacs-render--present-card-body name full-text)
+                       (dsh-emacs-render--job-card-body name full-text)
+                       (dsh-emacs-render--tool-body-io
+                        args full-text status-text))))
+        (dsh-emacs-ui-update-fragment
+         (dsh-emacs-ui-make-fragment
+          :namespace-id ns
+          :block-id block-id
+          :label-left (concat
+                       (dsh-emacs-render--tool-leading icon state)
+                       (propertize title 'face 'dsh-emacs-tool-title-face))
+          :label-right (if (string-empty-p row-summary)
+                           (dsh-emacs-render--tool-result-preview
+                            full-text)
+                         row-summary)
+          :body body
+          :style 'minimal
+          ;; A cleared goal has no fields to unfold.
+          :non-foldable goal-cleared
+          ;; State tint on the header row only: the ioCard body keeps its
+          ;; own neutral faces instead of inheriting the status accent.
+          :header-face face
+          :status (pcase state
+                    ('success 'tool-success)
+                    ('error 'tool-error)
+                    (_ 'tool-stopped)))
+         :create-new nil)
+        ;; Track the new state, keeping the call-time identity the card
+        ;; was built from: a later projection-driven settle
+        ;; (`dsh-emacs-render-question-settled') updates this row through
+        ;; the same result path and needs the original arguments.
+        (dsh-emacs-render--set-tool-state
+         call-id :state state :result full-text :exit-code exit-code
+         :variant variant :title title :name name :args args
+         :args-raw args-raw :icon icon :summary summary
+         :call-time (plist-get prev :call-time) :ns (plist-get prev :ns)))))
+  nil)
 
 (defun dsh-emacs-render-question-settled (call-id answers-json)
   "Settle the transcript ask row for CALL-ID with ANSWERS-JSON.
 The `userQuestions' projection reports a timed question settled when its late
 answer was steered in; the recorded tool result is only the pending payload,
-so the card is completed by replaying the settled batch through the one
-tool-result path that updates a row in place (an in-time answer already
+so the card is completed by applying the settled batch through the shared
+decoded-result path that updates a row in place (an in-time answer already
 settled its row normally, so its card is left alone).  No-op unless this
 buffer still tracks CALL-ID's row and that row is showing the pending result."
   (let ((prev (dsh-emacs-render--tool-state call-id)))
-    (when (and prev
+    (when (and dsh-emacs-show-tool-calls prev
                (equal (plist-get prev :variant) "question")
                (dsh-emacs-render--ask-pending-p (plist-get prev :result)))
-      (dsh-emacs-render-tool-result
-       (list (cons "type" "tool/result")
-             (cons "data"
-                   (list (cons "message"
-                               (list (cons "callId" call-id)
-                                     (cons "content"
-                                           (vector
-                                            (list (cons "type" "tool-result")
-                                                  (cons "isError" :json-false)
-                                                  (cons "content"
-                                                        (vector
-                                                         (list (cons "type" "text")
-                                                               (cons "text"
-                                                                     answers-json))))))))))))))))
+      (dsh-emacs-render--apply-tool-result
+       (dsh-protocol--make-tool-result :call-id call-id :text answers-json)))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: goal card (`create_goal' / `get_goal' / `update_goal')
@@ -4580,92 +4560,67 @@ a run followed by its done (the usual shape) becomes a single node.
 Returns the event seq."
   (let ((seq (dsh-emacs-render--event-seq event)))
     (when dsh-emacs-show-commands
-      (let* ((type (dsh-emacs-render--aget "type" event))
-             (data (dsh-emacs-render--event-data event))
-             (command-id (dsh-emacs-render--aget "commandId" data))
-             (ns (dsh-emacs-render--make-namespace)))
+      (pcase-let (((cl-struct dsh-protocol-command-event
+                              type command-id name kind text)
+                   (dsh-protocol-command-event--from-alist event)))
         (when command-id
-          (let* ((block-id (format "cmd-%s" command-id))
-                 (label (dsh-emacs-render-command-label
-                         (dsh-emacs-render--aget "name" data)
-                         (dsh-emacs-render--aget "args" data)))
-                 (icon (dsh-emacs-render--tool-icon "bash")))
-            (if (equal type "command/run")
-                (progn
-                  ;; Clean up the optimistic row if one is pending for
-                  ;; this command name (instant feedback → real event).
-                  ;; A page's run is not the echo of a local submit, so it
-                  ;; never takes that over (and `dsh-emacs--pending-command'
-                  ;; is scoped to nil for the page anyway).
-                  (when (and dsh-emacs--pending-command
-                             (not (dsh-emacs-render--history-page-p)))
-                    (let* ((temp-id (nth 0 dsh-emacs--pending-command))
-                           (temp-entry (gethash temp-id
-                                                dsh-emacs--command-blocks)))
-                      (dsh-emacs--command-spinner-stop temp-id)
-                      (when temp-entry
-                        (dsh-emacs-ui-delete-fragment
-                         (nth 0 temp-entry) (nth 1 temp-entry)))
-                      (remhash temp-id dsh-emacs--command-blocks))
-                    (setq dsh-emacs--pending-command nil))
-                  ;; Now render with the real command-id.
-                  (puthash command-id (list ns block-id label icon)
-                           dsh-emacs--command-blocks)
-                  (dsh-emacs-ui-update-fragment
-                   (dsh-emacs-ui-make-fragment
-                    :namespace-id ns :block-id block-id
-                    :label-left (concat
-                                 (dsh-emacs-render--tool-leading icon 'pending)
-                                 (propertize label 'face 'dsh-emacs-tool-title-face)
-                                 " "
-                                 (car dsh-emacs--command-spinner-frames))
-                    :style 'minimal
-                    :status 'tool-pending
-                    :header-face 'dsh-emacs-tool-pending-face)
-                   :create-new t :expanded nil
-                   :insert-before (dsh-emacs-render--input-insert-point))
-                  (unless (dsh-emacs-render--history-page-p)
-                    (dsh-emacs--command-spinner-start command-id
-                                                      (current-buffer))))
-              (when-let* ((entry (gethash command-id
-                                          dsh-emacs--command-blocks)))
-                ;; A page never animates: stop only a spinner this render
-                ;; actually started (a live one), and leave the optimistic
-                ;; pending-command state alone.
+          (if (equal type "command/run")
+              (let* ((ns (dsh-emacs-render--make-namespace))
+                     (block-id (format "cmd-%s" command-id))
+                     (label (dsh-emacs-render-command-label name))
+                     (icon (dsh-emacs-render--tool-icon "bash")))
+                ;; Only a live run takes over the optimistic submit row.
                 (unless (dsh-emacs-render--history-page-p)
-                  (dsh-emacs--command-spinner-stop command-id))
-                (let* ((kind (dsh-emacs-render--aget "kind" data))
-                       (ok (not (equal kind "error")))
-                       (state (if ok 'success 'error))
-                       (text (dsh-emacs-render--aget "text" data))
-                       (entry-icon (or (nth 3 entry)
-                                       (dsh-emacs-render--tool-icon "bash"))))
-                  (dsh-emacs-ui-update-fragment
-                   (dsh-emacs-ui-make-fragment
-                    :namespace-id (nth 0 entry) :block-id (nth 1 entry)
-                    :label-left (concat
-                                 (dsh-emacs-render--tool-leading entry-icon state)
-                                 (propertize (nth 2 entry)
-                                             'face 'dsh-emacs-tool-title-face))
-                    ;; The header shows only the command name + a short status,
-                    ;; never the (possibly long, multi-line) result.  The result
-                    ;; body is a collapsible section below, collapsed by default,
-                    ;; so `goal' is not truncated to `goal…' by top-border.
-                    :label-right (propertize
-                                  (or (dsh-emacs-render--command-status-text state)
-                                      "")
-                                  'face (if ok
-                                            'dsh-emacs-tool-success-face
-                                          'dsh-emacs-tool-error-face))
-                    :body (and (stringp text) (not (string-empty-p text)) text)
-                    :style 'minimal
-                    :status (if ok 'tool-success 'tool-error)
-                    ;; The result body is plain text; only the header row
-                    ;; carries the success/error accent.
-                    :header-face (if ok
-                                     'dsh-emacs-tool-success-face
-                                   'dsh-emacs-tool-error-face))
-                   :create-new nil))))))))
+                  (dsh-emacs-render-command-cleanup-optimistic))
+                (puthash command-id (list ns block-id label icon)
+                         dsh-emacs--command-blocks)
+                (dsh-emacs-ui-update-fragment
+                 (dsh-emacs-ui-make-fragment
+                  :namespace-id ns :block-id block-id
+                  :label-left (concat
+                               (dsh-emacs-render--tool-leading icon 'pending)
+                               (propertize label 'face 'dsh-emacs-tool-title-face)
+                               " "
+                               (car dsh-emacs--command-spinner-frames))
+                  :style 'minimal
+                  :status 'tool-pending
+                  :header-face 'dsh-emacs-tool-pending-face)
+                 :create-new t :expanded nil
+                 :insert-before (dsh-emacs-render--input-insert-point))
+                (unless (dsh-emacs-render--history-page-p)
+                  (dsh-emacs--command-spinner-start command-id
+                                                    (current-buffer))))
+            (when-let* ((entry (gethash command-id dsh-emacs--command-blocks)))
+              ;; Historical results leave live animations and submits alone.
+              (unless (dsh-emacs-render--history-page-p)
+                (dsh-emacs--command-spinner-stop command-id))
+              (pcase-let* ((`(,ns ,block-id ,label ,icon) entry)
+                           (ok (not (equal kind "error")))
+                           (state (if ok 'success 'error))
+                           (entry-icon (or icon
+                                           (dsh-emacs-render--tool-icon "bash"))))
+                (dsh-emacs-ui-update-fragment
+                 (dsh-emacs-ui-make-fragment
+                  :namespace-id ns :block-id block-id
+                  :label-left (concat
+                               (dsh-emacs-render--tool-leading entry-icon state)
+                               (propertize label 'face 'dsh-emacs-tool-title-face))
+                  ;; Keep the run's label and a short status in the header;
+                  ;; the possibly multi-line result belongs in the folded body.
+                  :label-right (propertize
+                                (or (dsh-emacs-render--command-status-text state)
+                                    "")
+                                'face (if ok
+                                          'dsh-emacs-tool-success-face
+                                        'dsh-emacs-tool-error-face))
+                  :body (and (stringp text) (not (string-empty-p text)) text)
+                  :style 'minimal
+                  :status (if ok 'tool-success 'tool-error)
+                  ;; The result body does not inherit the header's accent.
+                  :header-face (if ok
+                                   'dsh-emacs-tool-success-face
+                                 'dsh-emacs-tool-error-face))
+                 :create-new nil)))))))
     seq))
 
 ;; ---------------------------------------------------------------------------

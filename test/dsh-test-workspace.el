@@ -670,6 +670,133 @@
           (setq dsh-emacs-sessions-buffer old-sessions-buffer)
           (when (buffer-live-p list-buf) (kill-buffer list-buf))))))
 
+(ert-deftest dsh-emacs-test-workspace-session-notices-replay-original-summary ()
+  :tags '(dsh-unit)
+  (dolist (decoded '(nil t))
+    (let ((dsh-emacs-sessions-buffer
+           (generate-new-buffer-name " *session-notices*"))
+          (dsh-emacs--sessions nil)
+          (dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+          (dsh-emacs--subagent-catalogs (make-hash-table :test 'equal))
+          (dsh-emacs--host-refresh-depth 0)
+          (dsh-emacs--host-refresh-frames nil))
+      (dsh-emacs-events--host-refresh-begin)
+      (dolist (frame
+               '(((type . "emit") (event . "api-session/added")
+                  (args . [((sessionId . "a") (title . "Original A")
+                            (updatedAt . 9) (running . t))]))
+                 ((type . "emit") (event . "api-session/status")
+                  (args . ["a" :json-false]))
+                 ((type . "emit") (event . "api-session/added")
+                  (args . [((sessionId . "b") (title . "B"))]))
+                 ((type . "emit") (event . "api-session/activity")
+                  (args . ["a" 123]))))
+        (dsh-emacs-events--host-item
+         nil (if decoded (dsh-protocol-core-item--from-alist frame) frame)))
+      (should (equal '("a" "b")
+                     (mapcar #'dsh-protocol-session-session-id
+                             dsh-emacs--sessions)))
+      (should-not (dsh-protocol-session-running (car dsh-emacs--sessions)))
+      (should (= 9 (dsh-protocol-session-updated-at (car dsh-emacs--sessions))))
+      (let ((frame '((type . "emit") (event . "api-session/removed")
+                     (args . ["b"]))))
+        (dsh-emacs-events--host-item
+         nil (if decoded (dsh-protocol-core-item--from-alist frame) frame)))
+      (should (equal '("a")
+                     (mapcar #'dsh-protocol-session-session-id
+                             dsh-emacs--sessions)))
+      ;; Cache mutations must not rewrite the original added-notice payload.
+      (setf (dsh-protocol-session-title (car dsh-emacs--sessions)) "Cache only")
+      (should (= 4 (length dsh-emacs--host-refresh-frames)))
+      (setq dsh-emacs--sessions nil)
+      (dsh-emacs-events--host-refresh-drain)
+      (should (equal '("a")
+                     (mapcar #'dsh-protocol-session-session-id
+                             dsh-emacs--sessions)))
+      (should (equal "Original A"
+                     (dsh-protocol-session-title (car dsh-emacs--sessions))))
+      (should-not (dsh-protocol-session-running (car dsh-emacs--sessions)))
+      (should-not dsh-emacs--host-refresh-frames)
+      (should (= 0 dsh-emacs--host-refresh-depth)))))
+
+(ert-deftest dsh-emacs-test-workspace-stream-changes-survive-refresh ()
+  :tags '(dsh-unit)
+  (dolist (decoded '(nil t))
+    (let* ((dsh-emacs-sessions-buffer
+            (generate-new-buffer-name " *workspace-stream*"))
+           (dsh-emacs--sessions nil)
+           (dsh-emacs--workspaces nil)
+           (dsh-emacs--archived-sessions nil)
+           (dsh-emacs--host-refresh-depth 0)
+           (dsh-emacs--host-refresh-frames nil)
+           (baseline '((type . "baseline")
+                       (value . ((items . [((workspaceId . "a") (title . "Old A"))
+                                           ((workspaceId . "b") (title . "B"))])
+                                 (archivedSessionIds . ["old"]))))))
+      (dsh-emacs-events--host-item
+       nil (if decoded (dsh-protocol-core-item--from-alist baseline) baseline))
+      (let ((snapshot dsh-emacs--workspaces))
+        (dsh-emacs-events--host-refresh-begin)
+        (dolist (frame
+                 '(((type . "upsert")
+                    (workspace . ((workspaceId . "a") (title . "New A")
+                                  (sessionIds . ["new-member"]))))
+                   ((type . "upsert")
+                    (workspace . ((workspaceId . "c") (title . "C"))))
+                   ((type . "remove") (workspaceId . "b"))
+                   ((type . "order") (workspaceIds . ["c" "a"]))
+                   ((type . "archived") (archivedSessionIds . []))))
+          (dsh-emacs-events--host-item
+           nil (if decoded (dsh-protocol-core-item--from-alist frame) frame)))
+        (should (equal '("c" "a")
+                       (mapcar #'dsh-protocol-workspace-workspace-id
+                               dsh-emacs--workspaces)))
+        (should (= 0 (hash-table-count dsh-emacs--archived-sessions)))
+        ;; A late response restores the old snapshot; recorded stream changes
+        ;; must restore the new row, membership, order and empty archive set.
+        (setq dsh-emacs--workspaces snapshot
+              dsh-emacs--archived-sessions
+              (dsh-emacs--normalize-archived '("old")))
+        (dsh-emacs-events--host-refresh-drain)
+        (should (equal '("c" "a")
+                       (mapcar #'dsh-protocol-workspace-workspace-id
+                               dsh-emacs--workspaces)))
+        (should (equal "New A"
+                       (dsh-protocol-workspace-title
+                        (cadr dsh-emacs--workspaces))))
+        (should (equal '("new-member")
+                       (dsh-protocol-workspace-session-ids
+                        (cadr dsh-emacs--workspaces))))
+        (should (= 0 (hash-table-count dsh-emacs--archived-sessions)))
+        (should (= 0 dsh-emacs--host-refresh-depth))
+        (should-not dsh-emacs--host-refresh-frames)))))
+
+(ert-deftest dsh-emacs-test-workspace-baseline-retains-routing-and-empty-arrays ()
+  :tags '(dsh-unit)
+  (dolist (case '((((projections)) ("keep") ("old"))
+                  (((items . nil) (archivedSessionIds . ["ignored"]))
+                   ("keep") ("old"))
+                  (((items . []) (archivedSessionIds . [])) nil nil)
+                  ((("items" . []) ("archivedSessionIds" . ["new"]))
+                   nil ("new"))))
+    (pcase-let* ((`(,payload ,ids ,archived) case)
+                 (dsh-emacs-sessions-buffer
+                  (generate-new-buffer-name " *workspace-baseline*"))
+                 (dsh-emacs--sessions nil)
+                 (dsh-emacs--workspaces
+                  (list (dsh-protocol-workspace--from-alist
+                         '((workspaceId . "keep")))))
+                 (dsh-emacs--archived-sessions
+                  (dsh-emacs--normalize-archived '("old"))))
+      (dsh-emacs-events--host-item
+       nil `((type . "baseline") (value . ,payload)))
+      (should (equal ids (mapcar #'dsh-protocol-workspace-workspace-id
+                                dsh-emacs--workspaces)))
+      (should (= (length archived)
+                 (hash-table-count dsh-emacs--archived-sessions)))
+      (dolist (id archived)
+        (should (gethash id dsh-emacs--archived-sessions))))))
+
 ;; --- Test 66b: workspace/follow + session/control baseline frames
 ;; dispatch correctly by real nesting ---
 ;; Regression: the baseline frames of `workspace/follow' and
@@ -1793,6 +1920,58 @@
       (should (null (all-completions "WS1" table)))
       (should (null (all-completions "Workspace" table))))))
 
+(ert-deftest dsh-emacs-test-workspace-control-baseline-distinguishes-missing-cells ()
+  :tags '(dsh-unit)
+  (let ((dsh-emacs--chat-buffers (make-hash-table :test #'equal))
+        (dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
+        (dsh-emacs-sessions-buffer (generate-new-buffer-name " *absent-list*"))
+        (goal (dsh-protocol-goal--from-alist
+               '((objective . "Keep this goal") (phase . "active"))))
+        (items (list (dsh-emacs-test--queue-item "keep" "queued" "Keep this input"))))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "baseline-cells")
+      (puthash "baseline-cells" (current-buffer) dsh-emacs--chat-buffers)
+      (dsh-emacs-composer-set-goal goal)
+      (dsh-emacs-queue-apply (current-buffer) 'old-process items)
+      (dsh-emacs-events--host-control-baseline
+       'new-process
+       '((projections . ((baseline-cells . ((asOfSeq . 7) (values)))))))
+      (should (eq goal dsh-emacs--composer-goal))
+      (should (eq items dsh-emacs--queue-items))
+      (should (eq 'old-process dsh-emacs--queue-process))
+      (should (string-match-p "Keep this goal" (buffer-string)))
+      (dsh-emacs-events--host-control-baseline
+       'new-process
+       '((projections . ((baseline-cells
+                          . ((asOfSeq . 8)
+                             (values . ((goal . nil) (inbox . nil)))))))))
+      (should-not dsh-emacs--composer-goal)
+      (should-not dsh-emacs--queue-items)
+      (should (eq 'new-process dsh-emacs--queue-process))
+      (should-not (string-match-p "Keep this goal" (buffer-string))))))
+
+(ert-deftest dsh-emacs-test-workspace-control-baseline-retains-earlier-sessions-on-error ()
+  :tags '(dsh-unit)
+  (let* ((dsh-emacs--chat-buffers (make-hash-table :test #'equal))
+         (dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
+         (dsh-emacs-sessions-buffer (generate-new-buffer-name " *absent-list*"))
+         (first (dsh-protocol-session--from-alist '((sessionId . "before"))))
+         (later (dsh-protocol-session--from-alist '((sessionId . "migration"))))
+         (dsh-emacs--sessions (list first later)))
+    (should-error
+     (dsh-emacs-events--host-control-baseline
+      nil
+      '((projections
+         . ((before . ((asOfSeq . 7) (values . ((title . "Already applied")))))
+            (migration . ((kind . "migration-required")
+                          (values . ((title . "Must not apply")))))))))
+     :type 'dsh-protocol-migration-required)
+    (should (equal "Already applied" (dsh-protocol-session-title-value first)))
+    (should-not (dsh-protocol-session-title-value later))
+    (should (gethash "before" dsh-emacs--subagent-catalogs))
+    (should-not (gethash "migration" dsh-emacs--subagent-catalogs))))
+
 ;; A host baseline is one UI update, regardless of the number of sessions.
 (ert-deftest dsh-emacs-test-workspace-session-baseline-repaints-once-after-all-caches ()
   :tags '(dsh-unit)
@@ -1814,17 +1993,29 @@
                                          `((asOfSeq . 1)
                                            (values (subagentCatalog . [])
                                                    (title . ,(format "Title %d" i)))))))))
-         snapshots)
+         (apply-subagents (symbol-function 'dsh-emacs-subagent-apply))
+         batches snapshots)
     (unwind-protect
         (with-current-buffer buffer
           (setq major-mode 'dsh-emacs-session-mode)
-          (cl-letf (((symbol-function 'dsh-emacs-session--render)
+          (cl-letf (((symbol-function 'dsh-emacs-subagent-apply)
+                     (lambda (session cells)
+                       (push (cons session (mapcar #'dsh-protocol-subagent-cell-key
+                                                  cells))
+                             batches)
+                       (funcall apply-subagents session cells)))
+                    ((symbol-function 'dsh-emacs-session--render)
                      (lambda ()
                        (push (list (hash-table-count dsh-emacs--subagent-catalogs)
                                    (dsh-protocol-session-title-value
                                     (car (last dsh-emacs--sessions))))
                              snapshots))))
             (dsh-emacs-events--host-control-baseline nil baseline)
+            (should (equal (nreverse batches)
+                           (cl-loop for i below 32 collect
+                                    (list (format "batch-%d" i)
+                                          'subagentCatalog 'subagent
+                                          'subagentTiming 'tokenUsage))))
             (ert-info ((format "%s" "session-baseline-repaints-once-after-all-caches"))
               (should (equal snapshots '((32 "Title 31")))))
             (setq snapshots nil)

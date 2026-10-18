@@ -108,16 +108,6 @@ Its insertion type is nil so text inserted at the prompt stays outside chrome.")
   "Content and layout inputs of the last rendered Composer region.")
 
 ;;; ---------------------------------------------------------------------------
-;;; Goal view protocol (§9 `goal' projection -> dsh-protocol-goal)
-;;; ---------------------------------------------------------------------------
-
-(defun dsh-emacs-composer-goal-from-projection (value)
-  "Parse the `goal' projection VALUE into a `dsh-protocol-goal' or nil.
-VALUE is the projection cell (a wire alist) or nil; nil/empty maps to nil so a
-cleared goal hides the row."
-  (dsh-protocol-goal-projection--from-alist value))
-
-;;; ---------------------------------------------------------------------------
 ;;; Goal Row rendering (one read-only line above the `❯ ' input)
 ;;; ---------------------------------------------------------------------------
 ;; Match dsh web's GoalBar: a dartboard SVG, a prominent status label,
@@ -733,16 +723,12 @@ Repeated renders preserve the region when content and width are unchanged."
 
 (defun dsh-emacs-composer-set-goal (goal)
   "Set this buffer's Composer Goal Row to parsed GOAL (or nil to hide it).
-GOAL is a `dsh-protocol-goal' (see `dsh-emacs-composer-goal-from-projection').
+GOAL is a `dsh-protocol-goal'; decode wire projections with
+`dsh-protocol-goal-projection--from-alist'.
 Only the live chat buffer's chrome is touched; the goal is never a message and
 never sent to the model."
   (setq-local dsh-emacs--composer-goal goal)
   (dsh-emacs-composer-render))
-
-(defun dsh-emacs-composer-set-goal-from-projection (value)
-  "Consume a `goal' projection VALUE: parse and render the Goal Row."
-  (dsh-emacs-composer-set-goal
-   (dsh-emacs-composer-goal-from-projection value)))
 
 (defun dsh-emacs-composer-refresh ()
   "Re-render this buffer's Goal, Next Message and Attachments rows.

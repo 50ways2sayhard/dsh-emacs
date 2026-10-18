@@ -708,30 +708,81 @@
 ;; --- Test 98b: command/run replaces the optimistic row ---
 (ert-deftest dsh-emacs-test-command-command-run-replaces-optimistic ()
   :tags '(dsh-unit)
-  (let ((buf (generate-new-buffer " *dsh-cmd-opt-repl*")))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs-show-commands t)
     (unwind-protect
-        (with-current-buffer buf
-          (dsh-emacs-mode)
-          (let ((dsh-emacs-show-commands t)
-                (dsh-emacs--command-blocks (make-hash-table :test 'equal))
-                (dsh-emacs--pending-command nil)
-                (dsh-emacs--command-spinners (make-hash-table :test 'equal)))
-            ;; Step 1: optimistic render
-            (dsh-emacs-render-command-optimistic "/compact")
-            (when (gethash "pending-compact" dsh-emacs--command-blocks)
-              ;; Step 2: real command/run event arrives
-              (dsh-emacs-render-command
-               '((type . "command/run") (seq . 10)
-                 (data . ((commandId . "real-123")
-                          (name . "/compact") (args . "")))))
-              ;; temp entry removed, real entry present
-              (ert-info ((format "%s" "command-run-replaces-optimistic"))
-                (should (and (null (gethash "pending-compact"
-                                            dsh-emacs--command-blocks))
-                             (gethash "real-123"
-                                      dsh-emacs--command-blocks)
-                             (null dsh-emacs--pending-command)))))))
-      (kill-buffer buf))))
+        (let ((ns (dsh-emacs-render--make-namespace)))
+          (dsh-emacs-render-command-optimistic "/compact")
+          (should (gethash "pending-compact" dsh-emacs--command-blocks))
+          (should (gethash "pending-compact" dsh-emacs--command-spinners))
+          (should (dsh-emacs-ui-find-block ns "cmd-pending-compact"))
+          (should (= 10 (dsh-emacs-render-event
+                         '((type . "command/run") (seq . 10)
+                           (data . ((commandId . "real-123")
+                                    (name . "/compact") (args . "")))))))
+          (should-not (gethash "pending-compact" dsh-emacs--command-blocks))
+          (should-not (gethash "pending-compact" dsh-emacs--command-spinners))
+          (should-not (dsh-emacs-ui-find-block ns "cmd-pending-compact"))
+          (should-not dsh-emacs--pending-command)
+          (should (gethash "real-123" dsh-emacs--command-blocks))
+          (should (gethash "real-123" dsh-emacs--command-spinners))
+          ;; Settlement keeps the run's label, even if done carries another.
+          (should (= 11 (dsh-emacs-render-event
+                         '((type . "command/done") (seq . 11)
+                           (data . ((commandId . "real-123")
+                                    (name . "unrelated") (kind . "error")
+                                    (text . "Command rejected")))))))
+          (should-not (gethash "real-123" dsh-emacs--command-spinners))
+          (let* ((block (dsh-emacs-ui-find-block ns "cmd-real-123"))
+                 (state (get-text-property (car block) 'dsh-emacs-ui-state)))
+            (should (string-match-p "compact" (map-elt state :label-left)))
+            (should-not (string-match-p "unrelated" (buffer-string)))
+            (should (eq 'tool-error (map-elt state :status)))
+            (should (equal "Command rejected" (map-elt state :body)))
+            (should (map-elt state :collapsed)))
+          (should (= 11 dsh-emacs--anchor-seq)))
+      (dsh-emacs--command-spinner-clear-all))))
+
+(ert-deftest dsh-emacs-test-command-ignored-events-preserve-pending-row ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs-show-commands t)
+    (unwind-protect
+        (progn
+          (dsh-emacs-render-command-optimistic "/compact")
+          (let ((before (buffer-string))
+                (pending dsh-emacs--pending-command)
+                (spinner (gethash "pending-compact"
+                                  dsh-emacs--command-spinners)))
+            (should pending)
+            (should spinner)
+            (let ((dsh-emacs-show-commands nil))
+              (should (= 11 (dsh-emacs-render-event
+                             '((type . "command/run") (seq . 11)
+                               (data . ((commandId . "hidden")
+                                        (name . "goal")))))))
+              (should (= 12 (dsh-emacs-render-event
+                             '((type . "command/done") (seq . 12)
+                               (data . ((commandId . "pending-compact")
+                                        (kind . "error") (text . "Hidden"))))))))
+            ;; Missing ids and unmatched results are consumed without a row.
+            (should (= 13 (dsh-emacs-render-event
+                           '((type . "command/run") (seq . 13)
+                             (data . ((name . "goal")))))))
+            (should (= 14 (dsh-emacs-render-event
+                           '((type . "command/done") (seq . 14)
+                             (data . ((commandId . "missing")
+                                      (kind . "error") (text . "Orphan")))))))
+            (should (equal before (buffer-string)))
+            (should (eq pending dsh-emacs--pending-command))
+            (should (eq spinner (gethash "pending-compact"
+                                        dsh-emacs--command-spinners)))
+            (should (= 1 (hash-table-count dsh-emacs--command-blocks)))
+            (should (= 1 (hash-table-count dsh-emacs--command-spinners)))
+            (should (= 14 dsh-emacs--anchor-seq))))
+      (dsh-emacs--command-spinner-clear-all))))
 
 (ert-deftest dsh-emacs-test-command-command-menu-hint-prompts-args ()
   :tags '(dsh-unit)

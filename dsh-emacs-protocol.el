@@ -10,13 +10,17 @@
 ;;; Commentary:
 
 ;; dsh server responses are JSON-decoded alists (arrays are vectors).  This
-;; file distills the common responses into cl-defstruct types: every field name
-;; appears exactly once, in its `--from-alist' constructor, and business code
-;; always reads through accessors; when the server protocol changes only the
-;; fields here need syncing, and callers need no per-use confirmation.
+;; file distills common responses and event payloads into cl-defstruct types.
+;; Their `--from-alist' constructors own decoded fields; business code reads
+;; those fields through accessors.  Opaque payloads stay with their existing
+;; consumers until their own protocol views are introduced.
 ;;
 ;; Structure overview (endpoint to protocol):
 ;;
+;;   WebSocket mux → dsh-protocol-mux-frame (type stream-id value error)
+;;   session/follow → dsh-protocol-follow-item (type payload)
+;;                        └─ dsh-protocol-follow-snapshot (cursor records
+;;                             has-more execution plan assistant projections)
 ;;   session/list   → dsh-protocol-session             (sessionId title cwd
 ;;                                                       agentPreset updatedAt)
 ;;   workspace/follow baseline → dsh-protocol-workspace-list (items
@@ -61,10 +65,10 @@
 ;;   approval/request → dsh-protocol-approval-request (tool-name call-id
 ;;                       reason display-reasons)
 ;;
-;; Conversion entry points all accept a wire alist; note that arrays (vectors)
-;; on the wire are always normalized to lists inside the structs.  Once
-;; business code caches a struct, it reads it uniformly through the
-;; `dsh-protocol-*' accessors.
+;; Conversion entry points accept a wire alist and normalize decoded arrays
+;; to lists.  Opaque payloads retain their wire shape.  Once business code
+;; caches a struct, it reads its decoded fields through `dsh-protocol-*'
+;; accessors.
 
 ;;; Code:
 
@@ -124,6 +128,20 @@ directly (e.g. `dsh-emacs--busy-p') misreads it as running.  Every JSON
 boolean field read by a `--from-alist' constructor passes through here, so a
 struct never hands a caller `:json-false'."
   (and value (not (eq value :json-false))))
+
+;; ---------------------------------------------------------------------------
+;; WebSocket mux envelope
+;; ---------------------------------------------------------------------------
+
+(cl-defstruct (dsh-protocol-mux-frame
+               (:constructor dsh-protocol-mux-frame--from-alist
+                             (alist &aux
+                                    (type (dsh-protocol--field 'type alist))
+                                    (stream-id (dsh-protocol--field 'streamId alist))
+                                    (value (dsh-protocol--field 'value alist))
+                                    (error (dsh-protocol--field 'error alist)))))
+  "Shared mux envelope; VALUE and ERROR retain their logical payloads."
+  type stream-id value error)
 
 ;; ---------------------------------------------------------------------------
 ;; Provider configuration (settings, llm directory and credentials)
@@ -229,6 +247,17 @@ struct never hands a caller `:json-false'."
 ;; session/list / workspace/follow baseline
 ;; ---------------------------------------------------------------------------
 
+(cl-defstruct (dsh-protocol-context-pressure
+               (:constructor dsh-protocol-context-pressure--from-alist
+                             (alist &aux
+                              (pressure (dsh-protocol--field 'pressureTokens alist))
+                              (projected (dsh-protocol--field 'projectedTokens alist))
+                              (window (dsh-protocol--field 'contextWindow alist)))))
+  "The server's context occupancy sample, before display policy is applied.
+Keep the raw PRESSURE, PROJECTED estimate and WINDOW together.  Consumers
+decide whether the sample is usable and which estimate to display."
+  pressure projected window)
+
 (cl-defstruct (dsh-protocol-session
                (:constructor dsh-protocol-session--from-alist
                              (alist
@@ -274,36 +303,19 @@ struct never hands a caller `:json-false'."
                                (let ((p (cdr (assq 'projections alist))))
                                  (and p (cdr (assq 'title
                                                    (cdr (assq 'values p)))))))
-                              ;; projections.values.contextPressure — the
-                              ;; server's authoritative estimate of the current
-                              ;; context occupancy (the ctx% segment uses it,
-                              ;; not cumulative token usage, which is the
-                              ;; session total and far exceeds the window)
+                              ;; Decode the same occupancy sample as live
+                              ;; projections; keep the existing session fields.
+                              (context
+                               (let* ((p (cdr (assq 'projections alist)))
+                                      (v (and p (cdr (assq 'values p)))))
+                                 (dsh-protocol-context-pressure--from-alist
+                                  (and v (cdr (assq 'contextPressure v))))))
                               (context-pressure
-                               (let* ((p (cdr (assq 'projections alist)))
-                                      (v (and p (cdr (assq 'values p))))
-                                      (cp (and v
-                                               (cdr (assq 'contextPressure v)))))
-                                 (and cp (cdr (assq 'pressureTokens cp)))))
-                              ;; the window size inside the same
-                              ;; contextPressure object
+                               (dsh-protocol-context-pressure-pressure context))
                               (context-window
-                               (let* ((p (cdr (assq 'projections alist)))
-                                      (v (and p (cdr (assq 'values p))))
-                                      (cp (and v
-                                               (cdr (assq 'contextPressure v)))))
-                                 (and cp (cdr (assq 'contextWindow cp)))))
-                              ;; contextPressure.projectedTokens — pressure plus
-                              ;; the surface delta (answers "how much will the
-                              ;; next request occupy").  dsh web's ctx indicator
-                              ;; prefers it (StatsLine: projected ??
-                              ;; pressure); align with that definition.
+                               (dsh-protocol-context-pressure-window context))
                               (context-projected
-                               (let* ((p (cdr (assq 'projections alist)))
-                                      (v (and p (cdr (assq 'values p))))
-                                      (cp (and v
-                                               (cdr (assq 'contextPressure v)))))
-                                 (and cp (cdr (assq 'projectedTokens cp)))))
+                               (dsh-protocol-context-pressure-projected context))
                               ;; projections.values.modelSelection.lastUsed —
                               ;; the (provider, model,
                               ;; reasoningEffort?) triple the session last used
@@ -358,10 +370,10 @@ struct never hands a caller `:json-false'."
                               &aux
                               (items (mapcar #'dsh-protocol-workspace--from-alist
                                              (dsh-protocol--list
-                                              (cdr (assq 'items alist)))))
+                                              (dsh-protocol--field 'items alist))))
                               (archived-session-ids
                                (dsh-protocol--list
-                                (cdr (assq 'archivedSessionIds alist)))))))
+                                (dsh-protocol--field 'archivedSessionIds alist))))))
   "The `workspace/follow' baseline value: ITEMS plus the ARCHIVED-SESSION-IDS."
   items
   archived-session-ids)
@@ -598,6 +610,20 @@ placeholder, ATTACHMENTS whether the command accepts composed attachments
   kind
   text)
 
+(cl-defstruct (dsh-protocol-command-event
+               (:constructor dsh-protocol-command-event--from-alist
+                             (event &aux
+                                    (type (dsh-protocol--field 'type event))
+                                    (data (dsh-protocol--field 'data event))
+                                    (command-id (dsh-protocol--field 'commandId data))
+                                    (name (dsh-protocol--field 'name data))
+                                    (kind (dsh-protocol--field 'kind data))
+                                    (text (dsh-protocol--field 'text data)))))
+  "Fields consumed by command/run and command/done rendering.
+NAME labels a run; KIND and TEXT describe its result.  The event sequence
+stays in the envelope, so hidden or unmatched events can still be consumed."
+  type command-id name kind text)
+
 ;; ---------------------------------------------------------------------------
 ;; Prompt attachments (durable file refs and the upload receipt)
 ;; ---------------------------------------------------------------------------
@@ -690,6 +716,13 @@ the host's order."
 ;; process-level catalog is the only source of options, and the switch itself
 ;; is the `/permission' slash command (the namespace has no write Remote).
 
+(defun dsh-protocol-permission-value--from-alist (alist)
+  "Decode the current permission preset from projection ALIST.
+Return a nonempty string, or nil for absent, empty or non-string values.
+Preset names are host-defined; this does not validate them against a catalog."
+  (let ((value (dsh-protocol--field 'currentValue alist)))
+    (and (stringp value) (not (equal value "")) value)))
+
 (cl-defstruct (dsh-protocol-permission-option
                (:constructor dsh-protocol-permission-option--from-alist
                              (alist
@@ -774,7 +807,19 @@ in contribution order.  The derived `custom' state is not an option."
   "The complete Markdown submitted by `exit_plan_mode'."
   text)
 
+(cl-defstruct (dsh-protocol-tool-call
+               (:constructor dsh-protocol-tool-call--from-alist
+                             (data &aux
+                                   (name (dsh-protocol--field 'name data))
+                                   (call-id (dsh-protocol--field 'callId data))
+                                   (arguments (dsh-protocol--field 'arguments data)))))
+  "The data payload of a tool/call event.
+ARGUMENTS retains the original JSON string; individual tool variants own its
+interpretation.  Sequence and time stay in the surrounding event envelope."
+  name call-id arguments)
+
 (cl-defstruct (dsh-protocol-tool-result
+               (:constructor dsh-protocol--make-tool-result)
                (:constructor dsh-protocol-tool-result--from-alist
                              (alist
                               &aux
@@ -871,6 +916,23 @@ TIMED (an expiring foreground window) rather than indefinite."
   call-id
   timed)
 
+(cl-defstruct (dsh-protocol-question-request
+               (:constructor dsh-protocol-question-request--from-alist
+                             (request &aux
+                                      (questions
+                                       (dsh-protocol--list
+                                        (dsh-protocol--field 'questions request)))
+                                      (wait
+                                       (let ((raw (dsh-protocol--field
+                                                   'wait request)))
+                                         (and (consp raw)
+                                              (dsh-protocol-question-wait--from-alist
+                                               raw)))))))
+  "A routed question batch and optional decoded timed WAIT.
+Question objects stay raw until their existing Plan/reader boundaries, so
+decoding this envelope does not change per-question validation order."
+  questions wait)
+
 (cl-defstruct (dsh-protocol-question-answer
                (:constructor dsh-protocol-question-answer--from-alist
                              (alist
@@ -942,11 +1004,6 @@ SEQ is the projection's watermark, including when the capability is absent."
   active
   settled
   seq)
-
-(defun dsh-protocol-user-questions-update--from-alist (frame)
-  "Decode the question projection and its watermark from control FRAME."
-  (dsh-protocol-user-questions--from-alist
-   (dsh-protocol--field 'value frame) (dsh-protocol--field 'seq frame)))
 
 (defun dsh-protocol-user-questions-baseline--from-alist (baseline)
   "Decode question state or capability absence at BASELINE's watermark."
@@ -1157,11 +1214,6 @@ malformed cell, or the cleared `{goal: null}' answer) yields nil."
    :pending (dsh-protocol--boolean (dsh-protocol--field 'pending value))
    :available (consp value) :seq seq))
 
-(defun dsh-protocol-plan-update--from-alist (frame)
-  "Decode Plan mode and its watermark from a control projection FRAME."
-  (dsh-protocol-plan--from-alist
-   (dsh-protocol--field 'value frame) (dsh-protocol--field 'seq frame)))
-
 (defun dsh-protocol-plan-baseline--from-alist (baseline)
   "Decode Plan mode or capability absence at projection BASELINE's watermark."
   (dsh-protocol-plan--from-alist
@@ -1223,13 +1275,6 @@ Non-object elements are dropped here, at the boundary."
                                        (dsh-protocol--field
                                         'stream attempt))))))
   revision attempt-id turn step next-index stream)
-
-(defun dsh-protocol-assistant-baseline--from-snapshot (value)
-  "VALUE (a `session/follow' snapshot) as an assistant baseline struct.
-An absent `assistantStream' field yields the empty baseline: nil revision,
-no active attempt and no records."
-  (dsh-protocol-assistant-baseline--from-alist
-   (dsh-protocol--field 'assistantStream value)))
 
 ;; ---------------------------------------------------------------------------
 ;; Background jobs (the `job' namespace streams, 0.1.7+)
@@ -1448,14 +1493,56 @@ private.  Missing or invalid counts remain nil; an empty wire array is zero."
                       (dsh-protocol--field 'error data))
          :command-id (dsh-protocol--field 'sourceCommandId data))))))
 
-(defun dsh-protocol-execution-snapshot--from-alist (snapshot)
-  "Decode execution events from a follow SNAPSHOT's whole retained window."
-  (delq nil
-        (mapcar (lambda (record)
-                  (dsh-protocol-execution-event--from-alist
-                   (dsh-protocol--field 'event record)))
-                (dsh-protocol--objects
-                 (dsh-protocol--field 'records snapshot)))))
+(cl-defstruct (dsh-protocol-follow-snapshot
+               (:constructor dsh-protocol-follow-snapshot--from-alist
+                             (value &aux
+                              (cursor (dsh-protocol--field 'cursor value))
+                              (raw-records (dsh-protocol--objects
+                                            (dsh-protocol--field 'records value)))
+                              (records
+                               (cl-remove-if-not
+                                (lambda (record)
+                                  (equal (dsh-protocol--field 'type record) "event"))
+                                raw-records))
+                              (has-more (dsh-protocol--boolean
+                                         (dsh-protocol--field 'hasMore value)))
+                              (execution
+                               (delq nil
+                                     (mapcar
+                                      (lambda (record)
+                                        (dsh-protocol-execution-event--from-alist
+                                         (dsh-protocol--field 'event record)))
+                                      raw-records)))
+                              (projections (dsh-protocol--field 'projections value))
+                              (plan (dsh-protocol-plan-baseline--from-alist
+                                     projections))
+                              (assistant
+                               (dsh-protocol-assistant-baseline--from-alist
+                                (dsh-protocol--field 'assistantStream value))))))
+  "A follow stream's opening transcript and presentation baseline.
+RECORDS retain raw durable event records in wire order for the renderer;
+unlike a backward history page, this view imposes no sequence validation.
+EXECUTION covers the whole window, including events below the render anchor.
+PLAN is applied before history can yield; PROJECTIONS stay raw until their
+late decoding boundary.  An absent ASSISTANT is an empty baseline."
+  cursor records has-more execution plan assistant projections)
+
+(cl-defstruct (dsh-protocol-follow-item
+               (:constructor dsh-protocol-follow-item--from-alist
+                             (value &aux
+                              (type (dsh-protocol--field 'type value))
+                              (payload
+                               (pcase type
+                                 ("snapshot"
+                                  (dsh-protocol-follow-snapshot--from-alist value))
+                                 ("event" (dsh-protocol--field 'event value))
+                                 ("assistant-stream"
+                                  (dsh-protocol-assistant-frame--from-alist
+                                   (dsh-protocol--field 'frame value))))))))
+  "One logical follow item, with a payload selected by TYPE.
+Snapshot and assistant-stream payloads are decoded views; a durable event
+stays raw for its event-specific consumers.  Unknown types have no payload."
+  type payload)
 
 ;; Turn footer facts are independent of the cumulative session projections.
 (cl-defstruct (dsh-protocol-reply-event
@@ -1568,6 +1655,193 @@ Signal `dsh-protocol-migration-required' for sequence-free cached hints."
           `((key . ,key) (seq . ,seq) (present . ,(and entry t))
             (value . ,(cdr entry))))))
      '(subagentCatalog subagent subagentTiming tokenUsage))))
+
+;;; Follow snapshot projections.
+(cl-defstruct (dsh-protocol-follow-projections
+               (:constructor dsh-protocol--make-follow-projections))
+  "Decoded projections applied after a follow snapshot's history and prefix.
+SUBAGENTS is one complete batch.  GOAL-UPDATE-P distinguishes a missing/null
+goal, which clears the row, from a non-object value, which leaves it alone.
+QUESTIONS is a decoded state including its watermark, or nil to skip it.
+Plan is applied earlier; inbox and unknown projections have no follow consumer."
+  subagents title context permission goal goal-update-p questions)
+
+(defun dsh-protocol-follow-projections--from-alist (baseline)
+  "Decode the late projections in a follow BASELINE.
+Keep this separate from the opening snapshot decoder: migration failures
+must surface after history and the assistant prefix have been applied."
+  (let* ((subagents (dsh-protocol-subagent-baseline--from-alist baseline))
+         (values (dsh-protocol--field 'values baseline))
+         (apply-values (listp values))
+         (raw-goal (dsh-protocol--field 'goal values))
+         (goal-update-p (and apply-values (listp raw-goal))))
+    (dsh-protocol--make-follow-projections
+     :subagents subagents
+     :title (and apply-values (dsh-protocol--field 'title values))
+     :context (and apply-values
+                   (dsh-protocol-context-pressure--from-alist
+                    (dsh-protocol--field 'contextPressure values)))
+     :permission (and apply-values
+                      (dsh-protocol-permission-value--from-alist
+                       (dsh-protocol--field 'permissions values)))
+     :goal (and goal-update-p
+                (dsh-protocol-goal-projection--from-alist raw-goal))
+     :goal-update-p goal-update-p
+     :questions (and apply-values
+                     (dsh-protocol-user-questions-baseline--from-alist
+                      baseline)))))
+
+;;; Core control projections.
+(cl-defstruct (dsh-protocol-projection
+               (:constructor dsh-protocol--make-projection))
+  "One session projection: a string KEY and its decoded VALUE.
+Known values are protocol structs, queue-item lists or scalar values;
+unknown values retain their wire identity for forward-compatible routing."
+  session-id key value)
+
+(defun dsh-protocol-projection-value--from-alist (key value &optional seq)
+  "Decode projection VALUE for string KEY at SEQ.
+Subagent cells need the enclosing update frame and are decoded separately."
+  (pcase key
+    ("contextPressure" (dsh-protocol-context-pressure--from-alist value))
+    ("permissions" (dsh-protocol-permission-value--from-alist value))
+    ("goal" (dsh-protocol-goal-projection--from-alist value))
+    ("inbox" (dsh-protocol-queue-items-from-inbox value))
+    ("plan" (dsh-protocol-plan--from-alist value seq))
+    ("userQuestions" (dsh-protocol-user-questions--from-alist value seq))
+    (_ value)))
+
+(defun dsh-protocol-projection--from-alist (frame)
+  "Decode one control projection FRAME, preserving its sequence metadata."
+  (let* ((raw-key (dsh-protocol--field 'key frame))
+         (key (if (symbolp raw-key) (symbol-name raw-key) raw-key)))
+    (dsh-protocol--make-projection
+     :session-id (dsh-protocol--field 'sessionId frame)
+     :key key
+     :value
+     (if (member key '("subagentCatalog" "subagent"
+                       "subagentTiming" "tokenUsage"))
+         (dsh-protocol-subagent-cell--from-alist frame)
+       (dsh-protocol-projection-value--from-alist
+        key (dsh-protocol--field 'value frame)
+        (dsh-protocol--field 'seq frame))))))
+
+(cl-defstruct (dsh-protocol-control-session
+               (:constructor dsh-protocol--make-control-session))
+  "One decoded session in a control baseline.
+SUBAGENTS is a complete four-cell batch.  PROJECTIONS starts with Plan and
+questions, including absence watermarks, then keeps other cells in wire order.
+For goal/inbox, missing keys stay missing and explicit nil values clear."
+  session-id subagents projections)
+
+(defun dsh-protocol-control-session--from-alist (entry)
+  "Decode one (SESSION-ID . BASELINE) ENTRY from a control baseline."
+  (let* ((id (car entry))
+         (session-id (if (symbolp id) (symbol-name id) id))
+         (baseline (cdr entry))
+         (subagents (dsh-protocol-subagent-baseline--from-alist baseline)))
+    (dsh-protocol--make-control-session
+     :session-id session-id
+     :subagents subagents
+     :projections
+     (append
+      (list (dsh-protocol--make-projection
+             :session-id session-id :key "plan"
+             :value (dsh-protocol-plan-baseline--from-alist baseline))
+            (dsh-protocol--make-projection
+             :session-id session-id :key "userQuestions"
+             :value (dsh-protocol-user-questions-baseline--from-alist baseline)))
+      (cl-loop
+       for cell in (dsh-protocol--list (dsh-protocol--field 'values baseline))
+       for raw-key = (car-safe cell)
+       for key = (if (symbolp raw-key) (symbol-name raw-key) raw-key)
+       when (and (consp cell)
+                 (not (member key '("plan" "userQuestions" "subagentCatalog"
+                                    "subagent" "subagentTiming" "tokenUsage"))))
+       collect (dsh-protocol--make-projection
+                :session-id session-id :key key
+                :value (dsh-protocol-projection-value--from-alist
+                        key (cdr cell))))))))
+
+(defun dsh-protocol-control-baseline--from-alist (value)
+  "Return nonempty session records from control baseline VALUE, in wire order.
+Records stay raw so callers can decode and apply each session before reading
+the next; a later migration-required record must not discard earlier updates."
+  (cl-remove-if-not
+   (lambda (entry) (and (consp entry) (cdr entry)))
+   (dsh-protocol--list (dsh-protocol--field 'projections value))))
+
+(cl-defstruct (dsh-protocol-session-notice
+               (:constructor dsh-protocol-session-notice--from-alist
+                             (frame &aux
+                                    (name (dsh-protocol--field 'event frame))
+                                    (args (dsh-protocol--list
+                                           (dsh-protocol--field 'args frame)))
+                                    (session-id
+                                     (when (member name '("api-session/removed"
+                                                          "api-session/status"
+                                                          "api-session/activity"))
+                                       (car args)))
+                                    (value
+                                     (pcase name
+                                       ("api-session/added" (car args))
+                                       ("api-session/status"
+                                        (dsh-protocol--boolean (cadr args)))
+                                       (_ nil))))))
+  "A session emit with named arguments instead of positional wire fields.
+VALUE is the raw added summary or decoded running flag; otherwise nil.
+Added summaries stay raw until cache application so a mutable cached session
+cannot contaminate the payload retained for refresh replay."
+  name session-id value)
+
+(cl-defstruct (dsh-protocol-waterfall
+               (:constructor dsh-protocol-waterfall--from-alist
+                             (frame &aux
+                                    (name (dsh-protocol--field 'event frame))
+                                    (event-id (dsh-protocol--field 'eventId frame))
+                                    (agent-id (dsh-protocol--field 'agentId frame))
+                                    (request (dsh-protocol--field 'request frame)))))
+  "A routed interaction envelope with an opaque REQUEST.
+Decode the request only after routing to a live chat: other clients' requests
+must be handed on without interpreting their contents."
+  name event-id agent-id request)
+
+(cl-defstruct (dsh-protocol-core-item
+               (:constructor dsh-protocol--make-core-item))
+  "One core stream item with a payload selected by TYPE.
+Workspace/projection payloads and session/interaction envelopes are decoded.
+Control baselines stay raw for per-session decoding; ready/cancel payloads are
+ids, and unknown frames retain their original object."
+  type payload)
+
+(defun dsh-protocol-core-item--from-alist (frame)
+  "Decode a core FRAME without applying cache or interaction changes.
+A baseline with non-nil items is a workspace baseline, including the empty
+wire array []; absent/null items retain the control-baseline route."
+  (let ((type (dsh-protocol--field 'type frame)))
+    (dsh-protocol--make-core-item
+     :type type
+     :payload
+     (pcase type
+       ("baseline"
+        (let ((value (dsh-protocol--field 'value frame)))
+          (if (dsh-protocol--field 'items value)
+              (dsh-protocol-workspace-list--from-alist value)
+            value)))
+       ("projection" (dsh-protocol-projection--from-alist frame))
+       ("upsert"
+        (when-let* ((workspace (dsh-protocol--field 'workspace frame)))
+          (dsh-protocol-workspace--from-alist workspace)))
+       ("remove" (dsh-protocol--field 'workspaceId frame))
+       ("order" (dsh-protocol--list
+                 (dsh-protocol--field 'workspaceIds frame)))
+       ("archived" (dsh-protocol--list
+                    (dsh-protocol--field 'archivedSessionIds frame)))
+       ("ready" (dsh-protocol--field 'clientId frame))
+       ("emit" (dsh-protocol-session-notice--from-alist frame))
+       ("waterfall" (dsh-protocol-waterfall--from-alist frame))
+       ("cancel" (dsh-protocol--field 'eventId frame))
+       (_ frame)))))
 
 (defun dsh-protocol-session-address-json (session-id &optional address)
   "Serialize SESSION-ID or its durable subagent ADDRESS."

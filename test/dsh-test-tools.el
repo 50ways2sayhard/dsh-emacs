@@ -45,6 +45,117 @@ Lets a test drive a malformed content value through the result path."
                                                           (vector (list (cons "type" "text")
                                                                         (cons "text" text)))))))))))))
 
+(ert-deftest dsh-emacs-test-tools-tool-call-routes-plan-and-ordinary-cards ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs-show-tool-calls t)
+    (let* ((args "{\"command\":\"printf protocol\"}")
+           (event (dsh-emacs-test--tool-call-event 11 "ordinary" "bash" args)))
+      (push '("time" . 1000) event)
+      (should (= 11 (dsh-emacs-render-tool-call event)))
+      (let ((state (dsh-emacs-render--tool-state "ordinary")))
+        (should (eq 'pending (plist-get state :state)))
+        (should (equal "bash" (plist-get state :name)))
+        (should (equal args (plist-get state :args-raw)))
+        (should (equal (format-time-string "%H:%M:%S" 1.0)
+                       (plist-get state :call-time)))))
+    (let ((text "# Decoding plan\n\nKeep the application order."))
+      (should (= 12 (dsh-emacs-render-tool-call
+                     (dsh-emacs-test--tool-call-event
+                      12 "plan" "exit_plan_mode"
+                      (json-encode `((plan . ,text)))))))
+      (should (equal text (plist-get (dsh-emacs-render--tool-state "plan")
+                                    :plan-text)))
+      (should-not (plist-get (dsh-emacs-render--tool-state "plan") :state))
+      (should (string-match-p "Plan: Decoding plan" (buffer-string))))
+    ;; An absent/blank document still uses the ordinary pending tool card.
+    (dolist (args '("{}" "{\"plan\":\"  \\n\"}"))
+      (should (= 13 (dsh-emacs-render-tool-call
+                     (dsh-emacs-test--tool-call-event
+                      13 "empty-plan" "exit_plan_mode" args))))
+      (let ((state (dsh-emacs-render--tool-state "empty-plan")))
+        (should (eq 'pending (plist-get state :state)))
+        (should (equal args (plist-get state :args-raw)))
+        (should-not (plist-get state :plan-text))))))
+
+(ert-deftest dsh-emacs-test-tools-hidden-tool-calls-still-apply-todo ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs-show-tool-calls nil)
+    (setq-local dsh-emacs-todo-expand-by-default t)
+    (setq-local dsh-emacs--anchor-seq 7)
+    (let ((before (buffer-string)) messages)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (push (apply #'format format-string args) messages))))
+        (dolist (name '("bash" "exit_plan_mode"))
+          (should-not (dsh-emacs-render-event
+                       (dsh-emacs-test--tool-call-event
+                        20 name name "invalid JSON")))
+          (should-not (dsh-emacs-render--tool-state name)))
+        (should-not messages))
+      (should (equal before (buffer-string)))
+      (should (= 7 dsh-emacs--anchor-seq)))
+    (should (= 21 (dsh-emacs-render-event
+                   (dsh-emacs-test--tool-call-event
+                    21 nil "todo_write"
+                    "{\"todos\":[{\"content\":\"Keep todo visible\",\"status\":\"pending\"}]}"))))
+    (should (equal '(("Keep todo visible" . "pending")) dsh-emacs--todo-list))
+    (should (dsh-emacs-ui-find-block dsh-emacs--todo-namespace "seq-21"))
+    (should (string-match-p "Keep todo visible" (buffer-string)))
+    (should (= 21 dsh-emacs--anchor-seq))
+    (should-not (dsh-emacs-render--tool-state "seq-21"))))
+
+(ert-deftest dsh-emacs-test-tools-tool-result-preserves-seq-and-display-gate ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs-show-tool-calls t)
+    (setq-local dsh-emacs-tool-expand-by-default t)
+    (dsh-emacs-render-tool-call
+     (dsh-emacs-test--tool-call-event
+      1 "ordinary" "bash" "{\"command\":\"true\"}"))
+    (should (= 21 (dsh-emacs-render-tool-result
+                   (dsh-emacs-test--tool-result-event
+                    21 "ordinary" nil 0 "ordinary output"))))
+    (should (equal "ordinary output"
+                   (plist-get (dsh-emacs-render--tool-state "ordinary")
+                              :result)))
+    (let ((before (buffer-string)))
+      (should (= 22 (dsh-emacs-render-tool-result
+                     (dsh-emacs-test--tool-result-event
+                      22 "unknown" nil 0 "untracked output"))))
+      (should (equal before (buffer-string)))
+      (should-not (dsh-emacs-render--tool-state "unknown")))
+    (dsh-emacs-render-tool-call
+     (dsh-emacs-test--tool-call-event
+      3 "plan" "exit_plan_mode"
+      (json-encode '((plan . "# Refactor plan\n\nKeep behavior.")))))
+    (should (= 23 (dsh-emacs-render-tool-result
+                   (dsh-emacs-test--tool-result-event
+                    23 "plan" nil nil "Plan approved"))))
+    (should (string-match-p
+             "Approved"
+             (dsh-emacs-test--tool-block-text
+              (dsh-emacs-render--make-namespace) "tool-plan")))
+    (let ((before (buffer-string))
+          (state (copy-tree (dsh-emacs-render--tool-state "ordinary")))
+          ;; This shape reaches the decoder, whose object lookup rejects it.
+          (invalid '((type . "tool/result") (seq . 24)
+                     (data . ((malformed . t) . invalid)))))
+      (should-error (dsh-emacs-render-tool-result invalid)
+                    :type 'wrong-type-argument)
+      (setq-local dsh-emacs-show-tool-calls nil)
+      (should-not (dsh-emacs-render-tool-result invalid))
+      (should-not (dsh-emacs-render-tool-result
+                   (dsh-emacs-test--tool-result-event
+                    25 "ordinary" t 1 "must stay hidden")))
+      (should (equal before (buffer-string)))
+      (should (equal state
+                     (dsh-emacs-render--tool-state "ordinary"))))))
+
 (ert-deftest dsh-emacs-test-tools-tool-running-keeps-variant-icon ()
   :tags '(dsh-unit)
   (with-temp-buffer

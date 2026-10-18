@@ -115,11 +115,15 @@ documented in [UI Styling](ui-styling.md).
 
 The dsh server computes context pressure itself and pushes it to every client
 as `session/control` `projection` frames (`key: "contextPressure"` → projected
-tokens, pressure tokens and context window). dsh-emacs feeds this snapshot into
-the mode-line: the projected tokens are used when present (`projectedTokens ??
-pressureTokens`), and the window comes from the same server projection. No local
-model→window map is maintained and no full session refresh is needed — the
-segment updates as the server's projection frames arrive. Without a server
+tokens, pressure tokens and context window). Live updates trust a sample only
+when raw pressure is positive. They prefer positive projected tokens, falling
+back to raw pressure, and take the window from the same projection. A zero or
+negative raw sample, or an absent/non-positive window, preserves the previous
+snapshot. Synchronization from a cached session-list row uses its raw pressure
+and window; an incomplete row likewise leaves the existing snapshot intact.
+
+No local model→window map is maintained and no full session refresh is needed.
+The segment updates as the server's projection frames arrive. Without a server
 snapshot the ctx segment is simply hidden; a model change or session open pulls
 the projection immediately.
 

@@ -535,6 +535,46 @@
       (setq dsh-emacs--sessions old-sessions)
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(ert-deftest dsh-emacs-test-lifecycle-context-projection-only-updates-target ()
+  :tags '(dsh-unit)
+  (let* ((dsh-emacs--chat-buffers (make-hash-table :test #'equal))
+         (target (generate-new-buffer " *context-projection-target*"))
+         (wire '((pressureTokens . 70) (projectedTokens . 73)
+                 (contextWindow . 200)))
+         (frame `((sessionId . "context-target")
+                  (key . contextPressure) (value . ,wire)))
+         (payloads (list frame (dsh-protocol-projection--from-alist frame))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local dsh-emacs--buffer-session "unrelated"
+                      dsh-emacs--modeline-context-pressure 17
+                      dsh-emacs--modeline-context-window-server 19)
+          (puthash "context-target" target dsh-emacs--chat-buffers)
+          (dolist (payload payloads)
+            (with-current-buffer target
+              (setq-local dsh-emacs--buffer-session "context-target"
+                          dsh-emacs--modeline-context-pressure 100
+                          dsh-emacs--modeline-context-window-server 1000))
+            (dsh-emacs-events--host-apply-projection nil payload)
+            (should (= 73 (buffer-local-value
+                           'dsh-emacs--modeline-context-pressure target)))
+            (should (= 200 (buffer-local-value
+                            'dsh-emacs--modeline-context-window-server target)))
+            (should (= 17 dsh-emacs--modeline-context-pressure))
+            (should (= 19 dsh-emacs--modeline-context-window-server)))
+          ;; A stale table entry and a session with no entry must both leave
+          ;; the unrelated current buffer untouched, for raw and typed input.
+          (kill-buffer target)
+          (dolist (session '("context-target" "missing"))
+            (let ((update `((sessionId . ,session)
+                            (key . contextPressure) (value . ,wire))))
+              (dolist (payload (list update
+                                     (dsh-protocol-projection--from-alist update)))
+                (dsh-emacs-events--host-apply-projection nil payload)
+                (should (= 17 dsh-emacs--modeline-context-pressure))
+                (should (= 19 dsh-emacs--modeline-context-window-server))))))
+      (when (buffer-live-p target) (kill-buffer target)))))
+
 ;; --- Test 43h: the `permissions' projection drives the mode-line segment ---
 ;; dsh 0.1.6 narrowed the projection to `{currentValue}'; the selectable
 ;; options moved to the permissionPresets/catalog Remote.  A configured key
@@ -549,23 +589,34 @@
           (with-current-buffer buf
             (setq-local dsh-emacs--buffer-session "sess-perm"))
           (puthash "sess-perm" buf dsh-emacs--chat-buffers)
-          (dsh-emacs--events-apply-permission-projection
-           "sess-perm" '((currentValue . "workspace-write")))
+          (dsh-emacs-events--host-apply-projection
+           nil '((sessionId . "sess-perm") (key . "permissions")
+                 (value . ((currentValue . "workspace-write")))))
           (ert-info ((format "%s" "permission-projection-sets-segment"))
             (should (equal "workspace-write"
                            (buffer-local-value 'dsh-emacs--modeline-permission buf))))
-          (dsh-emacs--events-apply-permission-projection
-           "sess-perm" '((currentValue . "custom")))
+          (dsh-emacs-events--host-apply-projection
+           nil '((sessionId . "sess-perm") (key . "permissions")
+                 (value . ((currentValue . "custom")))))
           (ert-info ((format "%s" "permission-projection-replaces-value"))
             (should (equal "custom"
                            (buffer-local-value 'dsh-emacs--modeline-permission buf))))
-          (dsh-emacs--events-apply-permission-projection
-           "sess-perm" '((currentValue . "")))
-          (dsh-emacs--events-apply-permission-projection
-           "sess-perm" '((somethingElse . 1)))
-          (ert-info ((format "%s" "permission-projection-ignores-empty-and-unknown"))
-            (should (equal "custom"
-                           (buffer-local-value 'dsh-emacs--modeline-permission buf)))))
+          (dolist (value '("auto" " host-defined "))
+            (dsh-emacs-events--host-apply-projection
+             nil `((sessionId . "sess-perm") (key . "permissions")
+                   (value . (("currentValue" . ,value)))))
+            (should (equal value
+                           (buffer-local-value 'dsh-emacs--modeline-permission buf))))
+          (dolist (projection '(nil ((currentValue . "")) ((somethingElse . 1))
+                                ((currentValue . 7)) ((currentValue . :json-false))
+                                "workspace-write"))
+            (dsh-emacs-events--host-apply-projection
+             nil `((sessionId . "sess-perm") (key . "permissions")
+                   (value . ,projection)))
+            (ert-info ((format "Ignored permission projection: %S" projection))
+              (should (equal " host-defined "
+                             (buffer-local-value
+                              'dsh-emacs--modeline-permission buf))))))
       (remhash "sess-perm" dsh-emacs--chat-buffers)
       (when (buffer-live-p buf) (kill-buffer buf)))))
 

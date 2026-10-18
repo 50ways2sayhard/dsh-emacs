@@ -507,15 +507,79 @@ still owns UTF-8 decoding and error reporting. See
 [112](../postmortem/112-native-wire-json.md).
 
 dsh server responses arrive as decoded JSON alists (arrays as vectors). Their
-common shapes are normalized into `cl-defstruct` types here, and business code
-reads fields exclusively through generated accessors (e.g.
+common structured payloads are normalized into `cl-defstruct` types here;
+single-value payloads can decode directly to a scalar. For the struct-backed
+views, business code reads fields through generated accessors (e.g.
 `dsh-protocol-model-selection-reasoning-effort`, `dsh-protocol-session-cwd`):
 each wire field name appears only in the matching `--from-alist` constructor, so
-when the server protocol changes you sync exactly one file. Covered payloads:
+protocol field changes stay in the decoder. Covered payloads:
 
+- Incoming mux envelopes → `dsh-protocol-mux-frame` (type, stream-id, value,
+  error). Chat follow, custom streams and the core stream share this decoder;
+  events retains routing, retired-stream checks and callback/error handling.
+- Core logical items → `dsh-protocol-core-item` (type, payload). Workspace
+  baselines reuse `dsh-protocol-workspace-list`; upserts become workspaces,
+  removals become ids, and order/archive arrays become lists. Non-nil `items`,
+  including the empty wire array `[]`, selects a workspace baseline; missing
+  or null `items` retains the control route. Control baselines stay raw until
+  each session is decoded/applied, while projection increments are decoded
+  immediately. Events owns cache updates, repainting and refresh replay in
+  their existing order.
+  See [129](../postmortem/129-core-workspace-boundary.md).
+- `$events` ready/cancel payloads become ids; session emits become
+  `dsh-protocol-session-notice` (name, session-id, value). Running flags are
+  decoded booleans. Added summaries stay raw until cache application so the
+  refresh record cannot share a mutable session object with the cache.
+  Waterfalls become `dsh-protocol-waterfall` (name, event-id, agent-id, request).
+  Only a request routed to a live chat is decoded: approvals use their existing
+  view; `dsh-protocol-question-request` normalizes the question array and wait.
+  Individual questions retain their existing Plan/reader decoding boundaries.
+  See [130](../postmortem/130-host-event-decoding-boundaries.md).
+- `session/follow` logical items → `dsh-protocol-follow-item` (type, payload).
+  Opening snapshots become `dsh-protocol-follow-snapshot`: cursor, event
+  records in wire order, has-more, execution events, Plan and assistant
+  baselines, and the opaque projections block. Events applies execution and
+  Plan before history rendering, then replays the assistant prefix and applies
+  the remaining projections. The latter decode at that late application point
+  into `dsh-protocol-follow-projections`: a complete subagent batch, title,
+  context, permission, goal/update flag and questions. Missing/null goal clears
+  the row; a non-object goal is skipped. Questions apply to the current follow
+  chat, after its cards exist. This path does not consume inbox or reapply Plan.
+  Keeping the late decoder separate also preserves history/prefix application
+  before a migration-required error. See
+  [128](../postmortem/128-follow-projection-view.md).
+  Unlike backward history pages, snapshots do not impose strict sequence
+  validation. Live assistant frames use their existing
+  decoded type; durable events remain raw for their event-specific consumers.
+- `session/control` projection increments → `dsh-protocol-projection`
+  (session-id, key, value), with a normalized string key and decoded payload.
+  The baseline decoder retains raw session records for sequential decoding;
+  each becomes `dsh-protocol-control-session` with a complete subagent batch
+  and ordered projections. Events applies the batch first, then Plan/questions
+  with their absence watermarks, then the remaining cells in wire order, and
+  repaints the list once after all sessions. Missing goal/inbox keys preserve
+  state; explicit nil cells clear it. See
+  [127](../postmortem/127-control-projection-boundary.md).
+- `tool/call` data → `dsh-protocol-tool-call` (name, call-id, arguments).
+  The renderer decodes once, then selects a Plan card, todo snapshot, hidden
+  call or ordinary tool card. Arguments stay opaque for the existing tool
+  variants to interpret; sequence and time remain in the event envelope.
+  See [131](../postmortem/131-tool-call-dispatch.md).
+- `tool/result` → `dsh-protocol-tool-result` (call-id, text, outcome and
+  metadata). The event renderer decodes once and returns the event sequence;
+  late question settlement constructs the same decoded type directly.
 - `session/list` → `dsh-protocol-session` (sessionId, title, cwd, agentPreset,
   updatedAt, blank, running, title-value, pending-interaction, context-pressure,
   context-window, context-projected)
+- `contextPressure` projection → `dsh-protocol-context-pressure` (pressure,
+  projected, window). Session rows and live projections share this decoder;
+  the session struct keeps its existing flat fields. Display policy stays with
+  the consumers: list synchronization uses raw pressure, while live updates
+  prefer a positive projected estimate only when raw pressure is positive.
+- `permissions` projection → `dsh-protocol-permission-value--from-alist`, a
+  scalar decoder returning a nonempty preset name or nil. Events applies the
+  decoded name to the target chat; absent/empty values leave the old segment
+  unchanged. This value is independent of the selectable preset catalog.
 - `workspace/follow` baseline → `dsh-protocol-workspace-list` (items,
   archived-session-ids) → `dsh-protocol-workspace` (workspaceId, sessionIds,
   title, path, createdAt, updatedAt)
@@ -538,6 +602,13 @@ when the server protocol changes you sync exactly one file. Covered payloads:
   `skills/list` → `dsh-protocol-skill-list` (skills) → `dsh-protocol-skill`
   (name, description, when-to-use, model-invocable, path) — the two catalogs
   the `/` completion merges
+- `command/run` / `command/done` → `dsh-protocol-command-event` (type,
+  command-id, name, kind, text). Run creates a row and uses the same optimistic
+  cleanup as submit rejection; done keeps that row's label and icon. Only
+  live events take over an optimistic row or change animations. Hidden events,
+  missing ids and unmatched results still return their sequence without
+  changing rows. Command arguments are not displayed or decoded by this view.
+  See [132](../postmortem/132-command-event-boundary.md).
 - `user-questions/request` items → `dsh-protocol-question` (id, text, header,
   detail, multi-select, options) → `dsh-protocol-question-option` (label,
   description). The `ask_user_question` tool's own arguments are the same
@@ -555,15 +626,21 @@ when the server protocol changes you sync exactly one file. Covered payloads:
   → `dsh-protocol-question-answer` (id, selected, custom). The reverse
   direction, `dsh-protocol-question-answers-json`, re-serializes a settled
   batch as the host's answer document so the transcript card can be completed
-  through the ordinary result renderer; all wire field names stay in this
-  module.
+  through the shared decoded-result renderer. It does not wrap the answer
+  document in a synthetic event.
 
-Conversion is one-way and lossless: `session/modelCatalog` responses become a
-`dsh-protocol-model-directory` before the picker reads them; the cached
+Covered payloads are converted once at their owning boundary:
+`session/modelCatalog` responses become a `dsh-protocol-model-directory`
+before the picker reads them; the cached
 session/workspace lists are stored as structs too. Helper `dsh-protocol--struct`
 accepts either a wire alist or an already-converted struct, so callers and
-fixtures can stay on either side of the boundary. Other event-stream payloads
-stay raw for now (their shapes vary per event type).
+fixtures can stay on either side of the boundary. Follow snapshots retain raw
+projection blocks only until their late decoding boundary. Core routing and
+workspace consumers use decoded values. `$events` envelopes have typed views;
+their opaque summaries and requests decode at the application boundaries above.
+Durable event payloads still reach their event-specific consumers as raw data.
+Control and follow projection consumers read decoded values; Composer receives
+a goal struct or nil directly.
 
 The question reader in `dsh-emacs.el` answers each ordinary `ask` question in one
 minibuffer read. The question text and a hint are the prompt, the numbered
@@ -622,8 +699,8 @@ The decoded sequence orders these updates, including absent capabilities;
 a new host generation resets the watermark. The late answer is steered as a
 `user-question-reply` user message, which the transcript
 source filter hides; the settled cell completes the original ask card through
-`dsh-emacs-render-question-settled`, which replays the batch through the
-ordinary in-place tool-result path. That path also consults the stored settled
+`dsh-emacs-render-question-settled`, which applies the batch through the
+shared decoded-result path. That path also consults the stored settled
 state when rendering a pending result, covering delayed live results and
 older history loaded after the projection arrived.
 See [decision record 073](../postmortem/073-timed-question-answers.md).
@@ -704,8 +781,8 @@ this source works against 0.1.5+ servers.  The wire cell (`next-turn` /
 `dsh-protocol-queue-items-from-inbox` in `dsh-emacs-protocol.el`; an
 `inbox` cell for a session with no live chat buffer is dropped rather than
 applied to whatever buffer is current.  The baseline's `projections` record
-is keyed by session id, and `json-read` interns JSON object keys as symbols,
-so `dsh-emacs-events--host-control-baseline` normalizes each record key to a
+is keyed by session id, and JSON decoding interns object keys as symbols,
+so `dsh-protocol-control-session--from-alist` normalizes each record key to a
 string before the chat-buffer and projection lookups — the same identity the
 incremental `sessionId` field and `session/list` rows carry. The mirror
 drives the echo-area feedback (enqueue / steer / consumption, diffed against
@@ -830,7 +907,11 @@ refresh (`C-c C-r`):
 1. **user/message** → `dsh-emacs-render-user-message`: rendered as a card background. A host-injected goal round continuation (`source.kind = "goal"`, appended by dsh-goal-round-driver) draws dsh web's collapsed **Continuing goal** trigger notice, expandable to the injected `<goal_round>` prompt; every other host injection stays hidden (`dsh-emacs-render--user-authored-p`).
 2. **assistant/chunk** → `dsh-emacs-render-assistant-chunk`: the first text chunk appears immediately; subsequent insertion, Markdown and viewport following coalesce on a 50ms one-shot timer. Event boundaries, finalization, stream changes and disconnect flush pending text.
 3. **assistant/message** → `dsh-emacs-render-assistant-message`: the final snapshot is used to correct the streamed body, avoiding duplicate display
-4. **tool/call** → `dsh-emacs-render-tool-call`: rendered as a rounded box (pending state)
+4. **tool/call** → `dsh-emacs-render-tool-call`: a nonempty `exit_plan_mode`
+   document uses a Plan card; `todo_write` appends a todo snapshot; other
+   calls use pending tool cards. Hidden tool calls return nil and do not
+   advance the render anchor, while todo snapshots still apply and return
+   their sequence. An absent or blank Plan document uses an ordinary card.
 5. **tool/result** → `dsh-emacs-render-tool-result`: updates the existing tool card (success/error state). `create_goal` / `get_goal` / `update_goal` settle into dsh web's goal card (`dsh-emacs-render--goal-card-body`): objective summary, State / Rounds, and the blocker message while blocked.
 6. **turn/start** / **turn/end** → `dsh-emacs-render-turn-start/end`: rendered as a divider
 
@@ -1197,6 +1278,13 @@ Tool cards render and fold independently. The renderer tracks each call's
 identity, arguments and result; the UI owns that card's fold state. Turn
 boundaries and older-history pages do not maintain separate activity-group
 counters. See [decision 122](../postmortem/122-remove-inactive-transcript-options.md).
+
+`dsh-emacs-render--apply-tool-result` owns updates from both decoded stream
+results and late question answers. Event sequence tracking stays at the event
+entry point; projection-driven settlement updates the existing card without
+constructing an event. Both callers respect tool visibility, and settled
+question cards keep their original call identity and fold state. See
+[decision 123](../postmortem/123-decoded-stream-and-tool-results.md).
 
 ## Chinese encoding
 

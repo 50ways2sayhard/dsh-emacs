@@ -1734,10 +1734,11 @@
             (dsh-emacs-mode)
             (setq-local dsh-emacs--buffer-session "sess-uq"))
           (dsh-emacs-events--host-apply-projection
-           proc "sess-uq" "userQuestions"
-           '((active . [((callId . "c1") (state . "continued")
-                         (questions . [((id . "q1") (question . "Which?"))]))])
-             (settled . [])))
+           proc '((sessionId . "sess-uq") (key . "userQuestions")
+                  (value . ((active . [((callId . "c1") (state . "continued")
+                                       (questions . [((id . "q1")
+                                                      (question . "Which?"))]))])
+                            (settled . [])))))
           (with-current-buffer chat
             (ert-info ((format "%s" "userQuestions-projection-stores-chat-state"))
               (should (equal '("c1")
@@ -1746,10 +1747,10 @@
                                       dsh-emacs--session-questions))))))
           (with-current-buffer neutral
             (dsh-emacs-events--host-apply-projection
-             proc "sess-other" "userQuestions"
-             '((active . [((callId . "x") (state . "continued")
-                           (questions . []))])
-               (settled . [])))
+             proc '((sessionId . "sess-other") (key . "userQuestions")
+                    (value . ((active . [((callId . "x") (state . "continued")
+                                         (questions . []))])
+                              (settled . [])))))
             (ert-info ((format "%s" "userQuestions-foreign-session-cell-dropped"))
               (should (null dsh-emacs--session-questions)))))
       (setq dsh-emacs--chat-buffers old-chats)
@@ -1964,6 +1965,55 @@
         (should (string-match-p "^   1\\. ✓ Stacked$" block))
         (should (string-match-p "^  → late$" block))
         (should (not (string-match-p "pending" block)))))))
+
+(ert-deftest dsh-emacs-test-questions-ask-late-answer-respects-display-gate ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs-show-tool-calls t)
+    (setq-local dsh-emacs-tool-expand-by-default nil)
+    (dsh-emacs-render-tool-call
+     (dsh-emacs-test--tool-call-event
+      1 "hidden-ask" "ask_user_question" dsh-emacs-test--ask-args))
+    (dsh-emacs-render-tool-result
+     (dsh-emacs-test--tool-result-event
+      2 "hidden-ask" nil 0
+      (json-encode '((pending . t) (callId . "hidden-ask")))))
+    (let* ((ns (dsh-emacs-render--make-namespace))
+           (before (buffer-string))
+           (state (copy-tree (dsh-emacs-render--tool-state "hidden-ask")))
+           (answers (json-encode
+                     '((answers . [((id . "q1") (selected . ["Stacked"]))])))))
+      (should (string-match-p "Ask question · pending" before))
+      (setq-local dsh-emacs-show-tool-calls nil)
+      (should-not (dsh-emacs-render-question-settled "hidden-ask" answers))
+      (should (equal before (buffer-string)))
+      (should (equal state (dsh-emacs-render--tool-state "hidden-ask")))
+      (setq-local dsh-emacs-show-tool-calls t)
+      (dsh-emacs-render-question-settled "hidden-ask" answers)
+      (should (equal answers
+                     (plist-get (dsh-emacs-render--tool-state "hidden-ask")
+                                :result)))
+      (let ((block (dsh-emacs-test--tool-block-text ns "tool-hidden-ask")))
+        (should (string-match-p "Ask question · 1/1 answered" block))
+        ;; Completing the row preserves the user's collapsed presentation.
+        (should-not (string-match-p "Which layout" block)))
+      (goto-char (car (dsh-emacs-ui-find-block ns "tool-hidden-ask")))
+      (dsh-emacs-ui-toggle-fragment)
+      (should (string-match-p
+               "^   1\\. ✓ Stacked$"
+               (dsh-emacs-test--tool-block-text ns "tool-hidden-ask")))
+      (let ((completed (buffer-string))
+            (settled-state
+             (copy-tree (dsh-emacs-render--tool-state "hidden-ask"))))
+        (should-not
+         (dsh-emacs-render-question-settled
+          "hidden-ask"
+          (json-encode
+           '((answers . [((id . "q1") (selected . ["Compact"]))])))))
+        (should (equal completed (buffer-string)))
+        (should (equal settled-state
+                       (dsh-emacs-render--tool-state "hidden-ask")))))))
 
 (ert-deftest dsh-emacs-test-questions-ask-in-time-answer-is-not-overwritten-by-projection ()
   :tags '(dsh-unit)

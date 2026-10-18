@@ -97,8 +97,9 @@
                          (lambda (&rest args)
                            (apply render args)
                            (dsh-emacs-events--host-apply-projection
-                            nil "plan-main" "plan"
-                            '((active . t) (pending . :json-false))))))
+                            nil '((sessionId . "plan-main") (key . "plan")
+                                  (value . ((active . t)
+                                            (pending . :json-false))))))))
                 (dsh-emacs-events--follow-snapshot
                  first `((cursor . 6)
                          (records . [((type . "event")
@@ -116,7 +117,8 @@
               (should (null dsh-emacs--modeline-plan))
               (should (string-empty-p (dsh-emacs-modeline--ml-indicator)))))
           (dsh-emacs-events--host-apply-projection
-           nil "plan-main" "plan" '((active . t) (pending . nil)))
+           nil '((sessionId . "plan-main") (key . "plan")
+                 (value . ((active . t) (pending . nil)))))
           (dsh-emacs-events--host-control-baseline
            nil '((projections . ((plan-main . ((asOfSeq . 8) (values)))))))
           (with-current-buffer first
