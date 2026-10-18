@@ -6,7 +6,11 @@ All notable changes to this project are documented here. Format follows
 sections carry the planned next version (pre-1.0: `fix` → patch, features →
 minor) and stay undated until the release is cut.
 
-## 0.7.0 - Unreleased
+## 0.6.1 - 2026-10-18
+
+Compatible with **dsh 0.2.1-rc.2**, the latest upstream release as of
+2026-10-18 (npm `next`; npm `latest` still points to 0.2.0-rc.2).
+The minimum supported Emacs version remains **27.1**.
 
 ### Changed
 

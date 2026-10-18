@@ -7,7 +7,10 @@ mandatory third-party Emacs packages.
 
 ![Chat buffer with streaming replies and tool calls](assets/chat.png)
 
-The client includes compatibility fixes for the **dsh 0.2.1 protocol**:
+dsh-emacs **0.6.1** is compatible with **dsh 0.2.1-rc.2**, the
+[latest upstream release](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-rc.2)
+as of **2026-10-18** (npm `next`; npm `latest` still points to 0.2.0-rc.2).
+This release includes compatibility fixes for the **dsh 0.2.1 protocol**:
 server-assigned session IDs, migration-required projection reads, and external
 subagent navigation guards. The [protocol reference](docs/rpc.md) is
 source-audited through **dsh 0.2.1-rc.2**. Live validation on 2026-10-18

@@ -1,7 +1,7 @@
 ;;; dsh-emacs-reload.el --- Reload package source without resetting chats -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
-;; Version: 0.6.0
+;; Version: 0.6.1
 ;; Package-Requires: ((emacs "27.1"))
 ;; License: GPL-3.0-or-later
 
