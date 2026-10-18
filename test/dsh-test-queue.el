@@ -317,7 +317,7 @@
           (setq-local dsh-emacs--ml-busy t)
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (_m _p callback) (push callback cbs))))
-            (dsh-emacs--submit-deferred "queued now" nil nil)
+            (dsh-emacs--submit-deferred "queued now")
             (ert-info ((format "%s" "queued-submit-previews-before-host-frame"))
               (should (let ((item (dsh-emacs-queue-next-item)))
                         (and item
@@ -334,7 +334,7 @@
               (should (string= "queued now"
                                (dsh-protocol-queue-item-text (dsh-emacs-queue-next-item)))))
             ;; A rejected submit drops the local preview with the suppression.
-            (dsh-emacs--submit-deferred "queued lost" nil nil)
+            (dsh-emacs--submit-deferred "queued lost")
             (ert-info ((format "%s" "queued-submit-preview-shown-again"))
               (should dsh-emacs-queue--optimistic-submit))
             (should (= (length cbs) 2))
@@ -459,7 +459,7 @@
             ;; Deferred path (busy), empty mirror → armed: the running
             ;; turn's submit must not flash "queued:"/"running:" either
             (dsh-emacs--ml-busy-set t)
-            (dsh-emacs--submit-deferred "hello busy" nil nil)
+            (dsh-emacs--submit-deferred "hello busy")
             (ert-info ((format "%s" "submit-deferred-arms-when-empty"))
               (should dsh-emacs--queue-submit-suppress)
               (should (timerp dsh-emacs-queue--submit-suppress-timer)))
@@ -469,7 +469,7 @@
             ;; Deferred path, items parked → not armed
             (setq dsh-emacs--queue-items
                   (list (dsh-emacs-test--queue-item "q" "queued" "parked2")))
-            (dsh-emacs--submit-deferred "hello parked busy" nil nil)
+            (dsh-emacs--submit-deferred "hello parked busy")
             (ert-info ((format "%s" "submit-deferred-parked-keeps-announce"))
               (should (null dsh-emacs--queue-submit-suppress)))
             (setq dsh-emacs--queue-items nil)
@@ -486,7 +486,7 @@
               (should (null dsh-emacs-queue--submit-suppress-timer)))
             ;; Failure branch (deferred): same disarm
             (dsh-emacs--ml-busy-set t)
-            (dsh-emacs--submit-deferred "hello fail busy" nil nil)
+            (dsh-emacs--submit-deferred "hello fail busy")
             (ert-info ((format "%s" "submit-deferred-failure-arms"))
               (should dsh-emacs--queue-submit-suppress))
             (funcall (car cbs) nil '((code . "down")))
@@ -1098,13 +1098,13 @@
                          (push (list method params) calls))))
               ;; Explicit steer
               (with-current-buffer buf
-                (dsh-emacs--submit-deferred "redirect now" nil 'steer))
+                (dsh-emacs--submit-deferred "redirect now" :mode 'steer))
               ;; behavior=queue fallback
               (with-current-buffer buf
-                (dsh-emacs--submit-deferred "line up" nil nil))
+                (dsh-emacs--submit-deferred "line up"))
               (let ((dsh-emacs-busy-enter-behavior 'steer))
                 (with-current-buffer buf
-                  (dsh-emacs--submit-deferred "wake up" nil nil)))
+                  (dsh-emacs--submit-deferred "wake up")))
               (ert-info ((format "%s" "queue-deferred-mode-resolution"))
                 (should (= 3 (length calls)))
                 (should (equal "session/prompt" (car (nth 2 calls))))

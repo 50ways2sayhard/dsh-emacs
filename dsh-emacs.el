@@ -3058,7 +3058,9 @@ is not recorded for `M-p' recall: every submit path skips it."
          (dsh-emacs--active-session-id) staged
          (lambda (ok parts err)
            (if ok
-               (dsh-emacs--submit-dispatch message parts staged mode t)
+               (dsh-emacs--submit-dispatch
+                message :parts parts :staged staged :mode mode
+                :input-consumed t)
              ;; Nothing reached the model: restore the original staging,
              ;; unless a newer draft has taken its place.
              (dsh-emacs--restore-draft message attachments)
@@ -3066,10 +3068,11 @@ is not recorded for `M-p' recall: every submit path skips it."
                       (or (and (listp err) (cdr (assq 'message err)))
                           err "transport error"))))))
     (dsh-emacs--submit-dispatch
-     message (delq nil (mapcar #'dsh-emacs--attachment-part attachments))
-     attachments mode)))
+     message :parts (delq nil (mapcar #'dsh-emacs--attachment-part attachments))
+     :staged attachments :mode mode)))
 
-(defun dsh-emacs--submit-dispatch (message parts staged mode &optional input-consumed)
+(cl-defun dsh-emacs--submit-dispatch
+    (message &key parts staged mode input-consumed)
   "Dispatch MESSAGE with resolved wire PARTS as MODE.
 PARTS are tagged `session/prompt' content parts (image bytes inline, file
 receipts) and STAGED the staged attachment entries they were resolved
@@ -3082,7 +3085,9 @@ once every staged file has become a receipt."
      (dsh-emacs--buffer-subagent
       (when (or command (dsh-emacs-command-parse message))
         (user-error "Commands are unavailable in subagent conversations"))
-      (dsh-emacs--submit-deferred message parts (or mode 'queue) staged input-consumed))
+      (dsh-emacs--submit-deferred
+       message :parts parts :mode (or mode 'queue) :staged staged
+       :input-consumed input-consumed))
      ;; A `!' line with no attachments is a local action;
      ;; attachment captions do not go to the shell.
      (command
@@ -3090,7 +3095,9 @@ once every staged file has become a receipt."
      ((or mode
           (and (dsh-emacs--busy-p)
                (not (eq dsh-emacs-busy-enter-behavior 'stop))))
-      (dsh-emacs--submit-deferred message parts mode staged input-consumed))
+      (dsh-emacs--submit-deferred
+       message :parts parts :mode mode :staged staged
+       :input-consumed input-consumed))
      ((dsh-emacs-command-parse message)
       (let ((session-id (dsh-emacs--active-session-id))
             (input-buffer (current-buffer)))
@@ -3132,10 +3139,14 @@ once every staged file has become a receipt."
                  (when (buffer-live-p input-buffer)
                    (with-current-buffer input-buffer
                      (dsh-emacs-render-command-cleanup-optimistic)))
-                 (dsh-emacs--submit-plain message parts t staged t))
+                 (dsh-emacs--submit-plain
+                  message :parts parts :staged staged
+                  :history-recorded t :input-consumed t))
                 (t nil))        ; accepted: the command/run event replaces it
              (quit nil))))))
-     (t (dsh-emacs--submit-plain message parts nil staged input-consumed)))))
+     (t (dsh-emacs--submit-plain
+         message :parts parts :staged staged
+         :input-consumed input-consumed)))))
 
 (defun dsh-emacs--attachments-prompt-content (message parts)
   "Return the `session/prompt' `content' array for MESSAGE and PARTS.
@@ -3144,7 +3155,8 @@ bytes inline, or `{type: \"file\", receiptId}' — appended after the
 leading `{type: \"text\"}' part, so the model sees the caption first."
   (vconcat `(((type . "text") (text . ,message))) parts))
 
-(defun dsh-emacs--submit-deferred (message parts mode &optional staged input-consumed)
+(cl-defun dsh-emacs--submit-deferred
+    (message &key parts mode staged input-consumed)
   "Submit MESSAGE into the running turn's inbox as MODE.
 MODE is `queue' (line up as the next turn) or `steer' (wake the running
 agent before its next step); nil means resolve from
@@ -3228,8 +3240,8 @@ against); genuinely parked items keep their feedback."
                                   (dsh-emacs--restore-draft
                                    message staged))))))))
 
-(defun dsh-emacs--submit-plain (message &optional parts skip-history staged
-                                       input-consumed)
+(cl-defun dsh-emacs--submit-plain
+    (message &key parts staged history-recorded input-consumed)
   "Submit MESSAGE (a plain string) to the current session.
 
 PARTS, when given, is the resolved attachment list
@@ -3245,7 +3257,7 @@ On acceptance the message is echoed into the transcript (when non-empty),
 the running spinner lights up while the run is still awaited (a fast run
 that already finished on the stream before the callback repeats must not
 re-light it), and the watchdog starts.  Non-nil
-SKIP-HISTORY suppresses the input-history push: used by the slash-command
+HISTORY-RECORDED suppresses the input-history push: used by the slash-command
 fallback after the line was already recorded at submit time.
 INPUT-CONSUMED means the original draft was already cleared; leave any
 subsequent input alone.
@@ -3317,7 +3329,7 @@ input and staged attachments are empty (a newer draft is left alone)."
                           (lambda (ok value)
                             (if ok
                                 (progn
-                                  (unless (or skip-history parts)
+                                  (unless (or history-recorded parts)
                                     (dsh-emacs--push-input-history message))
                                   ;; The echo is already on screen (rendered
                                   ;; optimistically at submit); the callback
