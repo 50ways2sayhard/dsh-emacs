@@ -103,6 +103,95 @@
             (should (dsh-protocol-subagent-cell-present
                      (dsh-emacs-subagent--cell "cold" 'subagentCatalog)))))))))
 
+(ert-deftest dsh-emacs-test-subagent-projection-notifies-only-on-change ()
+  :tags '(dsh-unit)
+  (let ((dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
+        (changes 0))
+    (cl-letf (((symbol-function 'dsh-emacs-subagent--changed)
+               (lambda () (cl-incf changes) nil)))
+      (dsh-emacs-subagent-apply
+       "child" (dsh-protocol-subagent-baseline--from-alist
+                '((asOfSeq . 5) (values (subagentCatalog . [])
+                                        (tokenUsage (outputTokens . 12))))))
+      (should (= changes 1))
+      (dolist (seq '(4 5))
+        (dsh-emacs-subagent-apply
+         "child" (dsh-protocol-subagent-baseline--from-alist
+                  `((asOfSeq . ,seq) (values (subagentCatalog . [])
+                                             (tokenUsage (outputTokens . 999)))))))
+      (should (= changes 1))
+      (should (= 12 (dsh-emacs-subagent-token-total
+                     (dsh-emacs-subagent--value "child" 'tokenUsage))))
+      ;; A newer watermark matters even when the value is unchanged.
+      (dsh-emacs-subagent-apply
+       "child" (list (dsh-protocol-subagent-cell--from-alist
+                      '((key . "tokenUsage") (seq . 9)
+                        (value (outputTokens . 12))))))
+      (should (= changes 2))
+      (should (= 9 (dsh-protocol-subagent-cell-seq
+                    (dsh-emacs-subagent--cell "child" 'tokenUsage))))
+      (dsh-emacs-subagent-apply
+       "child" (list (dsh-protocol-subagent-cell--from-alist
+                      '((key . "tokenUsage") (seq . 8)
+                        (value (outputTokens . 999))))))
+      (should (= changes 2))
+      (should (= 12 (dsh-emacs-subagent-token-total
+                     (dsh-emacs-subagent--value "child" 'tokenUsage))))
+      (puthash "child" (plist-put (gethash "child" dsh-emacs--subagent-catalogs)
+                                  :state 'error)
+               dsh-emacs--subagent-catalogs)
+      (dsh-emacs-subagent-apply "child" nil)
+      (should (= changes 3))
+      (should (eq 'ready (plist-get
+                          (gethash "child" dsh-emacs--subagent-catalogs) :state)))
+      (dsh-emacs-subagent-apply "child" nil)
+      (should (= changes 3)))))
+
+(ert-deftest dsh-emacs-test-subagent-refresh-notifies-read-state-transitions ()
+  :tags '(dsh-unit)
+  (let ((dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
+        (dsh-emacs--subagent-generation 1)
+        states callback)
+    (cl-letf (((symbol-function 'dsh-emacs-subagent--changed)
+               (lambda ()
+                 (push (plist-get (gethash "child" dsh-emacs--subagent-catalogs)
+                                  :state)
+                       states)
+                 nil))
+              ((symbol-function 'dsh-emacs--rpc-async)
+               (lambda (_method _args cb) (setq callback cb))))
+      (dsh-emacs-subagent-refresh "child")
+      (should (equal states '(loading)))
+      (dsh-emacs-subagent-apply
+       "child" (dsh-protocol-subagent-baseline--from-alist
+                '((asOfSeq . 9) (values (subagentCatalog . [])
+                                        (tokenUsage (outputTokens . 12))))))
+      (should (equal states '(loading loading)))
+      ;; The cold response still completes loading when every cell is older.
+      (funcall callback t '((asOfSeq . 8) (values (subagentCatalog . [])
+                                                  (tokenUsage (outputTokens . 999)))))
+      (should (equal states '(ready loading loading)))
+      (should (= 9 (dsh-protocol-subagent-cell-seq
+                    (dsh-emacs-subagent--cell "child" 'tokenUsage))))
+      (should (= 12 (dsh-emacs-subagent-token-total
+                     (dsh-emacs-subagent--value "child" 'tokenUsage))))
+      (should-not (plist-get (gethash "child" dsh-emacs--subagent-catalogs)
+                             :request))
+      (setq states nil)
+      (dsh-emacs-subagent-refresh "child")
+      (funcall callback nil "Unavailable")
+      (should (equal states '(error loading)))
+      (should (equal "Unavailable"
+                     (plist-get (gethash "child" dsh-emacs--subagent-catalogs)
+                                :error)))
+      (setq states nil)
+      (dsh-emacs-subagent-refresh "child")
+      (funcall callback t '((asOfSeq . 10) (values (subagentCatalog . [])
+                                                   (tokenUsage (outputTokens . 24)))))
+      (should (equal states '(ready loading)))
+      (should (= 24 (dsh-emacs-subagent-token-total
+                     (dsh-emacs-subagent--value "child" 'tokenUsage)))))))
+
 (ert-deftest dsh-emacs-test-subagent-migration-hints-never-become-cells ()
   :tags '(dsh-unit)
   (let ((hints '((kind . "migration-required")
@@ -176,7 +265,7 @@
             (ert-info ((format "%s" (format "subagent-local-refusal-%s" fn)))
               (should (condition-case nil (progn (funcall fn) nil) (user-error t)))))
           (ert-info ((format "%s" "subagent-deferred-refuses-before-rpc"))
-            (should (condition-case nil (progn (dsh-emacs--submit-deferred "test" nil 'queue) nil)
+            (should (condition-case nil (progn (dsh-emacs--submit-deferred "test" :mode 'queue) nil)
                       (user-error t)))
             (should (null calls)))))
       (setf (dsh-protocol-session-agent-available parent) t)

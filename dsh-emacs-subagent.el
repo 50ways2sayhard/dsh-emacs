@@ -52,23 +52,30 @@
     (and cell (dsh-protocol-subagent-cell-value cell))))
 
 (defun dsh-emacs-subagent-apply (id cells)
-  "Apply decoded CELLS for ID, rejecting older watermarks independently."
+  "Apply decoded CELLS for ID, rejecting older watermarks independently.
+Return non-nil when stored cells or read state change, notifying their views."
   (let* ((state (gethash id dsh-emacs--subagent-catalogs))
-         (stored (plist-get state :cells)))
+         (stored (plist-get state :cells))
+         changed)
     (dolist (cell cells)
       (let* ((key (dsh-protocol-subagent-cell-key cell))
              (old (alist-get key stored)))
         (when (or (null old)
                   (> (dsh-protocol-subagent-cell-seq cell)
                      (dsh-protocol-subagent-cell-seq old)))
-          (setf (alist-get key stored) cell))))
+          (setf (alist-get key stored) cell)
+          (setq changed t))))
     (setq state (plist-put state :cells stored))
     (when (and (null (plist-get state :request))
+               (not (eq (plist-get state :state) 'ready))
                (let ((catalog (alist-get 'subagentCatalog stored)))
                  (and catalog (dsh-protocol-subagent-cell-present catalog))))
-      (setq state (plist-put state :state 'ready)))
-    (puthash id state dsh-emacs--subagent-catalogs))
-  (dsh-emacs-subagent--changed))
+      (setq state (plist-put state :state 'ready)
+            changed t))
+    (puthash id state dsh-emacs--subagent-catalogs)
+    (when changed
+      (dsh-emacs-subagent--changed)
+      t)))
 
 (defun dsh-emacs-subagent-refresh (&optional id)
   "Refresh cold projections for ID, defaulting to the current conversation."
@@ -102,8 +109,8 @@
                        current (plist-put current :state (if (and ok value) 'ready 'error))
                        current (plist-put current :error (unless (and ok value) value)))
                  (puthash id current dsh-emacs--subagent-catalogs)
-                 (if (and ok value)
-                     (dsh-emacs-subagent-apply id value)
+                 ;; A stale cold response still settles the loading state.
+                 (unless (and ok value (dsh-emacs-subagent-apply id value))
                    (dsh-emacs-subagent--changed)))))))))))
 
 (defun dsh-emacs-subagent-summary-changed (id &optional status-only)
