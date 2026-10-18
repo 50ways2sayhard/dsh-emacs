@@ -398,9 +398,18 @@ baselines regroup hundreds of multibyte rows."
                     (when (and existing (> marker dest))
                       ;; Transposing, rather than deleting/reinserting, moves
                       ;; xref markers with their rows even across workspaces.
+                      ;; Swap adjacent blocks: a non-adjacent empty region
+                      ;; corrupts multibyte text/properties on affected Emacs
+                      ;; builds (bug#70122), including our 28.1 baseline.
                       (transpose-regions
-                       dest dest marker
+                       dest marker marker
                        (save-excursion (goto-char marker) (forward-line 1) (point)))
+                      ;; Emacs 31 builds can retain stale byte-position caches
+                      ;; after transposition.  Republishing the first character's
+                      ;; existing properties invalidates them without moving text
+                      ;; or markers (postmortem/137).
+                      (set-text-properties dest (1+ dest)
+                                           (text-properties-at dest))
                       (goto-char dest))
                     (if (or existing
                             (and (null id) (not (eobp))

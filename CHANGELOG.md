@@ -22,6 +22,9 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Reorder multilingual session lists safely**: workspace regrouping no longer
+  triggers the Emacs transposition crash or corrupts multibyte row text;
+  navigation markers stay attached to their sessions. (rationale: postmortem/137)
 - **Keep idle session indicators muted**: idle dots and muted text inherit
   `shadow`, so the default Emacs theme shows them in grey instead of the
   red comment color. Running indicators remain orange.

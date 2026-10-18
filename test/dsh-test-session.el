@@ -1066,5 +1066,35 @@ window's own point behind, which the session list now preserves per window."
         (ert-info ((format "%s" "session-row-cache-hidden-descendants-pruned"))
           (should (= (hash-table-count dsh-emacs-session--row-cache) 1)))))))
 
+(ert-deftest dsh-emacs-test-session-reorder-multibyte-rows-preserves-markers ()
+  :tags '(dsh-unit)
+  ;; Moving the last row across multibyte text used to enter the broken
+  ;; non-adjacent transpose-regions path in Emacs 28 through 30 (bug#70122).
+  (let ((rows (list (propertize "a:\n" 'dsh-emacs-row-id "a")
+                    (propertize "b: ℓ₀\n" 'dsh-emacs-row-id "b")
+                    (propertize "v: scaling\n" 'dsh-emacs-row-id "v"))))
+    (with-temp-buffer
+      (insert (apply #'concat rows))
+      (let ((target (current-buffer))
+            (first (copy-marker 1))
+            (middle (copy-marker 7 t))
+            (last (copy-marker 10)))
+        (unwind-protect
+            (with-temp-buffer
+              (insert (nth 2 rows) (nth 0 rows) (nth 1 rows))
+              (let ((source (current-buffer)))
+                (with-current-buffer target
+                  (dsh-emacs-session--update-rows source)
+                  (should (equal (buffer-string) "v: scaling\na:\nb: ℓ₀\n"))
+                  (should (= first 12))
+                  (should (= middle 18))
+                  (should (= last 1))
+                  (should (eq (char-after middle) ?ℓ))
+                  (should (equal (get-text-property first 'dsh-emacs-row-id) "a"))
+                  (should (equal (get-text-property middle 'dsh-emacs-row-id) "b"))
+                  (should (equal (get-text-property last 'dsh-emacs-row-id) "v")))))
+          (dolist (marker (list first middle last))
+            (set-marker marker nil)))))))
+
 (provide 'dsh-test-session)
 ;;; dsh-test-session.el ends here
