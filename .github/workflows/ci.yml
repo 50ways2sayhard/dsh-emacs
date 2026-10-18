@@ -46,3 +46,8 @@ jobs:
 
       - name: Run the verification gate
         run: scripts/verify.sh
+
+      - name: Diagnose a failed unit suite
+        if: failure()
+        run: |
+          emacs -Q --batch -l test/dsh-test.el 2>&1 | tail -n 200

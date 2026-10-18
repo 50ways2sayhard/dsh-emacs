@@ -41,7 +41,9 @@ run() {  # run <label> <log-key> <command...>
     printf 'ok   %s\n' "$label"
   else
     printf 'FAIL %s\n' "$label"
-    sed 's/^/     /' "$tmpdir/$key.log" | tail -n 12
+    # Enough tail to show the last ERT results before a crash: Emacs can
+    # dump 12 lines of C backtrace with no failing test name attached.
+    sed 's/^/     /' "$tmpdir/$key.log" | tail -n 60
     fail=1
   fi
 }

@@ -35,6 +35,8 @@
 ;;;       closed early) reads fine and is out of scope here -- that class of
 ;;;       problem surfaces through batch-byte-compile warnings.
 
+(require 'seq)
+
 (defvar dsh-check:files
   (append
    '("dsh-emacs.el" "dsh-emacs-protocol.el" "dsh-emacs-session.el"

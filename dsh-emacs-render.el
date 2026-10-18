@@ -37,6 +37,10 @@
                   (&optional stream-state))
 (defvar dsh-emacs-markdown--render-window)
 
+;; Defined by image.el, which a build without image support may not load; the
+;; attachment placeholder checks the available types at runtime.
+(defvar image-types)
+
 ;; Defined in dsh-emacs-reference.el, loaded by dsh-emacs.el.  Turns completed
 ;; @ file/session mentions in a user message into clickable colored links, and
 ;; propertizes a standalone file path for the deliverables row's link.
