@@ -857,9 +857,11 @@ tombstone identity).  Failures surface via `message' and leave the row unchanged
     (with-help-window "*dsh goal*"
       ;; `insert', not `princ': a canonical session mention must keep its
       ;; collapsed `@label' display and clickable chip.
-      (insert (or (when-let* ((objective (dsh-protocol-goal-objective goal)))
-                    (dsh-emacs-reference-fontify objective))
-                  "Untitled goal"))
+      ;; Emacs 28 binds standard-output without selecting the help buffer.
+      (with-current-buffer standard-output
+        (insert (or (when-let* ((objective (dsh-protocol-goal-objective goal)))
+                      (dsh-emacs-reference-fontify objective))
+                    "Untitled goal")))
       (when pending
         (princ (format "\n\n%s" pending)))
       (when-let* ((phase (dsh-protocol-goal-phase goal)))

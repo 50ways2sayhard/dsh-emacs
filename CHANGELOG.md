@@ -25,6 +25,8 @@ minor) and stay undated until the release is cut.
 - **Reorder multilingual session lists safely**: workspace regrouping no longer
   triggers the Emacs transposition crash or corrupts multibyte row text;
   navigation markers stay attached to their sessions. (rationale: postmortem/137)
+- **Show goal objectives in the help buffer on Emacs 28**: opening goal details
+  no longer inserts the objective into the chat buffer or omits it from help.
 - **Keep idle session indicators muted**: idle dots and muted text inherit
   `shadow`, so the default Emacs theme shows them in grey instead of the
   red comment color. Running indicators remain orange.
