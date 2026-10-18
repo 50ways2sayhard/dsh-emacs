@@ -1579,8 +1579,9 @@
             (dsh-emacs--interaction-drain first-kind))
           (ert-info ((format "first=%s reader-error=%s" first-kind reader-error))
             (should (equal (nreverse order) expected))
-            (should (equal (nreverse responses)
-                           (if reader-error (cdr expected) expected)))
+            ;; A reader error declines that frame as well, so the host is
+            ;; never left waiting; every frame still gets an answer.
+            (should (equal (nreverse responses) expected))
             (should-not dsh-emacs--interaction-active)
             (should-not dsh-emacs--question-queue)
             (should-not dsh-emacs--approval-queue)))))))
@@ -2278,6 +2279,53 @@
           (should (null dsh-emacs--interaction-active))
           (should (null dsh-emacs--question-queue))
           (should (null dsh-emacs--approval-queue)))))))
+
+(ert-deftest dsh-emacs-test-questions-question-read-error-declines-waterfall ()
+  :tags '(dsh-unit)
+  (let* ((chat (get-buffer-create " *dsh-test-question-error*"))
+         (dsh-emacs-events--client-id "c-error")
+         (responds nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'dsh-emacs--events-result-async)
+                   (lambda (client-id event-id outcome _cb)
+                     (push (list client-id event-id outcome) responds)))
+                  ((symbol-function 'dsh-emacs--collect-question-answers)
+                   (lambda (&rest _) (error "reader blew up")))
+                  ((symbol-function 'dsh-emacs--question-release-wait)
+                   #'ignore))
+          ;; A reader error must still answer the host: the waterfall is
+          ;; declined instead of being dropped when the minibuffer is busy.
+          (dsh-emacs--question-answer (list chat "rpc-q-error" "sess-q" nil nil))
+          (let ((response (car responds)))
+            (ert-info ((format "%s" "question-read-error-declines-waterfall"))
+              (should (equal "c-error" (nth 0 response)))
+              (should (equal "rpc-q-error" (nth 1 response)))
+              (should (equal "rejected" (alist-get 'kind (nth 2 response))))
+              (should (equal "cancelled"
+                             (alist-get 'name
+                                        (alist-get 'error (nth 2 response))))))))
+      (when (buffer-live-p chat) (kill-buffer chat)))))
+
+(ert-deftest dsh-emacs-test-questions-approval-read-error-rejects-waterfall ()
+  :tags '(dsh-unit)
+  (let* ((chat (get-buffer-create " *dsh-test-approval-error*"))
+         (dsh-emacs-events--client-id "c-error")
+         (responds nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'dsh-emacs--events-result-async)
+                   (lambda (client-id event-id outcome _cb)
+                     (push (list client-id event-id outcome) responds)))
+                  ((symbol-function 'dsh-emacs--approval-prompt)
+                   (lambda (&rest _) (error "reader blew up"))))
+          (dsh-emacs--approval-answer
+           (list chat "wf-error" "sess-a" "bash" "why" "call-1"))
+          (let ((response (car responds)))
+            (ert-info ((format "%s" "approval-read-error-rejects-waterfall"))
+              (should (equal "c-error" (nth 0 response)))
+              (should (equal "wf-error" (nth 1 response)))
+              (should (equal '((kind . "result") (value . "rejected"))
+                             (nth 2 response))))))
+      (when (buffer-live-p chat) (kill-buffer chat)))))
 
 (provide 'dsh-test-questions)
 ;;; dsh-test-questions.el ends here

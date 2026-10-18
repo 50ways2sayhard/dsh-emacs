@@ -21,6 +21,10 @@ minor) and stay undated until the release is cut.
 - **Keep idle session indicators muted**: idle dots and muted text inherit
   `shadow`, so the default Emacs theme shows them in grey instead of the
   red comment color. Running indicators remain orange.
+- **Answer a question or approval whose prompt cannot open**: when the reader
+  signals (for example while another minibuffer owns the prompt), the client
+  now declines the question or rejects the approval instead of leaving the
+  host waiting for an outcome.
 
 ## 0.6.1 - 2026-10-18
 

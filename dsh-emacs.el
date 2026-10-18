@@ -5047,7 +5047,16 @@ claim until its asynchronous response arrives; other exits release it."
           (quit
            (unless (equal event-id dsh-emacs--waterfall-cancelled-event-id)
              (dsh-emacs--question-decline event-id)))
-          (error (message "dsh question error: %S" err)))
+          (error
+           (message "dsh question error: %S" err)
+           ;; The host waits for an outcome even when reading failed (for
+           ;; example, a nested minibuffer made the reader signal).  Decline
+           ;; unless an answer already went out or the host cancelled it.
+           (unless (or submitted
+                       (equal event-id dsh-emacs--waterfall-cancelled-event-id))
+             (condition-case fallback
+                 (dsh-emacs--question-decline event-id)
+               (error (message "dsh question decline error: %S" fallback))))))
       (unless submitted
         (dsh-emacs--question-release-wait claim)))))
 
@@ -5726,42 +5735,58 @@ the waterfall's EVENT-ID.  The prompt runs in the frame's chat buffer so
 the tool-call lookup (`dsh-emacs--approval-command-line') can read the
 buffer-local transcript state."
   (pcase-let ((`(,chat ,event-id ,session-id ,tool-name ,reason ,call-id) frame))
-    (condition-case err
-        (let ((allow
-               (condition-case nil
-                   (if (buffer-live-p chat)
-                       (with-current-buffer chat
-                         (dsh-emacs--approval-prompt
-                          session-id tool-name reason call-id))
-                     (dsh-emacs--approval-prompt
-                      session-id tool-name reason call-id))
-                 ;; A remote cancel must reach the outer handler without
-                 ;; becoming the user's default rejection.
-                 (quit
-                  (if (equal event-id
-                             dsh-emacs--waterfall-cancelled-event-id)
-                      (signal 'quit nil)
-                    (message "Approval %s quit — rejecting" event-id)
-                    nil)))))
-          (if (equal event-id dsh-emacs--waterfall-cancelled-event-id)
-              (message "Approval was answered elsewhere")
-            (dsh-emacs--events-result-async
-             dsh-emacs-events--client-id
-             event-id
-             `((kind . "result")
-               (value . ,(if allow "allowed-once" "rejected")))
-             (lambda (ok value)
-               (if ok
-                   (message "%s %s for %s"
-                            (if allow "Approved" "Rejected")
-                            (or tool-name "tool") session-id)
-                 (message "Approval response not accepted (%s)"
-                          value))))))
-      ;; Remote cancellation exits the prompt without answering again.
-      (quit
-       (unless (equal event-id dsh-emacs--waterfall-cancelled-event-id)
-         (message "Approval %s cancelled" event-id)))
-      (error (message "dsh approval error: %S" err)))))
+    (let ((sent nil))
+      (condition-case err
+          (let ((allow
+                 (condition-case nil
+                     (if (buffer-live-p chat)
+                         (with-current-buffer chat
+                           (dsh-emacs--approval-prompt
+                            session-id tool-name reason call-id))
+                       (dsh-emacs--approval-prompt
+                        session-id tool-name reason call-id))
+                   ;; A remote cancel must reach the outer handler without
+                   ;; becoming the user's default rejection.
+                   (quit
+                    (if (equal event-id
+                               dsh-emacs--waterfall-cancelled-event-id)
+                        (signal 'quit nil)
+                      (message "Approval %s quit — rejecting" event-id)
+                      nil)))))
+            (if (equal event-id dsh-emacs--waterfall-cancelled-event-id)
+                (message "Approval was answered elsewhere")
+              (dsh-emacs--events-result-async
+               dsh-emacs-events--client-id
+               event-id
+               `((kind . "result")
+                 (value . ,(if allow "allowed-once" "rejected")))
+               (lambda (ok value)
+                 (if ok
+                     (message "%s %s for %s"
+                              (if allow "Approved" "Rejected")
+                              (or tool-name "tool") session-id)
+                   (message "Approval response not accepted (%s)"
+                            value))))
+              (setq sent t)))
+        ;; Remote cancellation exits the prompt without answering again.
+        (quit
+         (unless (equal event-id dsh-emacs--waterfall-cancelled-event-id)
+           (message "Approval %s cancelled" event-id)))
+        (error
+         (message "dsh approval error: %S" err)
+         ;; Reading failed (for example, a nested minibuffer made the
+         ;; prompt signal): reject so the host is not left blocked.  A
+         ;; remote cancel already answered it.
+         (unless (or sent
+                     (equal event-id dsh-emacs--waterfall-cancelled-event-id))
+           (condition-case fallback
+               (dsh-emacs--events-result-async
+                dsh-emacs-events--client-id event-id
+                '((kind . "result") (value . "rejected"))
+                (lambda (ok value)
+                  (unless ok
+                    (message "Approval response not accepted (%s)" value))))
+             (error (message "dsh approval rejection error: %S" fallback)))))))))
 
 (defun dsh-emacs--avoid-minibuffer-prompt (&rest _)
   "Point-entered handler keeping point off the read-only prompt tail.
