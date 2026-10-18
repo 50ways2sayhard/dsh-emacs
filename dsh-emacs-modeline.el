@@ -614,7 +614,7 @@ data rides the `session/projection' frames, not this event."
 `request/header' carries the model config (data.header.config) when a run
 starts; consuming it makes the model, effort and provider segments live on
 open, before any later context data arrives."
-  (let ((config (dsh-protocol-request-model--from-alist event t)))
+  (let ((config (dsh-protocol-request-model--from-alist event :header-p t)))
     (when config
       (let ((model (dsh-protocol-model-selection-model config))
             (effort (dsh-protocol-model-selection-reasoning-effort config))

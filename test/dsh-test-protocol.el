@@ -458,6 +458,28 @@
     (should (equal (mapcar #'dsh-protocol-projection-key projections)
                    '("plan" "userQuestions")))))
 
+(ert-deftest dsh-emacs-test-protocol-control-session-tolerates-malformed-inbox ()
+  :tags '(dsh-unit)
+  (let* ((baseline
+          '((asOfSeq . 9)
+            (values . ((title . "Kept")
+                       (inbox . ((next-turn . [7])))))))
+         (session (dsh-protocol-control-session--from-alist
+                   (cons "control-bad" baseline)))
+         (projections (dsh-protocol-control-session-projections session)))
+    ;; One malformed cell must not discard the rest of the session.
+    (should (equal "control-bad"
+                   (dsh-protocol-control-session-session-id session)))
+    (should (equal '("plan" "userQuestions" "title" "inbox")
+                   (mapcar #'dsh-protocol-projection-key projections)))
+    (should (equal "Kept"
+                   (dsh-protocol-projection-value
+                    (cl-find "title" projections
+                             :key #'dsh-protocol-projection-key
+                             :test #'equal)))))
+  (dolist (inbox '(7 "junk" ((next-turn . 7)) ((next-step . "x"))))
+    (should-not (dsh-protocol-queue-items-from-inbox inbox))))
+
 (ert-deftest dsh-emacs-test-protocol-projection-decodes-known-values ()
   :tags '(dsh-unit)
   (dolist (case
@@ -735,17 +757,17 @@
   (let ((config (dsh-protocol-request-model--from-alist
                  '(("data" . (("header" . (("config" . (("model" . "m")
                                                         ("provider" . "p")
-                                                        ("reasoningEffort" . "high")))))))) t)))
+                                                        ("reasoningEffort" . "high")))))))) :header-p t)))
     (should (equal (dsh-protocol-model-selection-model config) "m"))
     (should (equal (dsh-protocol-model-selection-provider config) "p"))
     (should (equal (dsh-protocol-model-selection-reasoning-effort config) "high")))
-  (should-not (dsh-protocol-request-model--from-alist '((data . ((other . t)))) t))
+  (should-not (dsh-protocol-request-model--from-alist '((data . ((other . t)))) :header-p t))
   (should (equal (dsh-protocol-message-usage--from-alist
                   '((data . ((usage . ((inputTokens . "11") (input . 99)
                                        (output . 7) (cacheReadTokens . 3)
-                                       (cacheWrite . "2") (cost . "0.25")))))) t)
+                                       (cacheWrite . "2") (cost . "0.25")))))) :event-p t)
                  '(11 7 3 2 0.25)))
-  (should (equal (dsh-protocol-message-usage--from-alist nil t) '(0 0 0 0 0.0))))
+  (should (equal (dsh-protocol-message-usage--from-alist nil :event-p t) '(0 0 0 0 0.0))))
 
 (ert-deftest dsh-emacs-test-protocol-tool-arguments-precedence-and-fallback ()
   :tags '(dsh-unit)
@@ -771,12 +793,12 @@
                   '((message . "provider message") (error . "provider error")))
                  '(nil . "provider message")))
   (should (equal (dsh-protocol-rpc-result--from-alist
-                  '((ok . t) (value . "receipt")) t) '(t . "receipt")))
+                  '((ok . t) (value . "receipt")) :direct-p t) '(t . "receipt")))
   (should (equal (dsh-protocol-rpc-result--from-alist
-                  '((ok . :json-false) (error . "upload error")) t)
+                  '((ok . :json-false) (error . "upload error")) :direct-p t)
                  '(nil . "upload error")))
   (should (equal (dsh-protocol-rpc-result--from-alist
-                  '((message . "not an upload error")) t) '(nil))))
+                  '((message . "not an upload error")) :direct-p t) '(nil))))
 
 (ert-deftest dsh-emacs-test-protocol-plan-json-boundary ()
   :tags '(dsh-unit)
@@ -784,12 +806,26 @@
         (json-key-type 'string))
     (should (equal (dsh-protocol-plan-document-text
                     (dsh-protocol-plan-document--from-alist
-                     "{\"plan\":\"# Next\\nDo work\"}" t))
+                     "{\"plan\":\"# Next\\nDo work\"}" :json-p t))
                    "# Next\nDo work")))
   (should-not (dsh-protocol-plan-document-text
-               (dsh-protocol-plan-document--from-alist "42" t)))
-  (should-error (dsh-protocol-plan-document--from-alist "{broken" t)
+               (dsh-protocol-plan-document--from-alist "42" :json-p t)))
+  (should-error (dsh-protocol-plan-document--from-alist "{broken" :json-p t)
                 :type 'json-error))
+
+(ert-deftest dsh-emacs-test-protocol-tool-json-ignores-dynamic-json-settings ()
+  :tags '(dsh-unit)
+  ;; Tool payloads must decode to the wire object shape even when a caller
+  ;; has dynamically rebound the JSON reader's settings.
+  (let ((json-object-type 'hash-table)
+        (json-key-type 'string))
+    (should (equal '((a . 1)) (dsh-protocol--tool-json "{\"a\":1}")))
+    (should (equal '(("A" . "completed"))
+                   (dsh-protocol-todos--from-alist
+                    "{\"todos\":[{\"content\":\"A\",\"status\":\"completed\"}]}")))
+    (should (equal '("a.txt" nil "x")
+                   (dsh-protocol-intended-diff--from-alist
+                    "write" "{\"file_path\":\"a.txt\",\"content\":\"x\"}")))))
 
 (provide 'dsh-test-protocol)
 ;;; dsh-test-protocol.el ends here

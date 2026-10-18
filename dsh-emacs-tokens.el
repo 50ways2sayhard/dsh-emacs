@@ -181,7 +181,7 @@ zero usage when USAGE-ALIST is nil or carries no token numbers."
 Real dsh events carry the usage object at `data.usage'; an event without
 one yields a zero struct."
   (apply #'dsh-emacs-make-usage
-         (dsh-protocol-message-usage--from-alist event-alist t)))
+         (dsh-protocol-message-usage--from-alist event-alist :event-p t)))
 
 (defun dsh-emacs-ctx-face (pct)
   "Return the appropriate mode-line context face for PCT."

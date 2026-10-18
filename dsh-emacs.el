@@ -3447,7 +3447,7 @@ errors, or nil for transport failures already reported by HTTP."
              (setq callback-started t)
              ;; The route has its own {ok, value|error} discriminant.
              (pcase-let ((`(,ok . ,value)
-                          (dsh-protocol-rpc-result--from-alist body t)))
+                          (dsh-protocol-rpc-result--from-alist body :direct-p t)))
                (if ok
                    (funcall callback t
                             (dsh-protocol-file-receipt--from-alist value) nil)

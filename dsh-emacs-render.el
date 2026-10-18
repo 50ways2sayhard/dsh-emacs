@@ -489,7 +489,7 @@ Returns \"Tool\" for empty or missing names."
       "Tool"
     (mapconcat #'capitalize (split-string name "[_-]+" t) " ")))
 
-(defun dsh-emacs-render--tool-header (tool-name variant args-raw)
+(defun dsh-emacs-render--tool-header (tool-name variant args)
   "Return the (TITLE . SUMMARY) header pair for TOOL-NAME of VARIANT.
 TITLE comes from `dsh-emacs-tool-titles'; otherwise a variant-less tool (dsh
 web's `others', for example a plugin's `dev_*' tools) is titled \"Tool Call\"
@@ -498,15 +498,16 @@ arguments are deliberately NOT in the header: the expanded card already
 carries them in its IN row, and repeating the raw JSON on the collapsed line
 only crowds it.  Every other row keeps the humanized tool name — so grep /
 glob / web_search share the search magnifier icon but show distinct titles —
-and the summary chosen by `dsh-emacs-render--tool-summary'."
+and the summary chosen by `dsh-emacs-render--tool-summary'.
+ARGS is the decoded `dsh-protocol-tool-arguments' view of the call."
   (let ((curated (cdr (assoc tool-name dsh-emacs-tool-titles))))
     (cond
      (curated (cons curated
-                    (dsh-emacs-render--tool-summary tool-name variant args-raw)))
+                    (dsh-emacs-render--tool-summary tool-name args)))
      ((equal variant "others")
       (cons "Tool Call" tool-name))
      (t (cons (dsh-emacs-render--humanize-name tool-name)
-              (dsh-emacs-render--tool-summary tool-name variant args-raw))))))
+              (dsh-emacs-render--tool-summary tool-name args))))))
 
 (defun dsh-emacs-render--first-line (text)
   "First line of TEXT, trimmed."
@@ -544,29 +545,26 @@ there is no previewable content."
     (when (and first (> dsh-emacs-thinking-preview-max 0))
       (truncate-string-to-width first dsh-emacs-thinking-preview-max nil nil "..."))))
 
-(defun dsh-emacs-render--tool-summary (name variant args-raw)
-  "Format NAME's decoded argument summary on one line."
-  (or (dsh-emacs-render--goal-call-summary name args-raw)
-      (let* ((args (dsh-protocol-tool-arguments--from-alist
-                    args-raw name variant))
-             (paths (dsh-protocol-tool-arguments-paths args))
-             (summary (dsh-protocol-tool-arguments-summary args)))
+(defun dsh-emacs-render--tool-summary (name args)
+  "Format NAME's decoded ARGS as a one-line summary."
+  (or (dsh-emacs-render--goal-call-summary name args)
+      (let ((paths (dsh-protocol-tool-arguments-paths args))
+            (summary (dsh-protocol-tool-arguments-summary args)))
         (if (and (equal name "present") paths)
             (mapconcat #'identity paths ", ")
           (when summary (dsh-emacs-render--first-line summary))))))
 
-(defun dsh-emacs-render--tool-body-text (_variant args-raw)
-  "Format the args section of a tool card body."
-  (let* ((args (dsh-protocol-tool-arguments--from-alist args-raw))
-         (parsed (dsh-protocol-tool-arguments-object args))
-         (command (dsh-protocol-tool-arguments-command args)))
+(defun dsh-emacs-render--tool-body-text (args)
+  "Format decoded tool ARGS as the args section of a tool card body."
+  (let ((parsed (dsh-protocol-tool-arguments-object args))
+        (command (dsh-protocol-tool-arguments-command args)))
     (cond
      ((and (stringp command) (not (string-empty-p command)))
       (concat "$ " command))
      ((and parsed (listp parsed))
       (let ((json-encoding-pretty-print t))
         (json-encode parsed)))
-     (t (or args-raw "")))))
+     (t (or (dsh-protocol-tool-arguments-raw args) "")))))
 
 (defun dsh-emacs-render--tool-result-preview (text)
   "Format TEXT as the one-line preview of a settled tool result.
@@ -1598,15 +1596,15 @@ follows and be deleted when the stream is finalized."
       (push (cons (plist-get state :ns) (plist-get state :block-id))
             (plist-get step :thinking-blocks)))))
 
-(defun dsh-emacs-render-assistant-chunk (event)
+(defun dsh-emacs-render-assistant-chunk (event chunk)
   "Render an `assistant/chunk' EVENT incrementally.
+CHUNK is EVENT's decoded `dsh-protocol-chunk', shared with the dispatcher.
 Each protocol block owns its own transcript region: a `text-delta' opens or
 extends the live assistant body and closes any live Thinking block, while a
 `reasoning-delta' opens or extends the live Thinking block and closes the live
 assistant body.  `block-end' supplies content only for an unseen block index;
 providers may close earlier blocks after later blocks have already streamed."
-  (let* ((chunk (dsh-protocol-chunk--from-alist event))
-         (ending (dsh-protocol-chunk-ending chunk))
+  (let* ((ending (dsh-protocol-chunk-ending chunk))
          (type (dsh-protocol-chunk-type chunk))
          (text (dsh-protocol-chunk-text chunk))
          (index (dsh-protocol-chunk-index chunk))
@@ -1625,8 +1623,8 @@ providers may close earlier blocks after later blocks have already streamed."
           (dsh-emacs-render--start-assistant-stream event text)
         (dsh-emacs-render--start-thinking-stream event text))
       (when (integerp index)
-        (cl-pushnew index
-                    (plist-get (dsh-emacs-render--step-record key) :blocks)))))
+        (let ((step (dsh-emacs-render--step-record key)))
+          (cl-pushnew index (plist-get step :blocks))))))
   (dsh-protocol-event-sequence--from-alist event))
 
 ;;; ---------------------------------------------------------------------------
@@ -2205,7 +2203,7 @@ transcript; they are removed with the buffer on a session reset/replay."
   (when (and (equal name "exit_plan_mode") (stringp arguments))
     (let* ((document
             (condition-case err
-                (dsh-protocol-plan-document--from-alist arguments t)
+                (dsh-protocol-plan-document--from-alist arguments :json-p t)
               (json-error
                (message "Invalid plan document: %s" (error-message-string err))
                nil)))
@@ -2242,7 +2240,7 @@ transcript; they are removed with the buffer on a session reset/replay."
 Todo snapshots still apply when ordinary tool cards are hidden."
   (pcase-let* (((cl-struct dsh-protocol-tool-call name call-id (arguments args))
                 (dsh-protocol-tool-call--from-alist
-                 event t))
+                 event :event-p t))
                (seq (dsh-protocol-event-sequence--from-alist event))
                (plan-text (and dsh-emacs-show-tool-calls
                                (dsh-emacs-render--plan-text name args))))
@@ -2260,7 +2258,9 @@ Todo snapshots still apply when ordinary tool cards are hidden."
       (let* ((variant-info (dsh-emacs-render--tool-variant name))
              (variant (car variant-info))
              (icon (cdr variant-info))
-             (header (dsh-emacs-render--tool-header name variant args))
+             (arguments (dsh-protocol-tool-arguments--from-alist
+                         args name variant))
+             (header (dsh-emacs-render--tool-header name variant arguments))
              (title (car header))
              ;; An ask call's questions were decoded from its arguments:
              ;; its row states which stage the question set is in, and its
@@ -2272,7 +2272,7 @@ Todo snapshots still apply when ordinary tool cards are hidden."
                                (dsh-emacs-render--ask-summary
                                 nil nil nil))
                           (cdr header)))
-             (body-text (dsh-emacs-render--tool-body-text variant args))
+             (body-text (dsh-emacs-render--tool-body-text arguments))
              ;; bash and file-mutation rows draw their (running) expanded body
              ;; as the card the settled result will complete — the `$' prompt
              ;; rows, or the intended diff — so the first frame already
@@ -3016,7 +3016,7 @@ everything else `success'."
   (when dsh-emacs-show-tool-calls
     (dsh-emacs-render--apply-tool-result
      (dsh-protocol-tool-result--from-alist
-      event t))
+      event :event-p t))
     (dsh-protocol-event-sequence--from-alist event)))
 
 (cl-defun dsh-emacs-render--apply-tool-result (result)
@@ -3249,12 +3249,11 @@ buffer still tracks CALL-ID's row and that row is showing the pending result."
   "Whether NAME is one of the goal tools."
   (and (stringp name) (member name dsh-emacs--goal-tools)))
 
-(defun dsh-emacs-render--goal-call-summary (name args-raw)
-  "Format a goal call NAME's objective or update action from ARGS-RAW."
+(defun dsh-emacs-render--goal-call-summary (name args)
+  "Format a goal call NAME's objective or update action from decoded ARGS."
   (when (dsh-emacs-render--goal-tool-p name)
-    (let* ((args (dsh-protocol-tool-arguments--from-alist args-raw))
-           (objective (dsh-protocol-tool-arguments-objective args))
-           (action (dsh-protocol-tool-arguments-action args)))
+    (let ((objective (dsh-protocol-tool-arguments-objective args))
+          (action (dsh-protocol-tool-arguments-action args)))
       (cond
        ((and (stringp objective) (not (string-empty-p objective)))
         (dsh-emacs-render--first-line objective))
@@ -4359,9 +4358,9 @@ a finished row never animates again."
   (let* ((type (dsh-protocol-event-kind--from-alist event))
          (execution (dsh-protocol-execution-event--from-alist event))
          (replacement (dsh-protocol-replacement--from-alist event))
-         (chunk-type (and (equal type "assistant/chunk")
-                          (dsh-protocol-chunk-kind
-                           (dsh-protocol-chunk--from-alist event))))
+         (chunk (and (equal type "assistant/chunk")
+                     (dsh-protocol-chunk--from-alist event)))
+         (chunk-type (and chunk (dsh-protocol-chunk-kind chunk)))
          (seq nil))
     ;; Publish queued text before another event can insert transcript content.
     (when (and (plist-get dsh-emacs--streaming-assistant :timer)
@@ -4390,7 +4389,8 @@ a finished row never animates again."
           (format "compaction-%s"
                   (dsh-protocol-execution-event-id execution)))))
       ("user/message" (setq seq (dsh-emacs-render-user-message event)))
-      ("assistant/chunk" (setq seq (dsh-emacs-render-assistant-chunk event)))
+      ("assistant/chunk"
+       (setq seq (dsh-emacs-render-assistant-chunk event chunk)))
       ("assistant/message" (setq seq (dsh-emacs-render-assistant-message event))
        (when (and (not (dsh-emacs-render--history-page-p))
                   (fboundp 'dsh-emacs-modeline-note-event))
@@ -4513,7 +4513,8 @@ draft.  The size limit is soft in all three cases."
 (defun dsh-emacs-render--note-history-window (entries has-more)
   "Record the pagination frontier of a freshly seeded history tail.
 ENTRIES is the snapshot's message-aligned records (ascending seq) and
-HAS-MORE the server's older-messages flag.  The earliest rendered seq becomes
+HAS-MORE the decoded older-messages flag (a boolean, normalized by the
+snapshot decoder).  The earliest rendered seq becomes
 `dsh-emacs--history-earliest-seq' — `dsh-emacs-load-older-history' passes it
 as the next page's exclusive cursor.  The frontier only moves EARLIER: a
 reconnect snapshot's tail can start newer than pages this buffer already
@@ -4526,8 +4527,7 @@ history that is already on screen.  An empty tail leaves it unchanged."
             (if (integerp dsh-emacs--history-earliest-seq)
                 (min dsh-emacs--history-earliest-seq seq)
               seq))))
-  (setq dsh-emacs--history-has-more
-        (dsh-protocol--boolean has-more)))
+  (setq dsh-emacs--history-has-more has-more))
 
 (defun dsh-emacs-render--recall-refs-by-message-seq (events)
   "Map referencing message seq -> its session references in EVENTS.

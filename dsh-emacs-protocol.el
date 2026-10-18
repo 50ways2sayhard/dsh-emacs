@@ -144,6 +144,18 @@ boolean field read by a `--from-alist' constructor passes through here, so a
 struct never hands a caller `:json-false'."
   (and value (not (eq value :json-false))))
 
+(defun dsh-protocol--tool-json (text)
+  "Decode TEXT as one JSON object, or return nil.
+Nil for a non-string, an empty document, or anything the protocol reader
+rejects: callers decline instead of signalling on malformed tool data.
+The reader owns the wire object shape, so dynamic JSON settings cannot
+turn an object into a hash table here."
+  (when (and (stringp text) (not (string-empty-p (string-trim text))))
+    (let ((parsed (condition-case nil
+                      (dsh-protocol-read-json (string-trim text))
+                    (error nil))))
+      (and (listp parsed) parsed))))
+
 ;; ---------------------------------------------------------------------------
 ;; WebSocket mux envelope
 ;; ---------------------------------------------------------------------------
@@ -858,11 +870,9 @@ in contribution order.  The derived `custom' state is not an option."
 
 (cl-defstruct (dsh-protocol-plan-document
                (:constructor dsh-protocol-plan-document--from-alist
-                             (value &optional json-p &aux
+                             (value &key json-p &aux
                                     (alist (if json-p
-                                               (let ((json-object-type 'alist)
-                                                     (json-key-type 'symbol))
-                                                 (json-read-from-string value))
+                                               (dsh-protocol-read-json value)
                                              value))
                                     (text (dsh-protocol--field 'plan alist)))))
   "The complete Markdown submitted by `exit_plan_mode'."
@@ -870,7 +880,7 @@ in contribution order.  The derived `custom' state is not an option."
 
 (cl-defstruct (dsh-protocol-tool-call
                (:constructor dsh-protocol-tool-call--from-alist
-                             (data &optional event-p &aux
+                             (data &key event-p &aux
                                    (data (if event-p (dsh-protocol--field "data" data) data))
                                    (name (dsh-protocol--field 'name data))
                                    (call-id (dsh-protocol--field 'callId data))
@@ -883,7 +893,7 @@ interpretation.  Sequence and time stay in the surrounding event envelope."
 (cl-defstruct (dsh-protocol-tool-result
                (:constructor dsh-protocol--make-tool-result)
                (:constructor dsh-protocol-tool-result--from-alist
-                             (alist &optional event-p
+                             (alist &key event-p
                                     &aux
                                     (alist (if event-p (dsh-protocol--field "data" alist) alist))
                                     (message (dsh-protocol--field 'message alist))
@@ -1147,8 +1157,8 @@ in the same next-turn-then-next-step order."
   (append
    (mapcar (lambda (message)
              (dsh-protocol-queue-item--from-message message 'queued))
-           (dsh-protocol--list (and (listp value)
-                                    (cdr (assq 'next-turn value)))))
+           (dsh-protocol--objects
+            (and (listp value) (cdr (assq 'next-turn value)))))
    (mapcar (lambda (message)
              (dsh-protocol-queue-item--from-message
               message
@@ -1156,8 +1166,8 @@ in the same next-turn-then-next-step order."
                 (if (equal "user" (and source (cdr (assq 'kind source))))
                     'steering
                   'context))))
-           (dsh-protocol--list (and (listp value)
-                                    (cdr (assq 'next-step value)))))))
+           (dsh-protocol--objects
+            (and (listp value) (cdr (assq 'next-step value)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; @ reference candidates (typert remotes used by dsh-emacs-reference.el)
@@ -1403,14 +1413,6 @@ files the job's sources keep (nil when none)."
     (list (dsh-protocol--field 'total v)
           (dsh-protocol--field 'earliest v)
           spill)))
-
-(defun dsh-protocol-job-output-total (job)
-  "Retained-output high-water offset of JOB, or nil."
-  (nth 0 (dsh-protocol-job-output job)))
-
-(defun dsh-protocol-job-output-earliest (job)
-  "Oldest retained offset of JOB, or nil."
-  (nth 1 (dsh-protocol-job-output job)))
 
 (defun dsh-protocol-job-output-spill-paths (job)
   "Spill files JOB's output sources currently keep, or nil."
@@ -2155,7 +2157,7 @@ Only author text without attachments belongs in input history."
                  (delq nil (mapcar #'dsh-protocol-content-block-text blocks))
                  "\n"))))
 
-(defun dsh-protocol-request-model--from-alist (event &optional header-p)
+(cl-defun dsh-protocol-request-model--from-alist (event &key header-p)
   "Decode EVENT's model selection, or nil when its config is absent.
 HEADER-P selects the request/header envelope instead of request/context."
   (let* ((data (dsh-protocol--field "data" event))
@@ -2167,11 +2169,12 @@ HEADER-P selects the request/header envelope instead of request/context."
       (dsh-protocol-model-selection--from-alist config))))
 
 (defun dsh-protocol--usage-number (value)
-  "Normalize a numeric usage VALUE, preserving missing values."
+  "Normalize a numeric usage VALUE, preserving nil for missing values.
+A string is parsed with `string-to-number', so nonnumeric text becomes 0."
   (cond ((numberp value) value)
         ((stringp value) (string-to-number value))))
 
-(defun dsh-protocol-message-usage--from-alist (value &optional event-p)
+(cl-defun dsh-protocol-message-usage--from-alist (value &key event-p)
   "Decode VALUE into an input/output/cache-read/cache-write/cost list.
 EVENT-P selects an event envelope rather than a raw usage object."
   (let ((usage (if event-p
@@ -2195,8 +2198,8 @@ EVENT-P selects an event envelope rather than a raw usage object."
 missing or unknown status defaults to \"pending\".  Returns nil on any error."
   (let (result)
     (when (and args-raw (stringp args-raw) (not (string-empty-p args-raw)))
-      (let* ((parsed (condition-case nil (json-read-from-string args-raw) (error nil)))
-             (todos (and (listp parsed) (dsh-protocol--field "todos" parsed))))
+      (let ((todos (dsh-protocol--field
+                    "todos" (dsh-protocol--tool-json args-raw))))
         (dolist (cell (append todos nil))
           (when (consp cell)
             (let ((content (dsh-protocol--field "content" cell))
@@ -2241,8 +2244,8 @@ Mirrors dsh web's `intendedDiff': `write' contributes a whole-file creation
 (OLD-TEXT nil) from its `content', `edit' the `old_string' → `new_string'
 replacement (an empty old string means insertion, so OLD-TEXT is nil).
 Returns nil when the arguments are not a usable file mutation."
-  (let ((args (condition-case nil (json-read-from-string args-raw) (error nil))))
-    (when (listp args)
+  (let ((args (dsh-protocol--tool-json args-raw)))
+    (when args
       (let ((path (dsh-protocol--field "file_path" args)))
         (when (and (stringp path) (not (string-empty-p (string-trim path))))
           (pcase name
@@ -2340,25 +2343,12 @@ GOAL is a `dsh-protocol-goal' decoded by the protocol module, CLEARED-P marks
 the empty answer, and an unrecognized document yields nil so the caller keeps
 the generic ioCard."
   (when (and (stringp text) (not (string-empty-p (string-trim text))))
-    (let ((parsed (condition-case nil
-                      (json-read-from-string (string-trim text))
-                    (error nil))))
-      (when-let* ((cell (and (listp parsed) (assoc 'goal parsed))))
+    (let ((parsed (dsh-protocol--tool-json text)))
+      (when-let* ((cell (and parsed (assoc 'goal parsed))))
         (if (null (cdr cell))
             (cons nil t)
           (when-let* ((goal (dsh-protocol-goal-tool--from-alist parsed)))
             (cons goal nil)))))))
-
-(defun dsh-protocol--tool-json (text)
-  "Decode TEXT as one JSON document, or return nil.
-Nil for a non-string, an empty document, or anything `json-read-from-string'
-rejects: the ask card declines instead of signalling on malformed wire data,
-so its caller keeps the generic card."
-  (when (and (stringp text) (not (string-empty-p (string-trim text))))
-    (let ((parsed (condition-case nil
-                      (json-read-from-string (string-trim text))
-                    (error nil))))
-      (and (listp parsed) parsed))))
 
 (cl-defstruct (dsh-protocol-read-file
                (:constructor dsh-protocol-read-file--from-alist
@@ -2375,8 +2365,9 @@ so its caller keeps the generic card."
 
 (cl-defstruct (dsh-protocol-tool-arguments
                (:constructor dsh-protocol--make-tool-arguments))
-  "Tool argument facts; OBJECT is retained only for generic JSON display."
-  object command summary paths objective action)
+  "Tool argument facts; OBJECT is retained only for generic JSON display.
+RAW is the original argument text, for cards that fall back to it."
+  object raw command summary paths objective action)
 
 (defun dsh-protocol-tool-arguments--from-alist (text &optional name variant)
   "Decode tool argument TEXT, selecting summary fields for NAME and VARIANT."
@@ -2402,6 +2393,7 @@ so its caller keeps the generic card."
                        return value))))
     (dsh-protocol--make-tool-arguments
      :object object
+     :raw text
      :command (or (dsh-protocol--field "command" object)
                   (dsh-protocol--field "code" object))
      :summary summary
@@ -2413,7 +2405,7 @@ so its caller keeps the generic card."
      :objective (dsh-protocol--field "objective" object)
      :action (dsh-protocol--field "action" object))))
 
-(defun dsh-protocol-rpc-result--from-alist (response &optional direct-p)
+(cl-defun dsh-protocol-rpc-result--from-alist (response &key direct-p)
   "Decode RESPONSE into (OK-P . VALUE-OR-ERROR).
 DIRECT-P selects the upload route's bare result.  Ordinary RPC failures
 prefer their result error, then a provider message or error at the root."
@@ -2456,7 +2448,7 @@ when PAYLOAD is no decodable session reference."
         ;; JSON numbers/escapes use match data; preserve the mention scan.
         (let ((id (ignore-errors
                     (save-match-data
-                      (json-read-from-string
+                      (dsh-protocol-read-json
                        (if (multibyte-string-p decoded)
                            decoded
                          (decode-coding-string decoded 'utf-8)))))))

@@ -201,7 +201,7 @@ messages (e.g. `command/done')."
     (dsh-emacs-render--note-history-window
      (list (dsh-test--history-fixture "user/message" 4 "A")
            (dsh-test--history-fixture "assistant/message" 5 "B"))
-     :json-false)
+     nil)
     (ert-info ((format "%s" "history-window-records-frontier"))
       (should (= dsh-emacs--history-earliest-seq 4))
       (should (null dsh-emacs--history-has-more)))
