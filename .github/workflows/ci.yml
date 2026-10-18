@@ -50,4 +50,4 @@ jobs:
       - name: Diagnose a failed unit suite
         if: failure()
         run: |
-          emacs -Q --batch -l test/dsh-test.el 2>&1 | tail -n 200
+          emacs -Q --batch -l test/dsh-test.el
