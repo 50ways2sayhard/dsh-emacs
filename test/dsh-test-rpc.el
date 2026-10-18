@@ -156,7 +156,10 @@
                    (url-http-handle-authentication nil)))))
           (cl-letf (((symbol-function 'url-get-authentication)
                      (lambda (_url _realm type prompt &rest _)
-                       (push (list type prompt (url-interactive-p)) challenges)
+                       (push (list type prompt
+                                   (not (or url-request-noninteractive
+                                            url-http-noninteractive)))
+                             challenges)
                        nil))
                     ((symbol-function 'url-retrieve-synchronously)
                      (lambda (url &optional _silent inhibit-cookies &rest _)

@@ -439,7 +439,7 @@
 
 (ert-deftest dsh-emacs-test-attachments-yank-media-prefers-tiff-in-chat ()
   :tags '(dsh-unit)
-  (skip-unless (fboundp 'yank-media-handler))
+  (skip-unless (>= emacs-major-version 31))
   (with-temp-buffer
     (dsh-emacs-mode)
     (should (memq 'image/tiff yank-media-preferred-types))))
@@ -1310,10 +1310,7 @@
               (when (and (not new-draft) (not (string-empty-p caption)))
                 (ert-info ((format "%s" (format "%s-undo-takes-ownership" kind)))
                   (should (null dsh-emacs--undo-consumed)))
-                (if (fboundp 'undo-redo)
-                    (undo-redo)
-                  (undo-boundary)
-                  (let ((last-command nil)) (undo)))
+                (undo-redo 1)
                 (ert-info ((format "%s" (format "%s-redo-clears-restored-caption" kind)))
                   (should (equal "" (dsh-emacs--get-input)))
                   (should (null (dsh-emacs-pending-attachments)))

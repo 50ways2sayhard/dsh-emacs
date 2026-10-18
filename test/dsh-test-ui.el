@@ -427,13 +427,17 @@
         (should (eq (get-text-property 5 'face) 'italic)))
       (let ((before (buffer-string))
             (putter (symbol-function 'put-text-property))
-            caught)
+            injected caught)
         (setf (alist-get :body model) (propertize "unchanged body" 'face 'bold))
         (condition-case err
             (cl-letf (((symbol-function 'put-text-property)
                        (lambda (start end prop value &optional object)
                          (funcall putter start end prop value object)
-                         (when (and (not object) (eq prop 'dsh-emacs-ui-state))
+                         ;; Fail the edit once; older Emacs also calls this
+                         ;; primitive while rolling the transaction back.
+                         (when (and (not injected) (not object)
+                                    (eq prop 'dsh-emacs-ui-state))
+                           (setq injected t)
                            (error "injected property failure")))))
               (dsh-emacs-ui-update-fragment model))
           (error (setq caught (equal (error-message-string err)

@@ -580,7 +580,10 @@
       (url-register-auth-scheme "basic" nil 4)
       (cl-letf (((symbol-function 'url-get-authentication)
                  (lambda (_url _realm type prompt &rest _)
-                   (push (list type prompt (url-interactive-p)) challenges)
+                   (push (list type prompt
+                               (not (or url-request-noninteractive
+                                        url-http-noninteractive)))
+                         challenges)
                    nil))
                 ((symbol-function 'url-retrieve-synchronously)
                  (lambda (url &rest _)
