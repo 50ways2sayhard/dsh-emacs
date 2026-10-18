@@ -25,6 +25,14 @@ builds on agent-shell, the mode-line stats on pi-mono):
   read rows into a line-numbered file card, write/edit rows into a diff card,
   `ask_user_question` rows into their question/answer record, and every other
   variant into an IN/OUT section
+- **Execution events**: retry/failed/cancelled reply cards, `Model error` and
+  automatic compaction failures share a small status dot, inspired by dsh
+  web's `StateDot`. Retry uses the running face (orange), failure the error
+  face (red), and cancellation/unknown the timestamp face (grey). Explicit titles
+  distinguish outcomes even without color. Headers keep the tool title face
+  and compact spacing; metadata uses the muted timestamp face. `Model error`
+  places its error code on the right and keeps the reason expanded initially.
+  Normal automatic compaction summaries retain their terminal-style icon.
 - **Mode-line stats**: a compact status section spliced into the mode line (model, effort, preset,
   permission, context%; cwd, branch, tokens, provider and cost are opt-in)
 - **Session list**: card view showing session title, working directory, branch,
@@ -242,10 +250,11 @@ checkpoint body stay hidden. Manual `/compact` retains its command card,
 and running compaction keeps its existing mode-line presentation. No new icon,
 face or option is added; see [record 116](../postmortem/116-compaction-tool-row.md).
 
-Standalone model and automatic compaction errors have one blank line above
-and below their cards, including when collapsed. Their title and error detail
-remain adjacent. A reply footer following an error reuses its bottom blank
-line, keeping the actions separated without doubling the gap.
+Standalone model and automatic compaction errors use the same compact spacing
+as attempt cards, with a red status dot and no extra blank padding. Their
+explanations start expanded; model error codes appear as muted metadata.
+The reply footer supplies its own spacing after an error row.
+See [record 121](../postmortem/121-single-attempt-feedback.md).
 
 Summary key precedence matches dsh web's `SUMMARY_KEYS`, keyed by tool name
 first and by variant second: bash→`description|command`,

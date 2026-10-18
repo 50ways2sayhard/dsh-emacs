@@ -1201,7 +1201,7 @@
              (data . ((turn . 1) (reason . ((kind . "completed")))))))
           ;; Successful end: no error line
           (ert-info ((format "%s" "turn-success-no-error-row"))
-            (should (not (string-match-p "✗ Model error"
+            (should (not (string-match-p "Model error"
                                          (buffer-substring-no-properties
                                           (point-min) (point-max))))))
           ;; Interrupted (reason.kind=cancelled): likewise no error line
@@ -1209,7 +1209,7 @@
            '((type . "turn/end") (seq . 2)
              (data . ((turn . 2) (reason . ((kind . "cancelled")))))))
           (ert-info ((format "%s" "turn-cancelled-no-error-row"))
-            (should (not (string-match-p "✗ Model error"
+            (should (not (string-match-p "Model error"
                                          (buffer-substring-no-properties
                                           (point-min) (point-max)))))))
       (kill-buffer buf))))

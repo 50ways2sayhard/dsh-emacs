@@ -72,7 +72,7 @@ Compaction uses `dsh-emacs-modeline-compacting-face` and
 defaults. See [Execution feedback](#execution-feedback) for its separate clock.
 
 The stats use `dsh-emacs-modeline-format-spec` to choose segments and their
-separator (one space by default). Status indicators—animation, Plan/retry
+separator (one space by default). Status indicators—animation, Plan
 and subagents—and the parenthesized stats have one separating space in
 both native and Doom mode lines. Empty indicators add no gaps; SVG placeholders
 retain their display and click properties. Doom's right-side major-mode slot
@@ -207,13 +207,22 @@ step shows right after the running whale tail:
 
 ### Execution feedback
 
-Retry status appears beside the running activity:
+The mode line has no separate retry label. The transcript's attempt card uses
+`llm/retry`, `llm/retry-started` and `turn/end` to distinguish outcomes:
 
-| Label | Meaning |
-|---|---|
-| `Retry 1/3` | Waiting before the first retry, with a limit of three retries |
-| `Retrying 1/3` | That retry request has started |
-| `Retry 7` | Waiting to retry under a policy with no fixed retry limit |
+- **Retry n/m · scheduled** → **Retry n/m · started** when the wait finishes.
+  Policies without a fixed limit omit `/m`; the metadata shows the scheduled
+  wait, not a countdown. Hover for provider, failure code and message.
+- **Failed reply** or **Cancelled reply** when the unresolved attempt ends.
+- **Retry cancelled** when cancellation interrupts the scheduled wait.
+- **Incomplete reply** while the outcome is unknown or absent from history.
+
+Cards use a shared status dot (orange retry, red failure, grey cancelled or
+unknown), the tool title face, and muted turn/step metadata. They open expanded when replacing live output and folded
+in history; empty output has no disclosure. State updates preserve folding
+and partial text. Final model failures retain a separate `Model error` row
+with the same icon and compact styling, muted error-code metadata, and an
+initially expanded explanation.
 
 During context compaction, teal `Compacting · 12s` replaces `Deep diving` in
 the existing whale-tail slot, with the same gentle text sweep. Its clock
@@ -224,15 +233,12 @@ turn time. Standalone compaction between turns starts the same slot without
 claiming a running turn. Without Motion Line, the caption is static
 `Compacting`, with no clock or animation timer.
 
-Hover or click the label, or run `M-x dsh-emacs-describe-status`, to see
-the provider, retry count, scheduled wait and last failure reason/code when
-available. The scheduled wait is the server's delay, not a local countdown.
-The details buffer is a snapshot taken when opened. If retry and compaction
-overlap, the retry label remains beside `Compacting`; Plan state stays
-independent too.
+Hover or click the compaction or Plan label, or run
+`M-x dsh-emacs-describe-status`, to see compaction and Plan mode details.
+The details buffer is a snapshot taken when opened.
 
-These labels come from `llm/retry`, `llm/retry-started`, `compaction/start`
-and `compaction/end`. Matching completion/cancellation boundaries clear them;
+Compaction status comes from `compaction/start` and `compaction/end`.
+Matching end events or the enclosing turn's end clear it;
 disconnect clears them immediately. Reconnection rebuilds state from the
 follow snapshot's retained event window, independently of transcript dedup.
 If that window no longer includes the operation's start, no label is shown:

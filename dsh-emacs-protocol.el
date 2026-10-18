@@ -1419,18 +1419,21 @@ private.  Missing or invalid counts remain nil; an empty wire array is zero."
 (cl-defstruct (dsh-protocol-execution-event
                (:constructor dsh-protocol--make-execution-event))
   "A retry, compaction or execution boundary consumed by the status UI."
-  type seq turn step id attempt limit delay provider code message command-id)
+  type seq turn step id attempt limit delay provider code message command-id reason)
 
 (defun dsh-protocol-execution-event--from-alist (event)
   "Decode execution feedback from wire EVENT, or nil for unrelated events."
   (let ((type (dsh-protocol--field 'type event)))
     (when (member type '("llm/retry" "llm/retry-started"
                          "compaction/start" "compaction/end"
-                         "turn/start" "turn/end" "step/start" "step/end"
+                         "turn/end"
                          "assistant/message" "assistant/attempt"))
       (let* ((data (dsh-protocol--field 'data event))
-             (failure (dsh-protocol--field 'failure data)))
+             (reason (dsh-protocol--field 'reason data))
+             (failure (or (dsh-protocol--field 'failure data)
+                          (dsh-protocol--field 'error reason))))
         (dsh-protocol--make-execution-event
+         :reason (dsh-protocol--field 'kind reason)
          :type type :seq (dsh-protocol--field 'seq event)
          :turn (dsh-protocol--field 'turn data)
          :step (dsh-protocol--field 'step data)

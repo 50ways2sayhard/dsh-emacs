@@ -21,61 +21,21 @@
       (should (equal (dsh-protocol-execution-event-code event) "rate-limit"))
       (should (equal (dsh-protocol-execution-event-message event) "Try later")))))
 
-(ert-deftest dsh-emacs-test-execution-execution-retry ()
+(ert-deftest dsh-emacs-test-execution-retry-does-not-add-mode-line-status ()
   :tags '(dsh-unit)
   (with-temp-buffer
     (dsh-emacs-mode)
-    (dolist
-        (case
-         '(("wait" "llm/retry" 10
-            ((retryId . "r") (turn . 1) (step . 1) (retry . 1)
-             (maxRetries . 3) (delayMs . 2500) (provider . "provider-a")
-             (failure . ((code . "rate-limit") (message . "Slow down"))))
-            "Retry 1/3")
-           ("started" "llm/retry-started" 11
-            ((retryId . "r") (turn . 1) (step . 1) (retry . 1)) "Retrying 1/3")
-           ("next-wait" "llm/retry" 12
-            ((retryId . "r") (turn . 1) (step . 1) (retry . 2)
-             (maxRetries . 3)) "Retry 2/3")
-           ("old-attempt-start" "llm/retry-started" 13
-            ((retryId . "r") (turn . 1) (step . 1) (retry . 1)) "Retry 2/3")
-           ("other-chain-start" "llm/retry-started" 14
-            ((retryId . "other") (turn . 1) (step . 1) (retry . 2)) "Retry 2/3")
-           ("old-sequence" "llm/retry" 9
-            ((retryId . "old") (turn . 1) (step . 1) (retry . 1)) "Retry 2/3")
-           ("other-step-end" "step/end" 15 ((turn . 1) (step . 2)) "Retry 2/3")
-           ("current-start" "llm/retry-started" 16
-            ((retryId . "r") (turn . 1) (step . 1) (retry . 2)) "Retrying 2/3")
-           ("step-end" "step/end" 17 ((turn . 1) (step . 1)) "")
-           ("unlimited" "llm/retry" 18
-            ((retryId . "unlimited") (turn . 1) (step . 2) (retry . 7)) "Retry 7")
-           ("turn-cancelled" "turn/end" 19
-            ((turn . 1) (reason . ((kind . "interrupted")))) "")
-           ("step-chain" "llm/retry" 20
-            ((retryId . "step-chain") (turn . 2) (step . 1) (retry . 1)
-             (maxRetries . 2)) "Retry 1/2")
-           ("other-step-start" "step/start" 21 ((turn . 2) (step . 2)) "")
-           ("turn-chain" "llm/retry" 22
-            ((retryId . "turn-chain") (turn . 2) (step . 2) (retry . 1)
-             (maxRetries . 2)) "Retry 1/2")
-           ("other-turn-start" "turn/start" 23 ((turn . 3)) "")))
-      (pcase-let ((`(,name ,type ,seq ,data ,expected) case))
-        (dsh-emacs-events--dispatch-event
-         (current-buffer) (dsh-test--execution-event type seq data))
-        (ert-info ((format "%s" (concat "execution-retry-" name)))
-          (should (equal (string-trim (or (dsh-emacs-modeline--execution-indicator) ""))
-                         expected)))
-        (when (equal name "wait")
-          (ert-info ((format "%s" "execution-retry-tooltip-explains-wait"))
-            (should (string-match-p "provider-a" (dsh-emacs-modeline--status-detail)))
-            (should (string-match-p "2500 ms" (dsh-emacs-modeline--status-detail)))
-            (should (string-match-p "Slow down" (dsh-emacs-modeline--status-detail))))
-          (save-window-excursion
-            (dsh-emacs-describe-status)
-            (with-current-buffer "*dsh status*"
-              (ert-info ((format "%s" "execution-keyboard-details"))
-                (should (string-match-p "rate-limit" (buffer-string)))
-                (should (string-match-p "Slow down" (buffer-string)))))))))))
+    (dsh-emacs--ml-busy-set t)
+    (dolist (type '("llm/retry" "llm/retry-started"))
+      (dsh-emacs-render-event
+       (dsh-test--execution-event
+        type (if (equal type "llm/retry") 1 2)
+        '((retryId . "r") (turn . 1) (step . 1) (retry . 1)
+          (maxRetries . 3) (delayMs . 2500) (provider . "provider-a")
+          (failure . ((code . "rate-limit") (message . "Slow down"))))))
+      (should dsh-emacs--ml-busy)
+      (should-not (string-match-p "Retry" (dsh-emacs-modeline--ml-indicator)))
+      (should-not (string-match-p "retry" (dsh-emacs-modeline--status-detail))))))
 
 (ert-deftest dsh-emacs-test-execution-execution-compaction-without-running-turn ()
   :tags '(dsh-unit)
@@ -98,23 +58,23 @@
      (dsh-test--execution-event "llm/retry" 4
                                 '((retryId . "r") (retry . 1) (turn . 10)
                                   (step . 1) (maxRetries . 2))))
-    (ert-info ((format "%s" "execution-compaction-and-retry-coexist"))
-      (should (string-match-p "Compacting.*Retry 1/2"
+    (ert-info ((format "%s" "execution-retry-does-not-replace-compaction"))
+      (should (string-match-p "Compacting"
                               (dsh-emacs-modeline--ml-indicator))))
     (dsh-emacs-render-event
      (dsh-test--execution-event "compaction/end" 5
                                 '((compactionId . "manual") (turn . nil))))
-    (ert-info ((format "%s" "execution-compaction-end-keeps-retry"))
+    (ert-info ((format "%s" "execution-compaction-end-leaves-no-retry-label"))
       (should (null dsh-emacs--modeline-compaction))
       (should (null dsh-emacs--modeline-compaction-start))
       (should (string-empty-p (dsh-emacs--ml-busy-indicator)))
-      (should (equal (string-trim (dsh-emacs-modeline--ml-indicator)) "Retry 1/2")))
+      (should (string-empty-p (dsh-emacs-modeline--ml-indicator))))
     (dsh-emacs-render-event
      (dsh-test--execution-event "assistant/message" 6
                                 '((turn . 10) (step . 1)
                                   (message . ((role . "assistant")
                                               (content . []))) (stream . []))))
-    (ert-info ((format "%s" "execution-success-clears-retry"))
+    (ert-info ((format "%s" "execution-success-leaves-mode-line-idle"))
       (should (string-empty-p (dsh-emacs-modeline--ml-indicator))))))
 
 (ert-deftest dsh-emacs-test-execution-execution-turn-scoped-compaction-shows ()
@@ -191,7 +151,7 @@
       (setq dsh-emacs--anchor-seq 11)
       (dsh-emacs-events--follow-snapshot (current-buffer) snapshot)
       (ert-info ((format "%s" "execution-snapshot-folds-below-transcript-anchor"))
-        (should (string-match-p "Compacting.*Retry 3/5"
+        (should (string-match-p "Compacting"
                                 (dsh-emacs-modeline--ml-indicator))))
       (let ((dsh-emacs--history-page t))
         ;; Drop the seq watermark so only the history-page guard can reject the
@@ -203,28 +163,26 @@
                             '((compactionId . "c") (turn . 1)))))) nil 10
          :follow-p nil))
       (ert-info ((format "%s" "execution-history-page-keeps-current-status"))
-        (should (string-match-p "Compacting.*Retry 3/5"
+        (should (string-match-p "Compacting"
                                 (dsh-emacs-modeline--ml-indicator))))
       (dsh-emacs--ml-busy-clear)
       (ert-info ((format "%s" "execution-teardown-clears-feedback"))
         (should (null dsh-emacs--modeline-compaction))
         (should (null dsh-emacs--modeline-compaction-start))
         (should (string-empty-p (dsh-emacs--ml-busy-indicator)))
-        (should (null (dsh-emacs-modeline--execution-indicator))))
+        (should (string-empty-p (dsh-emacs-modeline--ml-indicator))))
       (let ((render (symbol-function 'dsh-emacs-render-history-events)))
         (cl-letf (((symbol-function 'dsh-emacs-render-history-events)
                    (lambda (&rest args)
                      (apply render args)
                      (dsh-emacs-events--dispatch-event
                       (current-buffer)
-                      (dsh-test--execution-event "llm/retry-started" 12
-                                                 '((retryId . "reconnect")
-                                                   (turn . 1) (step . 2)
-                                                   (retry . 3)))))))
+                      (dsh-test--execution-event "compaction/end" 12
+                                                 '((compactionId . "c")
+                                                   (turn . 1)))))))
           (dsh-emacs-events--follow-snapshot (current-buffer) snapshot)))
       (ert-info ((format "%s" "execution-snapshot-cannot-overwrite-newer-live-event"))
-        (should (string-match-p "Compacting.*Retrying 3/5"
-                                (dsh-emacs-modeline--ml-indicator))))
+        (should (string-empty-p (dsh-emacs-modeline--ml-indicator))))
       (dsh-emacs-events--follow-snapshot
        (current-buffer)
        `((cursor . 13)
@@ -235,7 +193,7 @@
         (should (null dsh-emacs--modeline-compaction))
         (should (null dsh-emacs--modeline-compaction-start))
         (should (string-empty-p (dsh-emacs--ml-busy-indicator)))
-        (should (null (dsh-emacs-modeline--execution-indicator))))
+        (should (string-empty-p (dsh-emacs-modeline--ml-indicator))))
       (dsh-emacs-events--follow-snapshot (current-buffer) snapshot)
       (dsh-emacs-events--follow-snapshot
        (current-buffer) '((cursor . 14) (records . [])))
@@ -243,7 +201,7 @@
         (should (null dsh-emacs--modeline-compaction))
         (should (null dsh-emacs--modeline-compaction-start))
         (should (string-empty-p (dsh-emacs--ml-busy-indicator)))
-        (should (null (dsh-emacs-modeline--execution-indicator)))))))
+        (should (string-empty-p (dsh-emacs-modeline--ml-indicator)))))))
 
 (ert-deftest dsh-emacs-test-execution-execution-state-is-buffer-local ()
   :tags '(dsh-unit)
@@ -262,7 +220,7 @@
               (should (null dsh-emacs--modeline-compaction))
               (should (null dsh-emacs--modeline-compaction-start))
               (should (string-empty-p (dsh-emacs--ml-busy-indicator)))
-              (should (null (dsh-emacs-modeline--execution-indicator)))))
+              (should (string-empty-p (dsh-emacs-modeline--ml-indicator)))))
           (save-window-excursion
             (delete-other-windows)
             (let ((clicked (selected-window)))
@@ -289,10 +247,225 @@
                       (should (null dsh-emacs--modeline-compaction))
                       (should (null dsh-emacs--modeline-compaction-start))
                       (should (string-empty-p (dsh-emacs--ml-busy-indicator)))
-                      (should (null (dsh-emacs-modeline--execution-indicator)))))
+                      (should (string-empty-p (dsh-emacs-modeline--ml-indicator)))))
                 (delete-process process)))))
       (kill-buffer first)
       (kill-buffer second))))
+
+(ert-deftest dsh-emacs-test-execution-attempt-outcomes ()
+  :tags '(dsh-unit)
+  (dolist (delivery '(live history prepend reverse))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let* ((events
+              (list
+               (dsh-test--execution-event "assistant/attempt" 1
+                                          '((turn . 1) (step . 1) (stream . [])))
+               (dsh-test--execution-event "llm/retry" 2
+                                          '((turn . 1) (step . 1) (retryId . "r")
+                                            (retry . 1) (maxRetries . 3)
+                                            (failure . ((message . "Slow down")))))
+               (dsh-test--execution-event "llm/retry-started" 3
+                                          '((turn . 1) (step . 1) (retryId . "r")
+                                            (retry . 1)))
+               (dsh-test--execution-event "assistant/attempt" 4
+                                          '((turn . 1) (step . 1) (stream . [])))
+               (dsh-test--execution-event "turn/end" 5
+                                          '((turn . 1) (reason . ((kind . "error")
+                                                                  (error . ((code . "LIMIT")
+                                                                            (message . "Exhausted"))))))))))
+        (let ((entries (mapcar (lambda (event) (list (cons 'event event))) events)))
+          (pcase delivery
+            ('live (dolist (event events) (dsh-emacs-render-event event)))
+            ('reverse (dolist (event (reverse events)) (dsh-emacs-render-event event)))
+            ('prepend
+             (dsh-emacs-render-history-events (nthcdr 2 entries))
+             (let* ((dsh-emacs--history-insert-marker
+                     (dsh-emacs-render--history-prepend-marker))
+                    (position (marker-position dsh-emacs--history-insert-marker)))
+               (dsh-emacs-render-history-events
+                (cl-subseq entries 0 2) nil 3 :insert-before position :follow-p nil)
+               (set-marker dsh-emacs--history-insert-marker nil)))
+            (_ (dsh-emacs-render-history-events entries)
+               (dsh-emacs-render-history-events entries))))
+        (let* ((ns (dsh-emacs-render--make-namespace))
+               (first (dsh-emacs-ui-find-block ns "evt-1"))
+               (last (dsh-emacs-ui-find-block ns "evt-4")))
+          (should (string-match-p "Retry 1/3 · started"
+                                  (buffer-substring (car first) (cdr first))))
+          (should (string-match-p "Failed reply"
+                                  (buffer-substring (car last) (cdr last))))
+          (should-not (string-match-p "Incomplete reply" (buffer-string))))))))
+
+(ert-deftest dsh-emacs-test-execution-attempt-cancellation ()
+  :tags '(dsh-unit)
+  (dolist (retry '(nil t))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (dsh-emacs-render-event
+       (dsh-test--execution-event "assistant/attempt" 1
+                                  '((turn . 1) (step . 1) (stream . []))))
+      (when retry
+        (dsh-emacs-render-event
+         (dsh-test--execution-event "llm/retry" 2
+                                    '((turn . 1) (step . 1) (retryId . "r")
+                                      (retry . 2) (maxRetries . 3))))
+        ;; A stale started event must not mark this wait as started.
+        (dsh-emacs-render-event
+         (dsh-test--execution-event "llm/retry-started" 3
+                                    '((turn . 1) (step . 1) (retryId . "r")
+                                      (retry . 1)))))
+      (dsh-emacs-render-event
+       (dsh-test--execution-event "turn/end" 4
+                                  '((turn . 1) (reason . ((kind . "aborted"))))))
+      (should (string-match-p (if retry "Retry cancelled" "Cancelled reply")
+                              (buffer-string))))))
+
+(ert-deftest dsh-emacs-test-execution-attempt-preserves-body-and-draft ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (goto-char (point-max))
+    (insert "draft")
+    (dsh-emacs-render-event
+     (dsh-test--execution-event "assistant/attempt" 1
+                                '((turn . 1) (step . 1)
+                                  (stream . [((type . "text-chunks")
+                                              (texts . ["partial reply"]))]))))
+    (let* ((ns (dsh-emacs-render--make-namespace))
+           (block (dsh-emacs-ui-find-block ns "evt-1")))
+      (goto-char (car block))
+      (dsh-emacs-ui-toggle-fragment)
+      (goto-char (point-max))
+      (dsh-emacs-render-event
+       (dsh-test--execution-event "llm/retry" 2
+                                  '((turn . 1) (step . 1) (retryId . "r")
+                                    (retry . 1) (delayMs . 2500)
+                                    (failure . ((code . "RATE_LIMIT")
+                                                (message . "Slow down"))))))
+      (setq block (dsh-emacs-ui-find-block ns "evt-1"))
+      (let ((state (get-text-property (car block) 'dsh-emacs-ui-state)))
+        (should-not (map-elt state :collapsed))
+        (should (equal (map-elt state :body) "partial reply"))
+        (should (string-match-p "RATE_LIMIT · Slow down"
+                                (get-text-property 0 'help-echo
+                                                   (substring (map-elt state :label-left) 2))))))
+    (should (string-match-p "Retry 1 · scheduled" (buffer-string)))
+    (should (string-match-p "wait 2.5s" (buffer-string)))
+    (should (string-suffix-p "draft" (buffer-string)))
+    (should (= (point) (point-max)))
+    (dsh-emacs-render--reset-tool-tracking)
+    (should-not dsh-emacs-render--attempt-turns)))
+
+(ert-deftest dsh-emacs-test-execution-recovery-without-retry-event ()
+  :tags '(dsh-unit)
+  (dolist (delivery '(live history prepend))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let* ((events
+              (list
+               (dsh-test--execution-event "assistant/attempt" 1
+                                          '((turn . 1) (step . 1) (stream . [])))
+               (dsh-test--execution-event "compaction/start" 2
+                                          '((turn . 1) (compactionId . "overflow")))
+               (dsh-test--execution-event "compaction/end" 3
+                                          '((turn . 1) (compactionId . "overflow")))
+               (dsh-test--execution-event "assistant/attempt" 4
+                                          '((turn . 1) (step . 1) (stream . [])))
+               (dsh-test--execution-event "assistant/message" 5
+                                          '((turn . 1) (step . 1)
+                                            (message . ((content . [((type . "text")
+                                                                     (text . "Recovered"))])))
+                                            (stream . [])))))
+             (entries (mapcar (lambda (event) (list (cons 'event event))) events)))
+        (pcase delivery
+          ('live (dolist (event events) (dsh-emacs-render-event event)))
+          ('prepend
+           (dsh-emacs-render-history-events (nthcdr 3 entries))
+           (let* ((dsh-emacs--history-insert-marker
+                   (dsh-emacs-render--history-prepend-marker))
+                  (position (marker-position dsh-emacs--history-insert-marker)))
+             (dsh-emacs-render-history-events
+              (cl-subseq entries 0 3) nil 4 :insert-before position :follow-p nil)
+             (set-marker dsh-emacs--history-insert-marker nil)))
+          (_ (dsh-emacs-render-history-events entries)))
+        (dolist (id '("evt-1" "evt-4"))
+          (let* ((block (dsh-emacs-ui-find-block
+                         (dsh-emacs-render--make-namespace) id))
+                 (label (map-elt (get-text-property
+                                  (car block) 'dsh-emacs-ui-state) :label-left)))
+            (should (equal (substring-no-properties label) "● Retried"))
+            (should (eq (get-text-property 0 'face label) 'dsh-emacs-running-face))))))))
+
+(ert-deftest dsh-emacs-test-execution-recovery-keeps-step-boundary ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (dsh-emacs-render-event
+     (dsh-test--execution-event "assistant/attempt" 1
+                                '((turn . 1) (step . 1) (stream . []))))
+    (dsh-emacs-render-event
+     (dsh-test--execution-event "assistant/message" 2
+                                '((turn . 1) (step . 2)
+                                  (message . ((content . []))) (stream . []))))
+    (should (string-match-p "Incomplete reply" (buffer-string)))
+    (should-not (string-match-p "Retried" (buffer-string)))))
+
+(ert-deftest dsh-emacs-test-execution-trim-prunes-outcome-cache ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs-reply-footer-items nil)
+    (setq-local dsh-emacs-max-buffer-size 300)
+    (dotimes (n 100)
+      (let ((turn (1+ n)))
+        (dsh-emacs-render-event
+         (dsh-test--execution-event
+          "assistant/message" (1+ (* n 2))
+          `((turn . ,turn) (step . 1)
+            (message . ((content . [((type . "text")
+                                     (text . ,(make-string 100 ?a)))])))
+            (stream . []))))
+        (dsh-emacs-render-event
+         (dsh-test--execution-event "turn/end" (+ 2 (* n 2))
+                                    `((turn . ,turn) (reason . ((kind . "completed"))))))
+        (dsh-emacs-render--trim-buffer)))
+    (should (< (buffer-size) 300))
+    (should (< (hash-table-count dsh-emacs-render--attempt-turns) 5))
+    (should-not (gethash 1 dsh-emacs-render--attempt-turns))
+    (should (gethash 100 dsh-emacs-render--attempt-turns))))
+
+(ert-deftest dsh-emacs-test-execution-trim-retains-outcome-for-older-page ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (setq-local dsh-emacs-reply-footer-items nil)
+    (setq-local dsh-emacs-max-buffer-size 300)
+    (dsh-emacs-render-event
+     (dsh-test--execution-event
+      "assistant/message" 6
+      `((turn . 1) (step . 1)
+        (message . ((content . [((type . "text")
+                                 (text . ,(make-string 500 ?a)))])))
+        (stream . []))))
+    (dsh-emacs-render--trim-buffer)
+    (should (gethash 1 dsh-emacs-render--attempt-turns))
+    (let* ((dsh-emacs--history-insert-marker (copy-marker (point-min) t))
+           (event (dsh-test--execution-event
+                   "assistant/attempt" 1
+                   '((turn . 1) (step . 1) (stream . [])))))
+      (dsh-emacs-render-history-events
+       (list (list (cons 'event event))) nil 6
+       :insert-before (point-min) :follow-p nil)
+      (set-marker dsh-emacs--history-insert-marker nil))
+    (should (string-match-p "Retried" (buffer-string)))
+    (let ((state (gethash 1 dsh-emacs-render--attempt-turns)))
+      (should (= (plist-get state :seq) 6))
+      (should (= (plist-get state :position)
+                 (dsh-emacs-render--input-insert-point))))
+    (setq-local dsh-emacs-max-buffer-size 100)
+    (dsh-emacs-render--trim-buffer)
+    (should (gethash 1 dsh-emacs-render--attempt-turns))))
 
 (provide 'dsh-test-execution)
 ;;; dsh-test-execution.el ends here

@@ -1,7 +1,8 @@
 # 070 — Execution waits have an explicit status
 
 Compaction presentation and summary decisions superseded by
-[104](104-auto-compaction-feedback.md); retry rationale still applies.
+[104](104-auto-compaction-feedback.md). Retry presentation superseded by
+[121](121-single-attempt-feedback.md).
 
 ## Background
 

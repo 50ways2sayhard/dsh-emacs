@@ -1,5 +1,7 @@
 # 116 - Automatic compaction summaries use the tool-row chrome
 
+Automatic failure-row spacing is superseded by [121](121-single-attempt-feedback.md).
+
 ## Background
 
 At `6eea27c`, the automatic compaction summary from [104](104-auto-compaction-feedback.md)

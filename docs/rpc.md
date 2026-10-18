@@ -2325,7 +2325,7 @@ turn-internal boundaries (one step = one model call + its tool execution) and do
 not enter the transcript; they instead feed the modeline's `step N` badge
 (`dsh-emacs-modeline-note-step`; off by default, enable
 `dsh-emacs-modeline-show-step`, see docs/modeline.md); `assistant/attempt`
-renders as a `↻ Attempt (no committed reply)` card whose body is rebuilt in order
+renders as a compact outcome card (initially `Incomplete reply`) rebuilt in order
 from the packed records of `data.stream`
 (`reasoning-chunks`/`tool-call-chunks`/`text-chunks`) (reasoning is subject to
 `dsh-emacs-show-reasoning`); if that attempt still has a live streaming body when
@@ -2339,10 +2339,22 @@ background; the same path takes the latest description, and `write`/`edit` chang
 are not merged in — their tool cards are already shown). `system/message` is still
 not rendered.
 
-**Execution feedback**: `llm/retry` / `llm/retry-started` and
-`compaction/start` / `compaction/end` feed the mode line, with provider, wait
-and failure details through `M-x dsh-emacs-describe-status`. A retry chain
-reuses `retryId` across attempts, so `retry-started` must also match `retry`.
+**Execution feedback**: `assistant/attempt` alone carries no cause. The renderer
+correlates `llm/retry` with the preceding unresolved attempt in the same turn
+and step, then matches `llm/retry-started` by retry id and number. The same card
+shows `Retry n/m · scheduled` or `Retry n/m · started`, with scheduled wait
+metadata and provider/failure hover details. `turn/end.reason.kind` marks the
+remaining unresolved attempt `Failed reply` (`error`) or `Cancelled reply`
+(`aborted`); cancellation before retry starts shows `Retry cancelled`. Earlier
+started retries keep their labels even if the turn eventually fails. Facts
+merge by sequence across older pages and reconnects. Missing outcome evidence
+keeps `Incomplete reply`; final failures retain their separate `Model error`
+row with the shared status dot, muted error code and expanded explanation.
+Status dots are orange for retry, red for error, and grey for cancellation
+or unknown outcomes; titles remain explicit.
+No retry mode-line label or additional retry row is created.
+`compaction/start` / `compaction/end`
+feed the mode line; `M-x dsh-emacs-describe-status` shows compaction/Plan details.
 Compaction's `turn: null` is independent of the running-turn state. While
 compacting, the same activity slot shows `Compacting` and its own locally
 observed elapsed clock when Motion Line is installed; this preserves the

@@ -649,9 +649,6 @@ resurrect it after a newer baseline removed it."
             ((null plan) (setq dsh-emacs--modeline-plan-seq nil)))
       (force-mode-line-update))))
 
-(defvar-local dsh-emacs--modeline-retry nil
-  "Current retry as (EXECUTION-EVENT . STARTED-P), or nil.")
-
 (defvar-local dsh-emacs--modeline-compaction nil
   "Current compaction's `dsh-protocol-execution-event', or nil.")
 
@@ -659,37 +656,20 @@ resurrect it after a newer baseline removed it."
   "Newest execution event folded into this buffer's status.")
 
 (defun dsh-emacs-modeline-note-execution (event &optional defer-update)
-  "Fold a decoded execution EVENT into this buffer's live feedback.
-Retry chains reuse their id: a started transition must match both the id
-and attempt number.  Standalone compactions survive unrelated turn endings.
-With DEFER-UPDATE non-nil the mode-line refresh is left to the caller, so a
-snapshot rebuild redraws once instead of once per retained record."
-  (let* ((seq (dsh-protocol-execution-event-seq event))
-         (type (dsh-protocol-execution-event-type event))
-         (turn (dsh-protocol-execution-event-turn event))
-         (step (dsh-protocol-execution-event-step event))
-         (id (dsh-protocol-execution-event-id event))
-         (previous-compaction dsh-emacs--modeline-compaction)
-         (retry (car dsh-emacs--modeline-retry))
-         (same-turn (and retry (integerp turn)
-                         (equal turn (dsh-protocol-execution-event-turn retry))))
-         (same-step (and same-turn
-                         (equal step (dsh-protocol-execution-event-step retry)))))
-    (when (or (not (integerp seq))
-              (null dsh-emacs--modeline-execution-seq)
-              (> seq dsh-emacs--modeline-execution-seq))
+  "Fold a decoded execution EVENT into this buffer's compaction status.
+Standalone compactions survive unrelated turn endings.  With DEFER-UPDATE
+non-nil, leave refresh to the caller so snapshot rebuilds redraw only once."
+  (let ((seq (dsh-protocol-execution-event-seq event))
+        (type (dsh-protocol-execution-event-type event))
+        (turn (dsh-protocol-execution-event-turn event))
+        (id (dsh-protocol-execution-event-id event))
+        (previous-compaction dsh-emacs--modeline-compaction))
+    (when (and (member type '("compaction/start" "compaction/end" "turn/end"))
+               (or (not (integerp seq))
+                   (null dsh-emacs--modeline-execution-seq)
+                   (> seq dsh-emacs--modeline-execution-seq)))
       (when (integerp seq) (setq dsh-emacs--modeline-execution-seq seq))
       (pcase type
-        ("llm/retry"
-         (when (and (stringp id) (integerp turn) (integerp step)
-                    (integerp (dsh-protocol-execution-event-attempt event)))
-           (setq dsh-emacs--modeline-retry (cons event nil))))
-        ("llm/retry-started"
-         (when (and same-step
-                    (equal id (dsh-protocol-execution-event-id retry))
-                    (equal (dsh-protocol-execution-event-attempt event)
-                           (dsh-protocol-execution-event-attempt retry)))
-           (setcdr dsh-emacs--modeline-retry t)))
         ("compaction/start"
          (when (stringp id) (setq dsh-emacs--modeline-compaction event)))
         ("compaction/end"
@@ -697,14 +677,7 @@ snapshot rebuild redraws once instead of once per retained record."
                     (equal id (dsh-protocol-execution-event-id
                                dsh-emacs--modeline-compaction)))
            (setq dsh-emacs--modeline-compaction nil)))
-        ("turn/start"
-         (unless same-turn (setq dsh-emacs--modeline-retry nil)))
-        ("step/start"
-         (unless same-step (setq dsh-emacs--modeline-retry nil)))
-        ((or "step/end" "assistant/message" "assistant/attempt")
-         (when same-step (setq dsh-emacs--modeline-retry nil)))
         ("turn/end"
-         (when same-turn (setq dsh-emacs--modeline-retry nil))
          (when (and (integerp turn) dsh-emacs--modeline-compaction
                     (equal turn (dsh-protocol-execution-event-turn
                                  dsh-emacs--modeline-compaction)))
@@ -717,8 +690,7 @@ snapshot rebuild redraws once instead of once per retained record."
 Fold the whole retained window independently of the transcript's dedup anchor;
 an old start may still describe the current operation after reconnection."
   (let ((previous-compaction dsh-emacs--modeline-compaction))
-    (setq dsh-emacs--modeline-retry nil
-          dsh-emacs--modeline-compaction nil
+    (setq dsh-emacs--modeline-compaction nil
           dsh-emacs--modeline-execution-seq nil)
     (dolist (event events)
       (dsh-emacs-modeline-note-execution event t))
@@ -745,33 +717,18 @@ an old start may still describe the current operation after reconnection."
                      ((dsh-protocol-execution-event-turn event)
                       (format "turn %s"
                               (dsh-protocol-execution-event-turn event)))
-                     (t "between turns"))))
-          (when-let* ((event (car dsh-emacs--modeline-retry)))
-            (concat
-             (if (cdr dsh-emacs--modeline-retry)
-                 "Retry request started" "Waiting to retry")
-             (format "\nProvider: %s\nRetry: %s%s"
-                     (or (dsh-protocol-execution-event-provider event) "unknown")
-                     (dsh-protocol-execution-event-attempt event)
-                     (if-let* ((limit (dsh-protocol-execution-event-limit event)))
-                         (format " of %s" limit) " (no fixed limit)"))
-             (when-let* ((delay (dsh-protocol-execution-event-delay event)))
-               (format "\nScheduled wait: %s ms" delay))
-             (when-let* ((code (dsh-protocol-execution-event-code event)))
-               (format "\nFailure code: %s" code))
-             (when-let* ((reason (dsh-protocol-execution-event-message event)))
-               (format "\nLast failure: %s" reason))))))
+                     (t "between turns"))))))
    "\n\n"))
 
 (defun dsh-emacs-describe-status ()
-  "Show the current chat's retry, context-compaction and Plan mode details."
+  "Show the current chat's context-compaction and Plan mode details."
   (interactive "@")
   (unless (derived-mode-p 'dsh-emacs-mode)
     (user-error "Status details require a chat buffer"))
   (let ((detail (dsh-emacs-modeline--status-detail)))
     (with-help-window "*dsh status*"
       (princ (if (string-empty-p detail)
-                 "No retry, context compaction or Plan mode is observed."
+                 "No context compaction or Plan mode is observed."
                detail))
       (princ "\n"))))
 
@@ -792,21 +749,6 @@ an old start may still describe the current operation after reconnection."
        " Plan ")
      'face (if (dsh-protocol-plan-pending plan)
                'dsh-emacs-mode-line-busy-face 'dsh-emacs-accent-face)
-     'help-echo (concat (dsh-emacs-modeline--status-detail)
-                        "\n\nClick or M-x dsh-emacs-describe-status")
-     'mouse-face 'mode-line-highlight
-     'local-map dsh-emacs-modeline--status-map)))
-
-(defun dsh-emacs-modeline--execution-indicator ()
-  "Return the retry label beside the running or compacting activity."
-  (when-let* ((retry (car dsh-emacs--modeline-retry)))
-    (propertize
-     (format " %s %s%s "
-             (if (cdr dsh-emacs--modeline-retry) "Retrying" "Retry")
-             (dsh-protocol-execution-event-attempt retry)
-             (if-let* ((limit (dsh-protocol-execution-event-limit retry)))
-                 (format "/%s" limit) ""))
-     'face 'dsh-emacs-mode-line-busy-face
      'help-echo (concat (dsh-emacs-modeline--status-detail)
                         "\n\nClick or M-x dsh-emacs-describe-status")
      'mouse-face 'mode-line-highlight
@@ -1027,7 +969,7 @@ and text properties remain intact."
     (string-join (nreverse trimmed) " ")))
 
 (defun dsh-emacs-modeline--ml-indicator ()
-  "Return the running animation, step and execution feedback near the mode name.
+  "Return the running animation, step and Plan mode near the mode name.
 Standalone compaction shares the activity slot without implying a busy turn."
   (let* ((frame (if dsh-emacs-modeline--doom-segment-installed ""
                   (dsh-emacs--ml-busy-indicator)))
@@ -1035,8 +977,7 @@ Standalone compaction shares the activity slot without implying a busy turn."
                 frame
                 (when dsh-emacs--ml-busy
                   (dsh-emacs-modeline--step-indicator))
-                (dsh-emacs-modeline--plan-indicator)
-                (dsh-emacs-modeline--execution-indicator))))
+                (dsh-emacs-modeline--plan-indicator))))
     (if (string-empty-p text) "" (concat " " text " "))))
 
 (defun dsh-emacs-modeline--escape-percent (txt)

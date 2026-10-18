@@ -114,7 +114,7 @@
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
       (ert-info ((format "%s" "attempt-takes-over-live-body"))
         (should (null dsh-emacs--streaming-assistant))
-        (should (string-match-p "Attempt (no committed reply)" text))
+        (should (string-match-p "Incomplete reply" text))
         (should (= 2 (length (split-string text "live partial" nil))))))))
 
 ;; Failed attempts own all their blocks, including folded/live reasoning.
@@ -726,7 +726,7 @@
                 ((type . "tool/call") (seq . 3)
                  (data . ((turn . 1) (step . 1) (callId . "tail-tool")
                           (name . "read") (arguments . "{\"path\":\"tail.txt\"}")))))
-               ("attempt" "Attempt (no committed reply)"
+               ("attempt" "Incomplete reply"
                 ((type . "assistant/attempt") (seq . 3)
                  (data . ((turn . 1) (step . 2) (stream . [])))))
                ("compaction" "Context compaction failed"

@@ -448,6 +448,33 @@ otherwise it falls back to the emoji glyph in `dsh-emacs--variant-icons'."
           (error glyph))
       glyph)))
 
+(defun dsh-emacs-render--event-icon (state)
+  "Return a compact status dot for an exceptional execution STATE.
+Like dsh web's StateDot, the dot identifies status without suggesting a tool.
+STATE is `retry', `error' or `idle'; the adjacent title supplies its meaning."
+  (let* ((face (pcase state
+                 ('retry 'dsh-emacs-running-face)
+                 ('error 'dsh-emacs-error-face)
+                 (_ 'dsh-emacs-timestamp-face)))
+         (glyph (propertize "●" 'face face)))
+    (if (and (display-graphic-p) (image-type-available-p 'svg))
+        (let* ((foreground (face-foreground face nil t))
+               ;; Emacs/X11 names such as red1 are not SVG/CSS colors.
+               (rgb (and foreground (color-values foreground)))
+               (color (if rgb
+                          (apply #'format "#%02x%02x%02x"
+                                 (mapcar (lambda (channel) (/ channel 257)) rgb))
+                        "#808080")))
+          (propertize
+           glyph 'display
+           (create-image
+            (format (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                            "width=\"16\" height=\"16\" viewBox=\"0 0 16 16\">"
+                            "<circle cx=\"8\" cy=\"8\" r=\"3\" fill=\"%s\"/></svg>")
+                    color)
+            'svg t :ascent 'center :height 1.0)))
+      glyph)))
+
 (defun dsh-emacs-render--think-icon-svg (color)
   "Return the dsh-web IconThinkOutline14 sparkle icon filled with COLOR."
   (replace-regexp-in-string "__C__" color dsh-emacs--think-icon-svg-template t t))
@@ -1073,6 +1100,10 @@ FILES is a list of (PATH . DESCRIPTION) cells.  The row is rendered by
 `turn/end' (`dsh-emacs-render--flush-deliverables'), so a turn's deliveries
 sit after its closing message, mirroring dsh web's turnTail placement.")
 
+(defvar-local dsh-emacs-render--attempt-turns nil
+  "Turn plists with :facts by seq and a :position marker for their newest :seq.
+Older pages can supply missing outcomes; trimming removes consumed turns.")
+
 (defvar-local dsh-emacs-render--reply-turns nil
   "Turn summaries for reply footers, keyed by turn number.
 Retain per-message usage by seq so reconnects and older pages can merge.")
@@ -1116,7 +1147,8 @@ miss the entry is cleaned up.")
         dsh-emacs--current-group-count 0
         dsh-emacs--current-group-completed 0
         dsh-emacs-render--turn-deliverables nil
-        dsh-emacs-render--reply-turns nil)
+        dsh-emacs-render--reply-turns nil
+        dsh-emacs-render--attempt-turns nil)
   ;; Todo strip folds its snapshot from replayed `tool/call' events, so clear
   ;; the state and the fragment; the replay rebuilds it.
   (when (boundp 'dsh-emacs--todo-namespace)
@@ -3991,10 +4023,7 @@ spinner."
   (let ((failure (dsh-emacs-render--turn-failure event)))
     (when failure
       (dsh-emacs-render-info
-       (if (cdr failure)
-           (format "✗ Model error (%s)" (cdr failure))
-         "✗ Model error")
-       (car failure)))
+       "Model error" (car failure) nil (cdr failure)))
     ;; The flag covers only runs submitted by this client: a replayed
     ;; `turn/end' (reload, reconnect) or an interrupted run stays silent.
     (when dsh-emacs--turn-awaiting
@@ -4025,8 +4054,9 @@ DATA.REASON.ERROR ({code, message, ...})."
                 (and (stringp code) (not (string-empty-p code)) code))))
        (t (cons "Model run failed" nil))))))
 
-(defun dsh-emacs-render-info (label text &optional block-id)
-  "Render a one-off informational fragment (interrupts, errors)."
+(defun dsh-emacs-render-info (label text &optional block-id detail)
+  "Render a compact event row with LABEL, TEXT and optional muted DETAIL.
+BLOCK-ID identifies the fragment.  Keep the explanation expanded initially."
   (let* ((ns (dsh-emacs-render--make-namespace))
          (bid (or block-id (format "info-%d" (random 999999))))
          (insert-point (dsh-emacs-render--input-insert-point)))
@@ -4034,10 +4064,14 @@ DATA.REASON.ERROR ({code, message, ...})."
      (dsh-emacs-ui-make-fragment
       :namespace-id ns
       :block-id bid
-      :label-left (propertize label 'face 'dsh-emacs-error-face)
+      :label-left (concat (dsh-emacs-render--event-icon 'error) " "
+                          (propertize label 'face 'dsh-emacs-tool-title-face))
+      :label-right (when detail
+                     (propertize detail 'face 'dsh-emacs-timestamp-face))
       :body text
+      :body-face 'dsh-emacs-thinking-body-face
       :style 'minimal
-      :status 'info :padding t)
+      :status 'info)
      :create-new t :expanded t
      :insert-before insert-point)))
 
@@ -4180,8 +4214,142 @@ when visible content was removed."
       (dsh-emacs-render--follow-stream windows)
       t)))
 
+(defun dsh-emacs-render--note-attempt-outcome (event)
+  "Merge decoded EVENT and classify this turn's visible attempt cards.
+Replay by seq, not arrival order: an older page may arrive after its outcome.
+A retry consumes only the preceding attempt in the same step.  Turn failure
+settles the last unresolved attempt; it never relabels earlier started retries."
+  (when (and event
+             (integerp (dsh-protocol-execution-event-turn event))
+             (integerp (dsh-protocol-execution-event-seq event))
+             (member (dsh-protocol-execution-event-type event)
+                     '("assistant/attempt" "assistant/message" "llm/retry"
+                       "llm/retry-started" "turn/end")))
+    (unless dsh-emacs-render--attempt-turns
+      (setq dsh-emacs-render--attempt-turns (make-hash-table :test 'eql)))
+    (let* ((turn (dsh-protocol-execution-event-turn event))
+           (seq (dsh-protocol-execution-event-seq event))
+           (state (or (gethash turn dsh-emacs-render--attempt-turns)
+                      (list :facts nil :position (make-marker) :seq nil)))
+           (facts (plist-get state :facts))
+           (pending nil)
+           (waiting nil)
+           (cards nil))
+      (setf (alist-get seq facts) event)
+      (setq facts (sort facts (lambda (a b) (< (car a) (car b)))))
+      (setf (plist-get state :facts) facts)
+      (puthash turn state dsh-emacs-render--attempt-turns)
+      (dolist (entry facts)
+        (let* ((fact (cdr entry))
+               (type (dsh-protocol-execution-event-type fact)))
+          ;; Recovery plugins can retry directly without an llm/retry event.
+          ;; Another response in the same step proves the request resumed.
+          (when (and (member type '("assistant/attempt" "assistant/message"))
+                     (or pending waiting)
+                     (equal (dsh-protocol-execution-event-step fact)
+                            (dsh-protocol-execution-event-step
+                             (plist-get (or pending waiting) :event))))
+            (if pending
+                (setf (plist-get pending :cause) fact
+                      (plist-get pending :label) "Retried")
+              (setf (plist-get waiting :label) "started")))
+          (pcase type
+            ("assistant/attempt"
+             (setq pending (list :event fact :label "Incomplete reply"
+                                 :cause nil)
+                   waiting nil)
+             (push pending cards))
+            ("assistant/message" (setq pending nil waiting nil))
+            ("llm/retry"
+             (when (and pending
+                        (equal (dsh-protocol-execution-event-step fact)
+                               (dsh-protocol-execution-event-step
+                                (plist-get pending :event))))
+               (setf (plist-get pending :cause) fact
+                     (plist-get pending :label) "scheduled")
+               (setq waiting pending pending nil)))
+            ("llm/retry-started"
+             (when-let* ((retry (plist-get waiting :cause)))
+               (when (and (equal (dsh-protocol-execution-event-id fact)
+                                 (dsh-protocol-execution-event-id retry))
+                          (equal (dsh-protocol-execution-event-step fact)
+                                 (dsh-protocol-execution-event-step retry))
+                          (equal (dsh-protocol-execution-event-attempt fact)
+                                 (dsh-protocol-execution-event-attempt retry)))
+                 (setf (plist-get waiting :label) "started")
+                 (setq waiting nil))))
+            ("turn/end"
+             (let ((card (or pending waiting))
+                   (reason (dsh-protocol-execution-event-reason fact)))
+               (when (and card (member reason '("error" "aborted")))
+                 (setf (plist-get card :cause) fact
+                       (plist-get card :label)
+                       (if (equal reason "error") "Failed reply"
+                         (if waiting "Retry cancelled" "Cancelled reply")))))
+             (setq pending nil waiting nil)))))
+      (dolist (card cards)
+        (let* ((attempt (plist-get card :event))
+               (cause (plist-get card :cause))
+               (label (plist-get card :label))
+               (retry (and cause
+                           (equal (dsh-protocol-execution-event-type cause)
+                                  "llm/retry")))
+               (recovered (and cause
+                               (member (dsh-protocol-execution-event-type cause)
+                                       '("assistant/attempt" "assistant/message"))))
+               (detail (if recovered
+                           "A later response was recorded for the same turn and step"
+                         (and cause
+                              (string-join
+                               (delq nil
+                                     (list (dsh-protocol-execution-event-provider cause)
+                                           (dsh-protocol-execution-event-code cause)
+                                           (dsh-protocol-execution-event-message cause)))
+                               " · "))))
+               (block (dsh-emacs-ui-find-block
+                       (dsh-emacs-render--make-namespace)
+                       (format "evt-%s" (dsh-protocol-execution-event-seq attempt)))))
+          ;; Trimming may have removed this card.  Never recreate it at the tail.
+          (when block
+            (let ((model (copy-tree (get-text-property
+                                     (car block) 'dsh-emacs-ui-state))))
+              (when retry
+                (setq label
+                      (format "Retry %s%s · %s"
+                              (dsh-protocol-execution-event-attempt cause)
+                              (if-let* ((limit (dsh-protocol-execution-event-limit cause)))
+                                  (format "/%s" limit) "")
+                              label)))
+              (setf (map-elt model :label-left)
+                    (concat (dsh-emacs-render--event-icon
+                             (cond ((or retry recovered) 'retry)
+                                   ((and cause
+                                         (equal (dsh-protocol-execution-event-reason cause)
+                                                "error"))
+                                    'error)
+                                   (t 'idle)))
+                            " " (propertize label 'face 'dsh-emacs-tool-title-face
+                                            'help-echo (or detail "Outcome not available")))
+                    (map-elt model :label-right)
+                    (propertize
+                     (concat (format "turn %s · step %s" turn
+                                     (dsh-protocol-execution-event-step attempt))
+                             (when (and retry (numberp (dsh-protocol-execution-event-delay cause)))
+                               (format " · wait %gs"
+                                       (/ (dsh-protocol-execution-event-delay cause) 1000.0))))
+                     'face 'dsh-emacs-timestamp-face 'help-echo detail))
+              (dsh-emacs-ui-update-fragment
+               (assq-delete-all :collapsed model))))))
+      ;; Older pages must not move the retained frontier back to an old card.
+      ;; Leave the marker before subsequent turns inserted at this boundary.
+      (when (or (null (plist-get state :seq))
+                (>= seq (plist-get state :seq)))
+        (setf (plist-get state :seq) seq)
+        (set-marker (plist-get state :position)
+                    (dsh-emacs-render--input-insert-point))))))
+
 (defun dsh-emacs-render-assistant-attempt (event)
-  "Render an `assistant/attempt' EVENT as one muted collapsible card.
+  "Render an `assistant/attempt' EVENT as one compact unfinished-reply card.
 An attempt that settled without committing a surface message (failure,
 retry, cancellation) has no `assistant/message'; its exact stream is the only
 record of what the model produced.  The card opens expanded when it replaced
@@ -4197,16 +4365,18 @@ a visible live body, collapsed when replayed from history."
       :namespace-id (dsh-emacs-render--make-namespace)
       :block-id (dsh-emacs-render--make-block-id event)
       :label-left
-      (propertize "↻ Attempt (no committed reply)" 'face 'dsh-emacs-muted-face)
+      (concat (dsh-emacs-render--event-icon 'idle) " "
+              (propertize "Incomplete reply"
+                          'face 'dsh-emacs-tool-title-face
+                          'help-echo "Uncommitted output; may follow failure, retry or cancellation"))
       :label-right
-      (propertize (format "turn %s step %s"
+      (propertize (format "turn %s · step %s"
                           (dsh-emacs-render--aget "turn" data)
                           (dsh-emacs-render--aget "step" data))
-                  'face 'dsh-emacs-muted-face)
+                  'face 'dsh-emacs-timestamp-face)
       :body (unless empty body)
       :style 'minimal
       :status 'attempt
-      :header-face 'dsh-emacs-muted-face
       :body-face 'dsh-emacs-thinking-body-face
       :non-foldable empty)
      :create-new t
@@ -4728,7 +4898,7 @@ source filter, so without this check the same tool card is painted twice."
        (when (and (dsh-protocol-execution-event-message execution)
                   (not (dsh-protocol-execution-event-command-id execution)))
          (dsh-emacs-render-info
-          "✗ Context compaction failed"
+          "Context compaction failed"
           (dsh-protocol-execution-event-message execution)
           (format "compaction-%s"
                   (dsh-protocol-execution-event-id execution)))))
@@ -4770,6 +4940,8 @@ source filter, so without this check the same tool card is painted twice."
       ("deliverables/presented"
        (setq seq (dsh-emacs-render-deliverables event)))
       (_ nil))
+    (unless replacement
+      (dsh-emacs-render--note-attempt-outcome execution))
     (when (and dsh-emacs-reply-footer-items (not replacement))
       (dsh-emacs-render--note-reply-event
        (dsh-protocol-reply-event--from-alist event)))
@@ -4832,6 +5004,14 @@ draft.  The size limit is soft in all three cases."
         (let ((inhibit-read-only t)
               (buffer-undo-list t))
           (delete-region (point-min) trim-to))
+        (when dsh-emacs-render--attempt-turns
+          (maphash
+           (lambda (turn state)
+             (let ((position (plist-get state :position)))
+               (when (<= position (point-min))
+                 (set-marker position nil)
+                 (remhash turn dsh-emacs-render--attempt-turns))))
+           dsh-emacs-render--attempt-turns))
         (when dsh-emacs-render--reply-turns
           (maphash
            (lambda (turn state)

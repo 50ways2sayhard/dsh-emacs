@@ -821,12 +821,26 @@ refresh (`C-c C-r`):
 5. **tool/result** → `dsh-emacs-render-tool-result`: updates the existing tool card (success/error state). `create_goal` / `get_goal` / `update_goal` settle into dsh web's goal card (`dsh-emacs-render--goal-card-body`): objective summary, State / Rounds, and the blocker message while blocked.
 6. **turn/start** / **turn/end** → `dsh-emacs-render-turn-start/end`: rendered as a divider
 
-Retry and compaction events also feed mode-line execution status.
-`dsh-emacs-protocol.el` decodes typed execution facts and compaction summaries;
-`dsh-emacs-modeline.el` owns buffer-local retry and compaction state, their
-matching boundaries, and `dsh-emacs-describe-status`. Retry-started
-matches the chain id and attempt number within the same turn and step;
-compaction matches its own id and may run between turns.
+`dsh-emacs-protocol.el` decodes retry, compaction and turn-ending facts.
+`dsh-emacs-modeline.el` owns only compaction state, its matching boundaries,
+and `dsh-emacs-describe-status` for compaction/Plan details. Compaction matches
+its own id and may run between turns. Retry has no mode-line state.
+The renderer retains attempt/outcome facts by turn and seq so older pages can
+complete a pair already partially loaded. A retry consumes the preceding
+unresolved attempt of the same step; started matches retry id and number.
+Another response in the same turn and step also confirms a retry, including
+compaction recovery that emits no retry event; it shows **Retried** without
+inventing a counter or delay. Each turn tracks its newest event's transcript
+boundary with a marker. Trimming past that boundary releases its cached facts;
+older pages cannot move the boundary backwards.
+Turn failure settles only the remaining unresolved attempt, preserving earlier
+retry labels. The existing attempt fragment is updated in place with explicit
+retry/failure/cancellation labels, tool-row styling and failure hover details.
+Unknown outcomes retain **Incomplete reply**. Live output is taken over once,
+with expanded-live/folded-history behavior and user folding preserved.
+Model errors and automatic compaction failures use `dsh-emacs-render-info`:
+the same status dot, title face and compact spacing, with muted
+metadata and an initially expanded explanation.
 `dsh-emacs-render.el` routes those facts. Automatic summaries get a folded
 `Automatic compaction` row containing the generated summary, covered-item
 count and approximate old-context token count. It leaves the original
@@ -948,7 +962,7 @@ See [095](../postmortem/095-running-status.md) and
 The same cached output includes the English Deep diving caption and its
 foreground sweep. Compaction temporarily replaces it with teal Compacting
 and a clock measured from local observation of that compaction. Standalone
-compaction uses the same slot; retry and Plan labels remain independent.
+compaction uses the same slot; the Plan label remains independent.
 A buffer-local running-start timestamp provides the turn clock;
 the three-second animation phase never acts as elapsed turn time. Completion
 and disconnect clear the timestamp. The turn clock keeps running underneath

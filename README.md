@@ -92,6 +92,18 @@ thinking header, or press `RET` on it, to expand it.
   also uses the machine running Emacs; use `@` for remote server files.
   See [Shell commands](docs/shell-commands.md).
 
+Unfinished output stays in a compact transcript card, explicitly labelled
+**Retry** (scheduled or started), **Failed reply**, **Cancelled reply**, or
+**Retry cancelled** using the server's follow-up events. Recovery without an
+explicit retry event shows **Retried** once another response arrives in the
+same turn and step. Partial output remains
+expandable; hover the title for failure details. The mode line keeps running
+activity and elapsed time without a separate retry label. If outcome events
+are unavailable, the card says **Incomplete reply**. Retry, cancellation, model
+errors and compaction failures share a status-dot icon: orange for retry, red
+for failure, grey for cancelled/unknown. Model error reasons remain visible
+below the title.
+
 ### Goals, subagents, and questions
 
 The composer shows the active goal and next pending message. `C-c C-g` opens

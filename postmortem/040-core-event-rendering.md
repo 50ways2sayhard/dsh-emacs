@@ -1,5 +1,8 @@
 # 040 — Consuming the remaining V3 core events
 
+Attempt-card presentation superseded by
+[121](121-single-attempt-feedback.md); stream ownership still applies.
+
 _Seed boundary rendering is superseded by [085](085-hidden-seed-boundaries.md)._
 
 _Live attempt cleanup is superseded by [060](060-stream-settlement.md)._

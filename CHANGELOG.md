@@ -8,6 +8,21 @@ minor) and stay undated until the release is cut.
 
 ## 0.7.0 - Unreleased
 
+### Changed
+
+- **Show retry outcomes once, in the transcript**: remove the mode-line
+  Retry/Retrying label and its status details. Compact attempt cards now
+  distinguish scheduled/started retries, failed replies and cancellation,
+  using the same styling as tool and automatic-compaction rows. Partial
+  output stays expandable, and failure details appear on hover. Model errors
+  and automatic compaction failures share a compact status-dot layout with
+  retry/cancellation cards: orange for retry, red for failure, grey for
+  cancellation or unknown outcomes. Model error codes appear as muted
+  metadata, with the reason expanded. Recovery retries without an explicit
+  retry event show **Retried** when a later response confirms recovery in the
+  same step. Outcome caches are released with trimmed transcript content.
+  (rationale: postmortem/121)
+
 ### Fixed
 
 - **Accept server-assigned session IDs**: dsh 0.2.1 can replace a requested
