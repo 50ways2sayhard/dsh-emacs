@@ -29,6 +29,9 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep running status across manual refresh**: `C-c C-r` preserves busy
+  while reconnecting, even when the snapshot omits the original turn start;
+  a completed turn is not revived by a stale session-list running flag.
 - **Keep chat startup quiet**: mode-line setup no longer prints internal
   integration flags each time a chat opens. (rationale: postmortem/138)
 - **Reorder multilingual session lists safely**: workspace regrouping no longer

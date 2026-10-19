@@ -4546,7 +4546,7 @@ always pointing at the last-opened chat buffer, which mixed sessions)."
   (dsh-emacs-server-ensure)
   (cond
    ((and (boundp 'dsh-emacs--buffer-session) dsh-emacs--buffer-session)
-    (dsh-emacs-events-disconnect)
+    ;; Connect owns teardown and saves busy before disconnect clears it.
     (dsh-emacs-events-connect (current-buffer)))
    ((dsh-emacs--active-session-id)
     (message "Refresh works inside a chat buffer (last session: %s)"

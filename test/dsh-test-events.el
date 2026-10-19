@@ -423,8 +423,8 @@
             (ert-info ((format "%s" "interrupt-in-inactive-buffer-targets-own-session"))
               (should (and sent
                            (equal (list "session/cancel" "sess-a") (car sent))))))
-          ;; Scenario 3: refresh -> disconnect and reconnect the current chat's
-          ;; follow stream (snapshot seams)
+          ;; Scenario 3: refresh delegates the current chat's reconnect;
+          ;; connect owns teardown and preservation of live state.
           (with-current-buffer buf-a
             (setq sent nil)
             (cl-letf (((symbol-function 'dsh-emacs-events-disconnect)
@@ -433,9 +433,7 @@
                        (lambda (target) (push (list "connect" target) sent))))
               (dsh-emacs-refresh))
             (ert-info ((format "%s" "refresh-in-inactive-buffer-targets-own-session"))
-              (should (and sent
-                           (memq 'disconnect sent)
-                           (equal (list "connect" buf-a) (car sent))))))
+              (should (equal (list (list "connect" buf-a)) sent))))
           ;; Scenario 4: no ownership context (e.g. the *dsh-sessions* list buffer)
           ;; -> global fallback
           (with-temp-buffer
@@ -480,10 +478,7 @@
                        (lambda (target) (push (list "connect" target) targets))))
               (dsh-emacs-refresh)))
           (ert-info ((format "%s" "refresh-from-inactive-chat-renders-into-own-buffer"))
-            (should (and targets
-                         (eq buf-a (cadr (car targets)))
-                         (memq 'disconnect targets)))
-            (should (null (memq (list "connect" buf-b) targets)))))
+            (should (equal (list (list "connect" buf-a)) targets))))
       (setq dsh-emacs--current-session old-session)
       (setq dsh-emacs--current-buffer old-buffer)
       (kill-buffer buf-a)
@@ -885,6 +880,59 @@
               (should (null dsh-emacs--ml-busy))
               (should (string-empty-p (dsh-emacs--ml-busy-indicator)))))
         (dsh-emacs-events-disconnect (current-buffer))))))
+
+;; Exercise the command, not just connect: a preliminary disconnect loses
+;; liveness before connect can save it, and a bounded snapshot cannot repair it.
+(ert-deftest dsh-emacs-test-events-manual-refresh-preserves-running-case ()
+  :tags '(dsh-unit)
+  (dolist (running '(t nil))
+    (dolist (fail-connect '(nil t))
+      (let ((dsh-emacs--sessions
+             (list (dsh-protocol-session--from-alist
+                    '((sessionId . "manual-refresh") (running . t))))))
+        (with-temp-buffer
+          (dsh-emacs-mode)
+          (setq-local dsh-emacs--buffer-session "manual-refresh"
+                      dsh-emacs--anchor-seq 100)
+          (dsh-emacs--ml-busy-set running)
+          (unwind-protect
+              (cl-letf (((symbol-function 'dsh-emacs-server-ensure) #'ignore)
+                        ((symbol-function 'open-network-stream)
+                         (lambda (&rest _)
+                           (if fail-connect (error "Test connection failure")
+                             :fake-proc)))
+                        ((symbol-function 'set-process-query-on-exit-flag) #'ignore)
+                        ((symbol-function 'set-process-coding-system) #'ignore)
+                        ((symbol-function 'process-put) #'ignore)
+                        ((symbol-function 'set-process-filter) #'ignore)
+                        ((symbol-function 'set-process-sentinel) #'ignore)
+                        ((symbol-function 'dsh-emacs-events--schedule-reconnect)
+                         #'ignore))
+                (dotimes (_ 2)
+                  (dsh-emacs-refresh)
+                  (dsh-emacs-events--health-stop)
+                  (ert-info ((format "running=%S fail-connect=%S"
+                                     running fail-connect))
+                    (should (eq dsh-emacs--ml-busy running))))
+                ;; Neither old history nor a lagging running cache may
+                ;; overwrite the last observed live turn state.
+                (dsh-emacs-events--follow-snapshot
+                 (current-buffer)
+                 '((cursor . 101) (hasMore . t)
+                   (records . [((type . "event")
+                                (event . ((type . "step/start") (seq . 101)
+                                          (data . ((turn . 1) (step . 20))))))])))
+                (should (eq dsh-emacs--ml-busy running))
+                (should (eq (not (string-empty-p
+                                 (dsh-emacs--ml-busy-indicator))) running))
+                (dsh-emacs-events--dispatch-event
+                 (current-buffer)
+                 '((type . "turn/end") (seq . 102) (data . ((turn . 1)))))
+                (should-not dsh-emacs--ml-busy)
+                (should (string-empty-p (dsh-emacs--ml-busy-indicator))))
+            (dsh-emacs-events-disconnect (current-buffer))
+            (when-let* ((transport (get-buffer " *dsh-events:manual-refresh*")))
+              (kill-buffer transport))))))))
 
 ;; --- Test 98h: reconnect while idle/settled does not light busy --- no ghost
 ;; spinner may appear ---
