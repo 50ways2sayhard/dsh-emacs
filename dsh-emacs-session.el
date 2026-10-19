@@ -199,9 +199,8 @@ buffer; `dsh-emacs-collapse-workspaces' and
   (add-hook 'pre-command-hook #'dsh-emacs-session--cancel-auto-jump nil t)
   (add-hook 'kill-buffer-hook #'dsh-emacs-session--auto-refresh-stop nil t)
   (dsh-emacs-session--auto-refresh-start)
-  (when (fboundp 'dsh-emacs-events-host-connect)
-    (dsh-emacs-events-host-connect)
-    (add-hook 'kill-buffer-hook #'dsh-emacs-events-host-disconnect nil t))
+  (dsh-emacs-events-host-connect)
+  (add-hook 'kill-buffer-hook #'dsh-emacs-events-host-disconnect nil t)
   (dsh-emacs-session--render))
 
 ;;; ---------------------------------------------------------------------------

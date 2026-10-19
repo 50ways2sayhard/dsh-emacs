@@ -1286,11 +1286,10 @@ which may start left of the prompt itself (e.g. a queue prefix sharing
 the prompt face), and the marker must land after the prompt, not at the
 run start.  When no `❯ ' is found ahead of the anchor, the fixed skip is
 kept as a fallback."
-  (when (and (fboundp 'dsh-emacs-render--input-anchor-pos)
-             (or (null dsh-emacs--input-marker)
-                 (not (and (markerp dsh-emacs--input-marker)
-                           (eq (marker-buffer dsh-emacs--input-marker)
-                               (current-buffer))))))
+  (when (or (null dsh-emacs--input-marker)
+            (not (and (markerp dsh-emacs--input-marker)
+                      (eq (marker-buffer dsh-emacs--input-marker)
+                          (current-buffer)))))
     (let ((anchor (dsh-emacs-render--input-anchor-pos)))
       (when anchor
         (setq dsh-emacs--input-marker

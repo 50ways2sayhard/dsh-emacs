@@ -1698,7 +1698,7 @@ re-fetches them via `session/attachment'."
   "Fetch image bytes for ATTACHMENT-ID from SESSION-ID via
 `session/attachment'.  ON-BYTES receives the decoded unibyte string,
 or nil when the RPC fails or the payload is malformed."
-  (when (and session-id attachment-id (fboundp 'dsh-emacs--rpc-async))
+  (when (and session-id attachment-id)
     (dsh-emacs--rpc-async
      "session/attachment"
      `((request . ((sessionId . ,session-id)
@@ -3519,8 +3519,7 @@ running spinner (idempotent — the send path already lit it, and a
 `turn/end' later clears it)."
   ;; A turn started (or a still-open turn was replayed after a reconnect /
   ;; session reopen): light the mode-line running spinner.
-  (when (and (not (dsh-emacs-render--history-page-p))
-             (fboundp 'dsh-emacs--ml-busy-set))
+  (unless (dsh-emacs-render--history-page-p)
     (dsh-emacs--ml-busy-set t))
   (dsh-protocol-event-sequence--from-alist event))
 
@@ -3542,7 +3541,6 @@ identifies the chat for the notification title."
   (when (and dsh-emacs-enable-notifications
              (not (dsh-emacs-notify--visible-p buffer)))
     (let ((title (or (and (stringp session-id)
-                          (fboundp 'dsh-emacs--chat-title)
                           (dsh-emacs--chat-title session-id))
                      (buffer-name (or buffer (current-buffer))))))
       (setq title (replace-regexp-in-string "[[:cntrl:]]" " " title)
@@ -3583,8 +3581,7 @@ spinner."
     (when (integerp turn)
       (dsh-emacs-render--flush-deliverables turn)))
   ;; The turn finished: stop the mode-line running spinner.
-  (when (and (not (dsh-emacs-render--history-page-p))
-             (fboundp 'dsh-emacs--ml-busy-set))
+  (unless (dsh-emacs-render--history-page-p)
     (dsh-emacs--ml-busy-set nil))
   ;; A failed run must not be silently swallowed: dsh signals it as
   ;; `turn/end' + data.reason.kind = \"error\", mirroring dsh web's
@@ -3683,12 +3680,11 @@ their own error card.  Neither the old conversation nor input history changes."
 Steps are boundaries of a turn, not transcript content: the transcript stays
 content-only, and the badge shows which step of the running turn is active.
 Returns the event seq so the follow stream's dedup anchor advances."
-  (when (fboundp 'dsh-emacs-modeline-note-step)
-    (let ((position (dsh-protocol-turn-step-event--from-alist event)))
-      (dsh-emacs-modeline-note-step
-       (dsh-protocol-turn-step-event-turn position)
-       (dsh-protocol-turn-step-event-step position)
-       (equal (dsh-protocol-turn-step-event-kind position) "step/start"))))
+  (let ((position (dsh-protocol-turn-step-event--from-alist event)))
+    (dsh-emacs-modeline-note-step
+     (dsh-protocol-turn-step-event-turn position)
+     (dsh-protocol-turn-step-event-step position)
+     (equal (dsh-protocol-turn-step-event-kind position) "step/start")))
   (dsh-protocol-event-sequence--from-alist event))
 
 (defun dsh-emacs-render--assistant-stream-text (stream)
@@ -4373,8 +4369,7 @@ a finished row never animates again."
     ;; Preserve event order at boundaries; reasoning has its own burst timer.
     (unless (equal chunk-type "reasoning-delta")
       (dsh-emacs-render--flush-thinking))
-    (when (and execution (not (dsh-emacs-render--history-page-p))
-               (fboundp 'dsh-emacs-modeline-note-execution))
+    (when (and execution (not (dsh-emacs-render--history-page-p)))
       (dsh-emacs-modeline-note-execution execution))
     (pcase type
       ((or "llm/retry" "llm/retry-started" "compaction/start")
@@ -4396,19 +4391,16 @@ a finished row never animates again."
       ("assistant/chunk"
        (setq seq (dsh-emacs-render-assistant-chunk event chunk)))
       ("assistant/message" (setq seq (dsh-emacs-render-assistant-message event))
-       (when (and (not (dsh-emacs-render--history-page-p))
-                  (fboundp 'dsh-emacs-modeline-note-event))
+       (unless (dsh-emacs-render--history-page-p)
          (dsh-emacs-modeline-note-event event)))
       ;; A `plan/mode' record is durable but paints no row: the `plan'
       ;; projection owns the badge, so the event is only consumed.
       ("plan/mode" (setq seq (dsh-protocol-event-sequence--from-alist event)))
       ("request/context" (setq seq (dsh-protocol-event-sequence--from-alist event))
-       (when (and (not (dsh-emacs-render--history-page-p))
-                  (fboundp 'dsh-emacs-modeline-note-request))
+       (unless (dsh-emacs-render--history-page-p)
          (dsh-emacs-modeline-note-request event)))
       ("request/header" (setq seq (dsh-protocol-event-sequence--from-alist event))
-       (when (and (not (dsh-emacs-render--history-page-p))
-                  (fboundp 'dsh-emacs-modeline-note-header))
+       (unless (dsh-emacs-render--history-page-p)
          (dsh-emacs-modeline-note-header event)))
       ("tool/call" (setq seq (dsh-emacs-render-tool-call event)))
       ;; A replacement `tool/result' rewrites what the model sees; the human
@@ -4472,8 +4464,7 @@ render twice."
         ;; The canonical message now owns this echo: its optimistic rollback
         ;; record must go, or a later re-send of the same text that fails
         ;; could delete this accepted block instead.
-        (when (fboundp 'dsh-emacs--forget-user-message-echo)
-          (dsh-emacs--forget-user-message-echo matched)))
+        (dsh-emacs--forget-user-message-echo matched))
       matched)))
 
 (defun dsh-emacs-render--trim-buffer ()

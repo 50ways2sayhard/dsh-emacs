@@ -167,6 +167,7 @@ generation and a new clientId.")
 (declare-function dsh-emacs-modeline-set-permission "dsh-emacs-modeline" (permission))
 (declare-function dsh-emacs-queue-apply "dsh-emacs-queue" (chat process items))
 (declare-function dsh-emacs-composer-set-goal "dsh-emacs-composer" (goal))
+(declare-function dsh-emacs-jobs-reopen "dsh-emacs-jobs" (chat))
 (declare-function dsh-emacs-server--basic-auth-header "dsh-emacs-server" ())
 (declare-function dsh-emacs--server-auth-cookie-header "dsh-emacs-server" ())
 
@@ -211,10 +212,8 @@ socket; the caller opens its specific stream (a chat's
                (substring (secure-hash 'sha1 seed nil nil t) 0 16) t))
          (path "/api/remote.mux")
          (origin (format "%s://%s" (url-type url) host-header)))
-    (let* ((auth (and (fboundp 'dsh-emacs-server--basic-auth-header)
-                      (dsh-emacs-server--basic-auth-header)))
-           (cookie (and (fboundp 'dsh-emacs--server-auth-cookie-header)
-                        (dsh-emacs--server-auth-cookie-header)))
+    (let* ((auth (dsh-emacs-server--basic-auth-header))
+           (cookie (dsh-emacs--server-auth-cookie-header))
            (request (concat
                      (format "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nOrigin: %s\r\n"
                              path host-header key origin)
@@ -326,8 +325,7 @@ NEXT is the byte offset following this frame; INPUT is never copied as a tail."
     (dsh-emacs-events--host-repaint)
     ;; The live chat buffer of that session (if any) renames immediately;
     ;; `dsh-emacs--chat-buffer-sync' also refreshes default-directory.
-    (when (and (fboundp 'dsh-emacs--chat-buffer-sync)
-               (hash-table-p dsh-emacs--chat-buffers)
+    (when (and (hash-table-p dsh-emacs--chat-buffers)
                (gethash session-id dsh-emacs--chat-buffers))
       (dsh-emacs--chat-buffer-sync session-id))))
 
@@ -356,9 +354,7 @@ lands the genuine pair."
                                     projected)
                                pressure)))
                 (buf (gethash session-id dsh-emacs--chat-buffers)))
-      (when (and used window (> window 0)
-                 (buffer-live-p buf)
-                 (fboundp 'dsh-emacs-modeline-set-context-snapshot))
+      (when (and used window (> window 0) (buffer-live-p buf))
         (with-current-buffer buf
           (dsh-emacs-modeline-set-context-snapshot used window))))))
 
@@ -370,8 +366,7 @@ was.  The selectable catalog is independent of this current value.
 Only the session's live chat buffer is touched."
   (when-let* (((and current (hash-table-p dsh-emacs--chat-buffers)))
               (buf (gethash session-id dsh-emacs--chat-buffers))
-              ((buffer-live-p buf))
-              ((fboundp 'dsh-emacs-modeline-set-permission)))
+              ((buffer-live-p buf)))
     (with-current-buffer buf
       (dsh-emacs-modeline-set-permission current))))
 
@@ -721,8 +716,7 @@ VALUE may already be a decoded `dsh-protocol-follow-snapshot'."
         (dsh-emacs-modeline-set-plan plan)
         (when entries
           (dsh-emacs-render-history-events entries nil)
-          (when (fboundp 'dsh-emacs--seed-input-history)
-            (dsh-emacs--seed-input-history entries session-id)))
+          (dsh-emacs--seed-input-history entries session-id))
         ;; Record what the tail covers so `dsh-emacs-load-older-history' can
         ;; page backwards from it (and knows whether anything is left).  The
         ;; snapshot cursor is kept too: it is the `throughSeq' a backward page
@@ -907,8 +901,7 @@ No repeating timer is needed: a quiet socket stays normally readable."
                         ;; Feature streams (the `job' namespace roster)
                         ;; are per-connection too: re-open them on the
                         ;; replacement socket after a reconnect.
-                        (when (fboundp 'dsh-emacs-jobs-reopen)
-                          (dsh-emacs-jobs-reopen chat))))
+                        (dsh-emacs-jobs-reopen chat)))
                     (dsh-emacs-events--consume-frames process))
                 (delete-process process)))))))))
 
@@ -1066,7 +1059,7 @@ reconnect is re-armed and another connect scheduled."
         ;; a bounded snapshot after compaction may omit the original start.
         ;; Only fresh transcripts seed from the host cache (above): an old
         ;; cached running flag must never undo an already consumed turn/end.
-        (when (and was-busy (fboundp 'dsh-emacs--ml-busy-set))
+        (when was-busy
           (dsh-emacs--ml-busy-set t))
         (condition-case err
             (let* ((url (url-generic-parse-url dsh-emacs-base-url))
@@ -1130,8 +1123,7 @@ reconnect is re-armed and another connect scheduled."
               ;; this connect is a reconnect for the same chat buffer while a
               ;; slash command is still running, re-arm its spinner (a no-op
               ;; for fresh buffers and already-settled rows).
-              (when (fboundp 'dsh-emacs--command-spinner-revive)
-                (dsh-emacs--command-spinner-revive)))
+              (dsh-emacs--command-spinner-revive))
           (error
            (when (and (processp process) (process-live-p process))
              (delete-process process))
@@ -1149,8 +1141,7 @@ reconnect is re-armed and another connect scheduled."
   (let ((chat (or chat (current-buffer))))
     (when (buffer-live-p chat)
       (with-current-buffer chat
-        (when (fboundp 'dsh-emacs-render--flush-stream)
-          (dsh-emacs-render--flush-stream nil t))
+        (dsh-emacs-render--flush-stream nil t)
         (when (timerp dsh-emacs--event-reconnect-timer)
           (cancel-timer dsh-emacs--event-reconnect-timer))
         (dsh-emacs-events--health-stop)
@@ -1168,10 +1159,8 @@ reconnect is re-armed and another connect scheduled."
         ;; Tearing down the stream: stop the mode-line running spinner so it
         ;; never keeps ticking in a detached conversation, and cancel any
         ;; running slash-command row animations.
-        (when (fboundp 'dsh-emacs--ml-busy-clear)
-          (dsh-emacs--ml-busy-clear))
-        (when (fboundp 'dsh-emacs--command-spinner-clear-all)
-          (dsh-emacs--command-spinner-clear-all))))))
+        (dsh-emacs--ml-busy-clear)
+        (dsh-emacs--command-spinner-clear-all)))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Core connection (`session/control' + `workspace/follow' + `$events')
@@ -1559,8 +1548,7 @@ Unlike the ctx/title consumers this touches only
 the session's own chat buffer — the Goal Row is composer chrome, not list or
 mode-line state."
   (when (and (boundp 'dsh-emacs--chat-buffers)
-             (hash-table-p dsh-emacs--chat-buffers)
-             (fboundp 'dsh-emacs-composer-set-goal))
+             (hash-table-p dsh-emacs--chat-buffers))
     (let ((buf (gethash session-id dsh-emacs--chat-buffers)))
       (when (buffer-live-p buf)
         (with-current-buffer buf

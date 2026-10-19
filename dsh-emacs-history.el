@@ -21,9 +21,10 @@
 (defvar dsh-emacs--buffer-subagent)
 (defvar dsh-emacs--input-marker)
 (defvar dsh-emacs-history-window)
-(declare-function dsh-emacs--rpc-async "dsh-emacs")
-(declare-function dsh-emacs--seed-input-history "dsh-emacs")
-(declare-function dsh-emacs--active-session-id "dsh-emacs")
+(declare-function dsh-emacs--rpc-async "dsh-emacs" (method params callback))
+(declare-function dsh-emacs--seed-input-history "dsh-emacs"
+                  (events session-id &optional older))
+(declare-function dsh-emacs--active-session-id "dsh-emacs" ())
 
 (defun dsh-emacs-imenu-create-user-index ()
   "Build an Imenu index of loaded user questions.
@@ -142,10 +143,9 @@ pagination frontier, and seeds `M-p' recall from the page's user messages."
               (setq dsh-emacs--history-earliest-seq cursor)
               (setq dsh-emacs--history-has-more
                     (dsh-protocol-history-page-has-more page))
-              (when (fboundp 'dsh-emacs--seed-input-history)
-                (dsh-emacs--seed-input-history
-                 entries (or dsh-emacs--buffer-session
-                             (dsh-emacs--active-session-id)) t))
+              (dsh-emacs--seed-input-history
+               entries (or dsh-emacs--buffer-session
+                           (dsh-emacs--active-session-id)) t)
               (let ((rounds (dsh-protocol-history-page-rounds page)))
                 (message "%s%s"
                          (if rounds

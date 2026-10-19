@@ -45,7 +45,7 @@
 
 ;; Lazy boundary with same-package modules (see AGENTS.md): dsh-emacs.el
 ;; assembles this module; the event layer calls back into its
-;; symbols through `declare-function'/runtime guards, so this module needs no
+;; symbols through `declare-function', so this module needs no
 ;; top-level require of them.
 (declare-function dsh-emacs--rpc-async "dsh-emacs" (method params callback))
 (declare-function dsh-emacs-events-close-stream "dsh-emacs-events"

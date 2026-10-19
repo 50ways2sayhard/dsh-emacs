@@ -1085,17 +1085,17 @@ session span carrying the real SESSION-ID."
 
 (defun dsh-emacs-reference--open-ref (kind value)
   "Open reference KIND (`session' / `file') with VALUE."
-  (declare-function dsh-emacs-open-session "dsh-emacs.el" (session-id))
+  (declare-function dsh-emacs-open-session "dsh-emacs.el"
+                    (session-id &optional address other-window))
   (declare-function dsh-emacs--chat-cwd "dsh-emacs.el" (session-id))
   (pcase kind
     ('session
-     (if (and value (fboundp 'dsh-emacs-open-session))
+     (if value
          (dsh-emacs-open-session value)
        (user-error "No session id to open")))
     ('file
      (let* ((sid (dsh-emacs--active-session-id))
-            (cwd (and sid (fboundp 'dsh-emacs--chat-cwd)
-                      (dsh-emacs--chat-cwd sid)))
+            (cwd (and sid (dsh-emacs--chat-cwd sid)))
             (abs (and cwd value (expand-file-name value cwd))))
        (if (and abs (file-exists-p abs))
            (find-file abs)
