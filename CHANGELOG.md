@@ -29,6 +29,10 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Open file links with line ranges locally**: assistant links such as
+  `source.el#L10-L20`, `source.el#L10-20` and `source.el:10-20` now open
+  in Emacs at the first line instead of falling back to a browser. This also
+  fixes function-name labels whose link targets contain line ranges.
 - **Keep the model indicator in sync**: modelSelection updates from the live
   control stream and follow snapshots now update both the session cache and
   model/provider/effort segments, including switches made in another client.

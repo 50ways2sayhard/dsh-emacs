@@ -186,3 +186,14 @@ host.
 > `sessionId`/`label` then arrive in the immediately-following
 > `session-reference` recall context, and the reseed renderer pairs them so
 > the `@label` still links and jumps correctly.
+
+## Assistant Markdown file links
+
+Assistant replies can contain explicit Markdown links to local files, with
+any label (including a function name). RET or mouse-1 opens the file relative
+to the chat buffer's working directory. Absolute paths and `file:` / `file://`
+prefixes also work. Destinations such as `source.el#L10`,
+`source.el#L10-L20`, `source.el#L10-20`, `source.el:10` and `source.el:10-20`
+jump to the first referenced line; a range does not select text. A function
+name in the label is display text, not a symbol lookup. Web links still open
+in the browser.

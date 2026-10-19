@@ -482,6 +482,46 @@
                   (should (= (line-number-at-pos) 2)))))))
       (delete-directory directory t))))
 
+(ert-deftest dsh-emacs-test-markdown-line-range-links-open-locally ()
+  :tags '(dsh-unit)
+  (let* ((directory (make-temp-file "dsh-link-range" t))
+         (file (expand-file-name "source.el" directory)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "first\nsecond\nthird\nfourth\n"))
+          (dolist (target (list "source.el#L2-L3" "source.el#L2-3"
+                                "source.el:2-3" "file:source.el#L2-L3"
+                                (concat file "#L2-L3")
+                                (concat "file://" file "#L2-L3")
+                                (concat "file://" file ":2-3")))
+            (ert-info ((format "line-range target: %s" target))
+              (with-temp-buffer
+                (setq default-directory (file-name-as-directory directory))
+                (insert (dsh-emacs-markdown-convert
+                         (format "[`some-function`](<%s>)" target)))
+                (goto-char (point-min))
+                (should (equal (buffer-string) "some-function"))
+                (let ((command (lookup-key
+                                (get-text-property (point) 'keymap)
+                                (kbd "RET")))
+                      opened browsed)
+                  (should (commandp command))
+                  (cl-letf (((symbol-function 'find-file)
+                             (lambda (path &rest _)
+                               (setq opened path)
+                               (erase-buffer)
+                               (insert-file-contents path)))
+                            ((symbol-function 'browse-url)
+                             (lambda (url &rest _) (setq browsed url))))
+                    (call-interactively command))
+                  (should (equal opened file))
+                  (should-not browsed)
+                  (should (= (line-number-at-pos) 2))
+                  (should (equal (buffer-substring
+                                  (line-beginning-position) (line-end-position))
+                                 "second")))))))
+      (delete-directory directory t))))
+
 ;; Table wrapping must measure each character once, retaining layout and faces.
 (ert-deftest dsh-emacs-test-markdown-table-wrap-single-measure-case ()
   :tags '(dsh-unit)
