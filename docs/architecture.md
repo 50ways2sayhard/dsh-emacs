@@ -305,8 +305,11 @@ objective space, then prioritize status when even the fixed chrome cannot fit.
 The dock reserves the final window column to prevent a filled row from wrapping.
 There is no trailing background padding or right-edge action alignment.
 SVGs reserve two columns and are capped to fit the narrowest viewing frame's cells.
-Goal projection and RPC response decoding both belong to the protocol module;
-Composer's mutation callback compares parsed goal identities and revisions.
+Goal projection, mutation request encoding and RPC response decoding belong to
+the protocol module. The request encoder reads the decoded goal's id/revision
+into the CAS ref and adds `request.objective` only when supplied for editing.
+Composer retains phase guards, fresh pending-token identity and the mutation
+callback's comparisons of parsed goal identities and revisions.
 
 Next Message mirrors the Goal Row's anatomy: dsh web's queue glyph (a chat
 bubble with two text lines, tinted with `dsh-emacs-composer-next-face` from
@@ -507,7 +510,7 @@ still owns UTF-8 decoding and error reporting. See
 [112](../postmortem/112-native-wire-json.md).
 
 Outbound `*-request` functions return method argument alists for session RPCs,
-workspace mutations, job streams/kill, skills/list, commands and reference
+workspace mutations, job streams/kill, skills/list, commands, goals and reference
 queries. Both model and effort pickers use
 `dsh-protocol-session-select-model-request`. The same boundary owns
 prompt text content and session/follow arguments. Absent effort, ordering target,
@@ -515,7 +518,7 @@ job scope and follow limit fields are omitted, not sent as null; session/list
 retains its distinct `_request: {}` parameter.
 Callers still choose endpoints and supply ids, modes, expanded paths, time zones
 and resolved attachments. Queue action and attachment-part subdocuments, plus
-goals, providers and interaction requests remain with their feature owners for
+providers and interaction requests remain with their feature owners for
 later batches.
 
 Command catalog reads and execution keep flat `agentId` arguments, without a

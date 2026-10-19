@@ -2049,6 +2049,14 @@ The required submittedAttachments argument is an array, including when empty."
 Both endpoints take the same flat arguments; preserve an empty query string."
   `((agentId . ,session) (query . ,query)))
 
+(defun dsh-protocol-goal-mutation-request (session goal &optional objective)
+  "Encode a mutation of decoded GOAL in SESSION using its current CAS ref.
+OBJECTIVE adds the edit request; nil omits it for pause, resume and clear."
+  `((agentId . ,session)
+    (ref . ((id . ,(dsh-protocol-goal-id goal))
+            (revision . ,(dsh-protocol-goal-revision goal))))
+    ,@(when objective `((request . ((objective . ,objective)))))))
+
 (defun dsh-protocol-session-address-json (session-id &optional address)
   "Serialize SESSION-ID or its durable subagent ADDRESS."
   (if address

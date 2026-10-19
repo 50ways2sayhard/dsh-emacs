@@ -805,9 +805,9 @@
       (let ((call (car sent)))
         (ert-info ((format "%s" "goal-pause-payload-ref-cas"))
           (should (equal (nth 0 call) "goals/pause"))
-          (should (equal (cdr (assq 'agentId (nth 1 call))) "sess-gact"))
-          (should (equal (cdr (assq 'revision (cdr (assq 'ref (nth 1 call))))) 7))
-          (should (equal (cdr (assq 'id (cdr (assq 'ref (nth 1 call))))) "goal-1"))))
+          (should (equal (nth 1 call)
+                         '((agentId . "sess-gact")
+                           (ref . ((id . "goal-1") (revision . 7))))))))
       ;; A successful callback optimistically updates the row to paused.
       (ert-info ((format "%s" "goal-pause-optimistic-view"))
         (should (string-match-p "Paused Goal"
@@ -867,8 +867,8 @@
                                 (cons 'objective "Paused goal")
                                 (cons 'phase "paused"))))))
       (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
-                 (lambda (method _params cb)
-                   (push method sent)
+                 (lambda (method params cb)
+                   (push (list method params) sent)
                    (funcall cb t
                             (list (cons 'id "g2")
                                   (cons 'revision 4)
@@ -876,7 +876,10 @@
                                   (cons 'phase "active"))))))
         (dsh-emacs-goal-resume))
       (ert-info ((format "%s" "goal-resume-payload"))
-        (should (equal (car sent) "goals/resume"))
+        (should (equal (car sent)
+                       '("goals/resume"
+                         ((agentId . "sess-gresume")
+                          (ref . ((id . "g2") (revision . 3)))))))
         (should (string-match-p "Ongoing Goal"
                                 (buffer-substring-no-properties (point-min) (point-max))))))))
 
@@ -909,10 +912,10 @@
       (let ((call (car sent)))
         (ert-info ((format "%s" "goal-edit-request-objective"))
           (should (equal (nth 0 call) "goals/edit"))
-          (should (equal (cdr (assq 'objective
-                                    (cdr (assq 'request (nth 1 call)))))
-                         "new objective"))
-          (should (equal (cdr (assq 'revision (cdr (assq 'ref (nth 1 call))))) 5))))
+          (should (equal (nth 1 call)
+                         '((agentId . "sess-gedit")
+                           (ref . ((id . "g3") (revision . 5)))
+                           (request . ((objective . "new objective"))))))))
       (ert-info ((format "%s" "goal-edit-optimistic-view"))
         (should (string-match-p "new objective"
                                 (buffer-substring-no-properties (point-min) (point-max))))))))
@@ -939,7 +942,9 @@
       (let ((call (car sent)))
         (ert-info ((format "%s" "goal-clear-payload"))
           (should (equal (nth 0 call) "goals/clear"))
-          (should (equal (cdr (assq 'revision (cdr (assq 'ref (nth 1 call))))) 9))))
+          (should (equal (nth 1 call)
+                         '((agentId . "sess-gclear")
+                           (ref . ((id . "g4") (revision . 9))))))))
       (ert-info ((format "%s" "goal-clear-removes-row"))
         (should (null (markerp dsh-emacs--composer-top-marker)))
         (should (null (string-match-p "Clear me"
@@ -1043,7 +1048,10 @@
       (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                  (lambda (_method _params cb) (setq callback cb))))
         (dsh-emacs-goal-pause))
-      (let ((newer-token (list "edit" '((id . "g-late") (revision . 2)))))
+      (let ((newer-token (list "pause")))
+        ;; The same verb still needs a distinct request identity after reset.
+        (should (equal dsh-emacs--composer-goal-pending newer-token))
+        (should-not (eq dsh-emacs--composer-goal-pending newer-token))
         (setq dsh-emacs--composer-goal-pending newer-token)
         (funcall callback t
                  (list (cons 'id "g-late")

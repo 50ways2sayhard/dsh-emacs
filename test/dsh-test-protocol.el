@@ -1068,5 +1068,23 @@
       (should (equal args `((agentId . "s") (query . ,query))))
       (should (equal (dsh-protocol-write-json args) json)))))
 
+(ert-deftest dsh-emacs-test-protocol-outbound-goal-mutation-request ()
+  :tags '(dsh-unit)
+  (dolist (revision '(0 7))
+    (let ((goal (dsh-protocol-goal--from-alist
+                 `((id . "goal-1") (revision . ,revision)
+                   (objective . "Original") (phase . "paused")))))
+      (dolist (case '((nil "")
+                      ("" ",\"request\":{\"objective\":\"\"}")
+                      ("New\nobjective" ",\"request\":{\"objective\":\"New\\nobjective\"}")))
+        (pcase-let* ((`(,objective ,suffix) case)
+                     (args (dsh-protocol-goal-mutation-request "s" goal objective))
+                     (json (concat "{\"agentId\":\"s\",\"ref\":{\"id\":\"goal-1\","
+                                   (format "\"revision\":%d}" revision) suffix "}")))
+          (should (equal args (dsh-protocol-read-json json)))
+          (should (equal (dsh-protocol-write-json args) json))
+          (should (= (dsh-protocol-goal-revision goal) revision))
+          (should (equal (dsh-protocol-goal-objective goal) "Original")))))))
+
 (provide 'dsh-test-protocol)
 ;;; dsh-test-protocol.el ends here

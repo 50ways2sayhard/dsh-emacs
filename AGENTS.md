@@ -198,10 +198,10 @@ whole report blindly.
   `archivedSessionIds`, …) must appear **only** in the `--from-alist`
   constructors inside `dsh-emacs-protocol.el`; business code reads decoded
   fields through `dsh-protocol-*` accessors exclusively.
-- On the outbound path, session/workspace/job/skills/commands arguments,
+- On the outbound path, session/workspace/job/skills/commands/goals arguments,
   reference queries and RPC/mux envelopes belong to protocol `*-request` /
   `*-json` encoders. Do not reintroduce inline bodies for migrated RPCs.
-  Goals, providers, interactions and nested queue/attachment subdocuments
+  Providers, interactions and nested queue/attachment subdocuments
   remain to migrate (see postmortem/140). RPC/mux JSON uses
   `dsh-protocol-write-json`, not a caller-configured `json-encode`.
 - Business functions that must accept legacy test fixtures use the

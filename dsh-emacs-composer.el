@@ -761,11 +761,6 @@ The next projection/snapshot supplies goal and queue data."
 ;; bare tombstone ref for clear.  The row updates optimistically, while the
 ;; projection remains authoritative.
 
-(defun dsh-emacs-composer--goal-ref (goal)
-  "Return the CAS ref of GOAL as a wire alist ((id . …) (revision . …))."
-  (list (cons 'id (dsh-protocol-goal-id goal))
-        (cons 'revision (dsh-protocol-goal-revision goal))))
-
 (defun dsh-emacs-composer--goal-mutate (verb &optional objective on-ok)
   "Send a `goals/VERB' mutation for the current buffer's goal.
 Resolves the session id (agentId) and CAS ref from the live goal.  Guards a
@@ -791,14 +786,12 @@ tombstone identity).  Failures surface via `message' and leave the row unchanged
      (dsh-emacs--composer-goal-pending
       (message "Goal %s already in progress" verb))
      (t
-      (let* ((ref (dsh-emacs-composer--goal-ref goal))
-             ;; Identity token as well as a truthy pending guard: a callback
+      (let* (;; Identity token as well as a truthy pending guard: a callback
              ;; from before a buffer reset must not clear or overwrite a newer
              ;; mutation that happens to use the same goal ref.
-             (pending-token (list verb ref))
-             (params `((agentId . ,session-id)
-                       (ref . ,ref)
-                       ,@(and objective `((request . ((objective . ,objective))))))))
+             (pending-token (list verb))
+             (params (dsh-protocol-goal-mutation-request
+                      session-id goal objective)))
         (setq dsh-emacs--composer-goal-pending pending-token)
         (dsh-emacs-composer-render)
         (dsh-emacs--rpc-async
