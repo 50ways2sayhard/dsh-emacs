@@ -154,7 +154,7 @@ overwriting the newer catalog."
                   (assoc-delete-all session-id dsh-emacs--skill-fetch-stamps)))
       (dsh-emacs--rpc-async
        "skills/list"
-       `((request . ((sessionId . ,session-id))))
+       (dsh-protocol-skills-list-request session-id)
        (lambda (ok value)
          (when (equal stamp
                       (cdr (assoc session-id dsh-emacs--skill-fetch-stamps)))
@@ -186,7 +186,7 @@ requests, and may itself be superseded while the RPC processes events."
       (unwind-protect
           (let ((res (dsh-emacs--rpc-request
                       "skills/list"
-                      `((request . ((sessionId . ,session-id)))))))
+                      (dsh-protocol-skills-list-request session-id))))
             (if (not (equal stamp
                             (cdr (assoc session-id
                                         dsh-emacs--skill-fetch-stamps))))

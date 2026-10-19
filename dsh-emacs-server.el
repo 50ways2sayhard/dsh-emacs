@@ -37,7 +37,6 @@
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'json)
 (require 'url)
 (require 'url-parse)
 (require 'dsh-emacs-protocol)
@@ -677,25 +676,6 @@ to prompt again."
   "Generate a unique RPC request id."
   (format "emacs-%d-%d" (random 999999) (truncate (float-time))))
 
-(defun dsh-emacs--wrap-request (method params)
-  "Wrap METHOD and PARAMS into the DSH RPC envelope.
-PARAMS is the *content of the wire `args' object* (the method parameter
-fields, e.g. ((request . ((sessionId . S)))) or ((agentId . A))); the
-envelope always carries payload {args: {...}}, so nil PARAMS becomes
-`{}'.  METHOD must equal the HTTP endpoint (`<namespace>/<method>', e.g.
-\"session/list\" — `dsh-emacs--rpc-request'/`dsh-emacs--rpc-async'
-build the /api/ URL from it).  Returns a JSON string."
-  (let ((envelope `((type . "client-request")
-                    (rpcId . ,(dsh-emacs--rpc-id))
-                    (method . ,method)
-                    ;; The payload must be exactly an object `args' whose
-                    ;; fields are the method parameter names.  An empty
-                    ;; Elisp list encodes as JSON null, so use an empty hash
-                    ;; table to produce {} for parameter-less methods.
-                    (payload . ,(list (cons 'args
-                                            (or params (make-hash-table))))))))
-    (json-encode envelope)))
-
 (defun dsh-emacs--decode-response-body ()
   "Read the current HTTP JSON body after the caller has removed its headers.
 Normalize a unibyte body to UTF-8 before passing it to the protocol reader.
@@ -720,7 +700,8 @@ METHOD is the `namespace/method' endpoint (e.g. \"session/list\") and
 PARAMS the wire `args' content (an alist, or nil for parameter-less
 methods).  Returns (ok-p . value) or nil."
   (let* ((url (format "%s/api/%s" (dsh-emacs--server-base-url) method))
-         (json-data (dsh-emacs--wrap-request method params))
+         (json-data (dsh-protocol-rpc-request-json
+                     method (dsh-emacs--rpc-id) params))
          (url-request-noninteractive t)
          (url-request-method "POST")
          (url-request-extra-headers
@@ -846,11 +827,12 @@ which is what makes the octet-stream upload byte-exact."
 (defun dsh-emacs--rpc-async (method params callback)
   "Asynchronous RPC request; CALLBACK receives (ok-p value-or-error).
 METHOD is the `namespace/method' endpoint, PARAMS the wire `args'
-content — see `dsh-emacs--wrap-request'."
+content — see `dsh-protocol-rpc-request-json'."
   (dsh-emacs--http-post
    (format "%s/api/%s" (dsh-emacs--server-base-url) method)
    "application/json"
-   (encode-coding-string (dsh-emacs--wrap-request method params) 'utf-8)
+   (encode-coding-string
+    (dsh-protocol-rpc-request-json method (dsh-emacs--rpc-id) params) 'utf-8)
    (lambda (response)
      (let ((unwrapped (and response
                            (dsh-protocol-rpc-result--from-alist response))))

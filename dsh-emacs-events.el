@@ -23,7 +23,6 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'json)
 (require 'url-parse)
 (require 'dsh-emacs-protocol)
 (require 'dsh-emacs-server)
@@ -52,28 +51,6 @@
 (defun dsh-emacs-events--stream-id ()
   "Return a fresh client stream id for a `/api/remote.mux' logical stream."
   (format "emacs-%d-%d" (random 999999) (truncate (float-time))))
-
-(defun dsh-emacs-events--open-message (stream-id endpoint args)
-  "JSON text of a `/api/remote.mux' `open' message.
-Opens logical stream STREAM-ID at ENDPOINT (e.g. \"session/follow\")
-with ARGS, the content of the wire `args' object (an alist, or nil for
-no parameters) — the frame payload is exactly `{args: {...}}' (rpc.md
-§3.1/§3.2)."
-  (json-encode
-   `((type . "open")
-     (streamId . ,stream-id)
-     (endpoint . ,endpoint)
-     (payload . ,(list (cons 'args
-                             (or args (make-hash-table))))))))
-
-(defun dsh-emacs-events--cancel-message (stream-id)
-  "JSON text of a `/api/remote.mux' `cancel' message for STREAM-ID.
-Tells the host to close the logical stream STREAM-ID and stop sending its
-frames (rpc.md §3.1); the socket stays up for the other multiplexed
-streams.  Lets a caller retire one logical stream (e.g. the
-`workspace/follow' stream before it re-opens a fresh one for a re-baseline)
-without tearing down the whole core connection."
-  (json-encode `((type . "cancel") (streamId . ,stream-id))))
 
 ;; The list view (`*dsh-sessions*') additionally opens a core
 ;; `/api/remote.mux' connection carrying `$events' + `session/control' +
@@ -455,7 +432,7 @@ because the registration lives on the process."
       (process-send-string
        process
        (dsh-emacs-events--frame
-        1 (dsh-emacs-events--open-message stream-id endpoint args)))
+        1 (dsh-protocol-mux-open-json stream-id endpoint args)))
       stream-id)))
 
 (defun dsh-emacs-events-close-stream (process stream-id)
@@ -466,7 +443,7 @@ Safe on an unknown STREAM-ID or a dead PROCESS."
   (when (and (processp process) (process-live-p process))
     (process-send-string
      process
-     (dsh-emacs-events--frame 1 (dsh-emacs-events--cancel-message stream-id))))
+     (dsh-emacs-events--frame 1 (dsh-protocol-mux-cancel-json stream-id))))
   (when (processp process)
     (let* ((handlers (process-get process 'dsh-emacs-stream-handlers))
            (entry (assoc stream-id handlers))
@@ -511,16 +488,11 @@ The opening snapshot replaces the local revision and attempt baseline."
                               (process-put process 'dsh-emacs-follow-stream-id id)
                               id)))
              (chat (dsh-emacs-events--chat process))
-             (request `((address . ,(dsh-protocol-session-address-json
-                                     session-id (process-get process 'dsh-emacs-follow-address)))
-                        (assistantStream . t)))
-             (request (if (bound-and-true-p dsh-emacs-history-window)
-                          (append request
-                                  `((maxMessages . ,dsh-emacs-history-window)))
-                        request))
-             (json (dsh-emacs-events--open-message
+             (json (dsh-protocol-mux-open-json
                     stream-id "session/follow"
-                    `((request . ,request)))))
+                    (dsh-protocol-session-follow-request
+                     session-id (process-get process 'dsh-emacs-follow-address)
+                     (bound-and-true-p dsh-emacs-history-window)))))
         (when (buffer-live-p chat)
           (with-current-buffer chat
             (setq dsh-emacs--assistant-stream-revision nil
@@ -577,7 +549,7 @@ cannot affect the replacement snapshot. Keep the socket and durable anchor."
         (when old
           (process-send-string
            process (dsh-emacs-events--frame
-                    1 (dsh-emacs-events--cancel-message old)))))
+                    1 (dsh-protocol-mux-cancel-json old)))))
       (process-put process 'dsh-emacs-follow-stream-id
                    (dsh-emacs-events--stream-id))
       (dsh-emacs-modeline-reset-execution)
@@ -1665,7 +1637,7 @@ re-opening (never two live workspace streams on one socket)."
              dsh-emacs--chat-buffers)
     (dolist (endpoint '("session/control" "workspace/follow" "$events"))
       (let* ((stream-id (dsh-emacs-events--stream-id))
-             (json (dsh-emacs-events--open-message stream-id endpoint nil)))
+             (json (dsh-protocol-mux-open-json stream-id endpoint nil)))
         (when (equal endpoint "workspace/follow")
           (process-put process 'dsh-emacs-host-ws-stream-id stream-id))
         (process-send-string process
@@ -1694,9 +1666,9 @@ was sent."
         (when old
           (process-send-string
            proc (dsh-emacs-events--frame
-                 1 (dsh-emacs-events--cancel-message old)))))
+                 1 (dsh-protocol-mux-cancel-json old)))))
       (let* ((stream-id (dsh-emacs-events--stream-id))
-             (json (dsh-emacs-events--open-message
+             (json (dsh-protocol-mux-open-json
                     stream-id "workspace/follow" nil)))
         (process-put proc 'dsh-emacs-host-ws-stream-id stream-id)
         (process-send-string proc (dsh-emacs-events--frame 1 json)))

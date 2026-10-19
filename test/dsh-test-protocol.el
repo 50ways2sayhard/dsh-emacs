@@ -827,5 +827,141 @@
                    (dsh-protocol-intended-diff--from-alist
                     "write" "{\"file_path\":\"a.txt\",\"content\":\"x\"}")))))
 
+(ert-deftest dsh-emacs-test-protocol-outbound-simple-request-contracts ()
+  :tags '(dsh-unit)
+  (dolist (case
+           '((dsh-protocol-session-rename-request ("s" "Title")
+              "{\"request\":{\"sessionId\":\"s\",\"title\":\"Title\"}}")
+             (dsh-protocol-session-cancel-request ("s")
+              "{\"request\":{\"sessionId\":\"s\"}}")
+             (dsh-protocol-session-attachment-request ("s" "image-2")
+              "{\"request\":{\"sessionId\":\"s\",\"attachmentId\":\"image-2\"}}")
+             (dsh-protocol-workspace-archive-session-request ("s")
+              "{\"request\":{\"sessionId\":\"s\"}}")
+             (dsh-protocol-workspace-create-request ("/project")
+              "{\"request\":{\"path\":\"/project\"}}")
+             (dsh-protocol-workspace-rename-request ("w" "Workspace")
+              "{\"request\":{\"workspaceId\":\"w\",\"title\":\"Workspace\"}}")
+             (dsh-protocol-workspace-delete-request ("w")
+              "{\"request\":{\"workspaceId\":\"w\"}}")
+             (dsh-protocol-job-list-request ("s")
+              "{\"request\":{\"sessionId\":\"s\"}}")
+             (dsh-protocol-job-kill-request ("s" "job-2")
+              "{\"request\":{\"sessionId\":\"s\",\"jobId\":\"job-2\"}}")
+             (dsh-protocol-skills-list-request ("s")
+              "{\"request\":{\"sessionId\":\"s\"}}")))
+    (pcase-let ((`(,encoder ,arguments ,json) case))
+      (ert-info ((symbol-name encoder))
+        (let ((args (apply encoder arguments)))
+          (should (equal args (dsh-protocol-read-json json)))
+          (should (equal (dsh-protocol-write-json args) json)))))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-optional-request-fields ()
+  :tags '(dsh-unit)
+  (dolist (case
+           '((dsh-protocol-session-select-model-request ("s" "p" "m" nil)
+              "{\"request\":{\"sessionId\":\"s\",\"provider\":\"p\",\"model\":\"m\"}}")
+             (dsh-protocol-session-select-model-request ("s" "p" "m" "high")
+              "{\"request\":{\"sessionId\":\"s\",\"provider\":\"p\",\"model\":\"m\",\"reasoningEffort\":\"high\"}}")
+             (dsh-protocol-workspace-insert-before-request ("w" nil)
+              "{\"request\":{\"workspaceId\":\"w\"}}")
+             (dsh-protocol-workspace-insert-before-request ("w" "before")
+              "{\"request\":{\"workspaceId\":\"w\",\"beforeWorkspaceId\":\"before\"}}")
+             (dsh-protocol-job-follow-request ("job-2")
+              "{\"request\":{\"jobId\":\"job-2\"}}")
+             (dsh-protocol-job-follow-request ("job-2" "s")
+              "{\"request\":{\"jobId\":\"job-2\",\"sessionId\":\"s\"}}")))
+    (pcase-let ((`(,encoder ,arguments ,json) case))
+      (ert-info ((format "%s %S" encoder arguments))
+        (let ((args (apply encoder arguments)))
+          (should (equal args (dsh-protocol-read-json json)))
+          (should (equal (dsh-protocol-write-json args) json)))))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-session-list-empty-object ()
+  :tags '(dsh-unit)
+  (let ((args (dsh-protocol-session-list-request)))
+    (should (= (length args) 1))
+    (should (eq (caar args) '_request))
+    (should (hash-table-p (cdar args)))
+    (should (= (hash-table-count (cdar args)) 0))
+    (should (equal (dsh-protocol-write-json args) "{\"_request\":{}}"))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-follow-address-and-window ()
+  :tags '(dsh-unit)
+  (dolist (subagent '(nil t))
+    (dolist (limit '(nil 0 8))
+      (let* ((address (and subagent
+                           (dsh-protocol-subagent-address-create
+                            "parent" "child" "continuable")))
+             (wire-address (if subagent
+                               '((kind . "subagent") (parentSessionId . "parent")
+                                 (childSessionId . "child") (mode . "continuable"))
+                             '((kind . "session") (sessionId . "s"))))
+             (args (dsh-protocol-session-follow-request "s" address limit))
+             (expected `((request . ((address . ,wire-address)
+                                    (assistantStream . t)
+                                    ,@(when limit `((maxMessages . ,limit)))))))
+             (json (concat
+                    "{\"request\":{\"address\":"
+                    (if subagent
+                        "{\"kind\":\"subagent\",\"parentSessionId\":\"parent\",\"childSessionId\":\"child\",\"mode\":\"continuable\"}"
+                      "{\"kind\":\"session\",\"sessionId\":\"s\"}")
+                    ",\"assistantStream\":true"
+                    (if limit (format ",\"maxMessages\":%d" limit) "") "}}")))
+        (ert-info ((format "subagent=%S limit=%S" subagent limit))
+          (should (equal args expected))
+          (should (equal (dsh-protocol-write-json args) json)))))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-prompt-caption-parts-and-modes ()
+  :tags '(dsh-unit)
+  (dolist (mode '("queue" "steer"))
+    (dolist (attachments '(nil t))
+      (let* ((parts (and attachments
+                         '(((type . "image") (mediaType . "image/png")
+                            (data . "aW1n") (name . "image.png"))
+                           ((type . "file") (receiptId . "receipt-2")))))
+             (content (dsh-protocol-prompt-content "caption" parts))
+             (expected-content
+              (if attachments
+                  [((type . "text") (text . "caption"))
+                   ((type . "image") (mediaType . "image/png")
+                    (data . "aW1n") (name . "image.png"))
+                   ((type . "file") (receiptId . "receipt-2"))]
+                [((type . "text") (text . "caption"))]))
+             (args (dsh-protocol-session-prompt-request
+                    "s" "request-2" mode content "UTC"))
+             (json (concat
+                    "{\"request\":{\"requestId\":\"request-2\",\"sessionId\":\"s\",\"mode\":\""
+                    mode "\",\"content\":[{\"type\":\"text\",\"text\":\"caption\"}"
+                    (if attachments
+                        ",{\"type\":\"image\",\"mediaType\":\"image/png\",\"data\":\"aW1n\",\"name\":\"image.png\"},{\"type\":\"file\",\"receiptId\":\"receipt-2\"}"
+                      "")
+                    "],\"clientTimeZone\":\"UTC\"}}")))
+        (ert-info ((format "mode=%s attachments=%S" mode attachments))
+          (should (equal content expected-content))
+          (should (equal args
+                         `((request . ((requestId . "request-2") (sessionId . "s")
+                                       (mode . ,mode) (content . ,expected-content)
+                                       (clientTimeZone . "UTC"))))))
+          (should (equal (dsh-protocol-write-json args) json)))))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-queue-action-contracts ()
+  :tags '(dsh-unit)
+  (dolist (case '((((kind . "remove")) "{\"kind\":\"remove\"}")
+                  (((kind . "steer")) "{\"kind\":\"steer\"}")
+                  (((kind . "edit")
+                    (content . [((type . "text") (text . "replacement"))]))
+                   "{\"kind\":\"edit\",\"content\":[{\"type\":\"text\",\"text\":\"replacement\"}]}")))
+    (pcase-let* ((`(,action ,action-json) case)
+                 (args (dsh-protocol-session-update-queue-request
+                        "s" "item-2" action)))
+      (ert-info ((cdr (assq 'kind action)))
+        (should (equal args
+                       `((request . ((sessionId . "s") (itemId . "item-2")
+                                     (action . ,action))))))
+        (should (equal (dsh-protocol-write-json args)
+                       (concat "{\"request\":{\"sessionId\":\"s\",\"itemId\":\"item-2\",\"action\":"
+                               action-json "}}")))))))
+
 (provide 'dsh-test-protocol)
 ;;; dsh-test-protocol.el ends here

@@ -1701,8 +1701,7 @@ or nil when the RPC fails or the payload is malformed."
   (when (and session-id attachment-id)
     (dsh-emacs--rpc-async
      "session/attachment"
-     `((request . ((sessionId . ,session-id)
-                   (attachmentId . ,attachment-id))))
+     (dsh-protocol-session-attachment-request session-id attachment-id)
      (lambda (ok value)
        ;; The callback may run inside a process filter: swallow the C-g quit.
        (condition-case nil

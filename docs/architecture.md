@@ -506,6 +506,26 @@ Both paths return symbol-keyed alists, vector arrays, nil for null and
 still owns UTF-8 decoding and error reporting. See
 [112](../postmortem/112-native-wire-json.md).
 
+Outbound `*-request` functions return method argument alists for session RPCs,
+workspace mutations, job streams/kill and skills/list. Both model and effort
+pickers use `dsh-protocol-session-select-model-request`. The same boundary owns
+prompt text content and session/follow arguments. Absent effort, ordering target,
+job scope and follow limit fields are omitted, not sent as null; session/list
+retains its distinct `_request: {}` parameter.
+Callers still choose endpoints and supply ids, modes, expanded paths, time zones
+and resolved attachments. Queue action and attachment-part subdocuments, plus
+commands, references, goals, providers and interaction requests remain with
+their feature owners for later batches.
+
+`dsh-protocol-rpc-request-json` and the mux open/cancel encoders own outgoing
+envelopes. `dsh-protocol-write-json` fixes null/false sentinels and compact
+formatting independently of user json.el settings. It intentionally uses the
+Lisp encoder: existing opaque question answers include list arrays that native
+`json-serialize` does not accept. Empty argument objects use hash tables; vector
+arrays, nil/null, t/true and `:json-false`/false retain their wire meaning.
+Transport still owns request/stream id generation, UTF-8 encoding and framing.
+See [140](../postmortem/140-outbound-request-encoders.md).
+
 dsh server responses arrive as decoded JSON alists (arrays as vectors). Their
 common structured payloads are normalized into `cl-defstruct` types here;
 single-value payloads can decode directly to a scalar. For the struct-backed
@@ -790,10 +810,11 @@ is the `client-request` envelope with `payload = {args: {...}}`:
 
 Feature modules require the server module for `dsh-emacs--rpc-request`,
 `dsh-emacs--rpc-async` and binary `dsh-emacs--http-post`; these functions no
-longer depend on loading the entry point. Session arguments and other
-endpoint-specific outbound payloads stay with their feature owners. The
-server normalizes UTF-8 response bodies and reads JSON through protocol;
-`dsh-protocol-rpc-result--from-alist` still owns RPC versus upload envelopes.
+longer depend on loading the entry point. Protocol owns the migrated endpoint
+arguments and JSON envelopes described above; feature owners retain command
+policy and callbacks. The server normalizes UTF-8 response bodies and reads JSON
+through protocol; `dsh-protocol-rpc-result--from-alist` still owns RPC versus
+upload envelopes.
 
 The server also supplies authentication headers. HTTP requests leave Basic
 credentials in URL userinfo for the URL library and add the package-owned

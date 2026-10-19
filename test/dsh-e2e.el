@@ -755,7 +755,7 @@ DSH_E2E_PRESET selects the preset; existing chats and connections are preserved.
                              dsh-emacs-base-url))
                   (setq dsh-emacs-server-auth-token
                         (dsh-e2e--saved-auth-token)))
-                (dsh-e2e--rpc "session/list" (dsh-emacs--session-list-args))
+                (dsh-e2e--rpc "session/list" (dsh-protocol-session-list-request))
                 (dsh-e2e--pass "health-check")
 
                 ;; The normal entry point owns the core control/projection stream;

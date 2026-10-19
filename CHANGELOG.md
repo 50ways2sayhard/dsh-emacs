@@ -29,6 +29,9 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep requests independent of JSON customization**: RPC and WebSocket
+  requests retain their required booleans, nulls, arrays and empty objects
+  even when user json.el encoding settings differ. (rationale: postmortem/140)
 - **Keep running status across manual refresh**: `C-c C-r` preserves busy
   while reconnecting, even when the snapshot omits the original turn start;
   a completed turn is not revived by a stale session-list running flag.

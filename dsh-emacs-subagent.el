@@ -17,7 +17,6 @@
 (require 'dsh-emacs-server)
 (require 'dsh-emacs-tokens)
 
-(declare-function dsh-emacs--session-list-args "dsh-emacs" ())
 (defvar dsh-emacs--sessions)
 (defvar dsh-emacs--chat-buffers)
 (defvar dsh-emacs--buffer-session)
@@ -138,7 +137,7 @@ STATUS-ONLY means only the running flag changed, not Agent availability."
       (setq dsh-emacs--subagent-summary-request token)
       (with-current-buffer (get-buffer-create " *dsh-subagent-state*")
         (dsh-emacs--rpc-async
-         "session/list" (dsh-emacs--session-list-args)
+         "session/list" (dsh-protocol-session-list-request)
          (lambda (ok value)
            (when (eq token dsh-emacs--subagent-summary-request)
              (setq dsh-emacs--subagent-summary-request nil)

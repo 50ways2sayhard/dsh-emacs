@@ -1,5 +1,8 @@
 # 135 — Finish inbound RPC and embedded document boundaries
 
+Outbound-construction limitation partially superseded by
+[140](140-outbound-request-encoders.md).
+
 ## Background
 
 The event migration in [134](134-event-consumer-boundaries.md) left inbound

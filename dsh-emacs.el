@@ -429,16 +429,6 @@ Buffer-local alongside `dsh-emacs--input-history-pos'.")
 ;;;  Session management
 ;;; ---------------------------------------------------------------------------
 
-(defun dsh-emacs--session-list-args ()
-  "Wire `args' content for the `session/list' Remote method.
-The 0.1.2-rc.1 `session/list' descriptor declares a single parameter
-literally named `_request' (a reserved, usually-empty list request object) —
-not `request' like the other session methods.  Its value must be an object
-(`{}' for the unfiltered list), so the args alist carries `_request' whose
-value is an empty hash table (an empty Elisp list would encode as JSON
-`null' and fail boundary validation)."
-  (list (cons '_request (make-hash-table))))
-
 (defun dsh-emacs--absolute-cwd (cwd)
   "Return CWD as an absolute path.
 Without CWD, the current buffer's `default-directory' is the working
@@ -623,7 +613,7 @@ known value."
 ;;;###autoload
 (defun dsh-emacs-list-sessions--fetch ()
   "Fetch the session list via RPC and populate `dsh-emacs--sessions'."
-  (dsh-emacs--rpc-async "session/list" (dsh-emacs--session-list-args)
+  (dsh-emacs--rpc-async "session/list" (dsh-protocol-session-list-request)
                         (lambda (ok value)
                           (unwind-protect
                               (if ok
@@ -881,7 +871,7 @@ clearing the draft, using the last session identity confirmed by the server."
                         root dsh-emacs--workspaces)))
                (if (and root (not workspace))
                    (dsh-emacs--rpc-async
-                    "workspace/create" `((request . ((path . ,root))))
+                    "workspace/create" (dsh-protocol-workspace-create-request root)
                     (lambda (ok value) (step #'workspace-created ok value)))
                  (create))))))
       (step (lambda ()
@@ -1755,7 +1745,7 @@ preset, context snapshot, title and workspace in one round trip."
       ;; mode line through the shared sync (same source the cache refresh
       ;; uses for model/ctx), so the preset and its siblings stay consistent.
       (dsh-emacs--chat-buffer-preset-sync session-id (current-buffer))
-    (dsh-emacs--rpc-async "session/list" (dsh-emacs--session-list-args)
+    (dsh-emacs--rpc-async "session/list" (dsh-protocol-session-list-request)
                           (lambda (ok value)
                             (when ok
                               (let ((items (dsh-protocol-session-list--from-alist value)))
@@ -1777,7 +1767,7 @@ inverse.  Refreshes the archived set and the session list on success."
   (dsh-emacs-subagent-require 'mutate session-id)
   (dsh-emacs-server-ensure)
   (dsh-emacs--rpc-async "workspace/archiveSession"
-                        `((request . ((sessionId . ,session-id))))
+                        (dsh-protocol-workspace-archive-session-request session-id)
                         (lambda (ok value)
                           (if ok
                               (progn
@@ -1808,7 +1798,7 @@ and the session list."
   (dsh-emacs-subagent-require 'mutate session-id)
   (dsh-emacs-server-ensure)
   (dsh-emacs--rpc-async "workspace/unarchiveSession"
-                        `((request . ((sessionId . ,session-id))))
+                        (dsh-protocol-workspace-archive-session-request session-id)
                         (lambda (ok value)
                           (if ok
                               (progn
@@ -1836,8 +1826,7 @@ title prompt is prefilled with the session's current title."
   (dsh-emacs-subagent-require 'mutate session-id)
   (dsh-emacs-server-ensure)
   (dsh-emacs--rpc-async "session/rename"
-                        `((request . ((sessionId . ,session-id)
-                                      (title . ,new-title))))
+                        (dsh-protocol-session-rename-request session-id new-title)
                         (lambda (ok value)
                           (if ok
                               (progn
@@ -1882,7 +1871,7 @@ no immediate re-baseline is attempted on a not-yet-handshaken socket."
   (interactive "DWorkspace directory: ")
   (dsh-emacs-server-ensure)
   (dsh-emacs--rpc-async "workspace/create"
-                        `((request . ((path . ,(expand-file-name path)))))
+                        (dsh-protocol-workspace-create-request (expand-file-name path))
                         (lambda (ok value)
                           (if ok
                               (progn
@@ -1898,8 +1887,7 @@ no immediate re-baseline is attempted on a not-yet-handshaken socket."
          (read-string "New workspace title: ")))
   (dsh-emacs-server-ensure)
   (dsh-emacs--rpc-async "workspace/rename"
-                        `((request . ((workspaceId . ,workspace-id)
-                                      (title . ,new-title))))
+                        (dsh-protocol-workspace-rename-request workspace-id new-title)
                         (lambda (ok value)
                           (if ok
                               (progn
@@ -1917,7 +1905,7 @@ no immediate re-baseline is attempted on a not-yet-handshaken socket."
        (keyboard-quit))))
   (dsh-emacs-server-ensure)
   (dsh-emacs--rpc-async "workspace/delete"
-                        `((request . ((workspaceId . ,workspace-id))))
+                        (dsh-protocol-workspace-delete-request workspace-id)
                         (lambda (ok value)
                           (if ok
                               (progn
@@ -1939,10 +1927,8 @@ repaints)."
            (and (not (string-empty-p s)) s))))
   (dsh-emacs-server-ensure)
   (dsh-emacs--rpc-async "workspace/insertBefore"
-                        (if before-workspace-id
-                            `((request . ((workspaceId . ,workspace-id)
-                                          (beforeWorkspaceId . ,before-workspace-id))))
-                          `((request . ((workspaceId . ,workspace-id)))))
+                        (dsh-protocol-workspace-insert-before-request
+                         workspace-id before-workspace-id)
                         (lambda (ok value)
                           (if ok
                               (progn
@@ -2510,7 +2496,7 @@ until the next wake (see `dsh-emacs-list-queue')."
                               "subagents/interruptByParent" "session/cancel")
                           (if dsh-emacs--buffer-subagent
                               (dsh-protocol-subagent-stop-request dsh-emacs--buffer-subagent)
-                            `((request . ((sessionId . ,session-id)))))
+                            (dsh-protocol-session-cancel-request session-id))
                           (lambda (ok value)
                             (if ok
                                 (progn
@@ -2877,13 +2863,6 @@ once every staged file has become a receipt."
          message :parts parts :staged staged
          :input-consumed input-consumed)))))
 
-(defun dsh-emacs--attachments-prompt-content (message parts)
-  "Return the `session/prompt' `content' array for MESSAGE and PARTS.
-PARTS are tagged wire content parts — `{type: \"image\", …}' carrying the
-bytes inline, or `{type: \"file\", receiptId}' — appended after the
-leading `{type: \"text\"}' part, so the model sees the caption first."
-  (vconcat `(((type . "text") (text . ,message))) parts))
-
 (cl-defun dsh-emacs--submit-deferred
     (message &key parts mode staged input-consumed)
   "Submit MESSAGE into the running turn's inbox as MODE.
@@ -2917,15 +2896,14 @@ against); genuinely parked items keep their feedback."
                  (_ (if (eq dsh-emacs-busy-enter-behavior 'steer) "steer" "queue"))))
          (session-id (dsh-emacs--active-session-id))
          (input-buffer (current-buffer))
-         (content (dsh-emacs--attachments-prompt-content message parts))
+         (content (dsh-protocol-prompt-content message parts))
          (payload (if dsh-emacs--buffer-subagent
                       (dsh-protocol-subagent-prompt-request
                        dsh-emacs--buffer-subagent (dsh-emacs--rpc-id) mode message
                        (dsh-emacs--client-time-zone))
-                    `((request . ((requestId . ,(dsh-emacs--rpc-id))
-                                  (sessionId . ,session-id) (mode . ,mode)
-                                  (content . ,content)
-                                  (clientTimeZone . ,(dsh-emacs--client-time-zone))))))))
+                    (dsh-protocol-session-prompt-request
+                     session-id (dsh-emacs--rpc-id) mode content
+                     (dsh-emacs--client-time-zone)))))
     ;; Same web-style feel as the immediate path: the draft leaves the
     ;; input area and lands in history right away, before the RPC settles.
     (unless parts
@@ -3006,12 +2984,10 @@ input and staged attachments are empty (a newer draft is left alone)."
                            dsh-emacs--buffer-session
                            (current-buffer)))
          (input-buffer (current-buffer))
-         (content (dsh-emacs--attachments-prompt-content message parts))
-         (payload `((request . ((requestId . ,(dsh-emacs--rpc-id))
-                                (sessionId . ,session-id)
-                                (mode . "queue")
-                                (content . ,content)
-                                (clientTimeZone . ,(dsh-emacs--client-time-zone))))))
+         (content (dsh-protocol-prompt-content message parts))
+         (payload (dsh-protocol-session-prompt-request
+                   session-id (dsh-emacs--rpc-id) "queue" content
+                   (dsh-emacs--client-time-zone)))
          ;; This submit's own rollback record (nil for an empty message), kept
          ;; for the failure branch: the echo is tied to the submit that made it,
          ;; not re-found by text.
@@ -4037,10 +4013,8 @@ the filter as \"error in process filter: Quit\"."
                                               (dsh-protocol-model-selection-reasoning-effort
                                                current)))))))
             (dsh-emacs--rpc-async "session/selectModel"
-              `((request . ((sessionId . ,session-id)
-                            (provider . ,provider)
-                            (model . ,model)
-                            ,@(and effort-id `((reasoningEffort . ,effort-id))))))
+              (dsh-protocol-session-select-model-request
+                session-id provider model effort-id)
               (lambda (ok2 value2)
                 (if ok2
                     (progn
@@ -4130,10 +4104,8 @@ model declares no `reasoning' options; C-g cancels the whole read."
                       (dsh-emacs--model-effort-default-id reasoning effort))))
                 (dsh-emacs--rpc-async
                  "session/selectModel"
-                 `((request . ((sessionId . ,session-id)
-                               (provider . ,(or provider entry-provider))
-                               (model . ,model)
-                               (reasoningEffort . ,effort-id))))
+                 (dsh-protocol-session-select-model-request
+                  session-id (or provider entry-provider) model effort-id)
                  (lambda (ok2 value2)
                    (if ok2
                        (progn
@@ -4295,7 +4267,7 @@ rejected."
                                 (dsh-emacs--attachment-part attachment)))
                             attachments)))
          (event `((type . "user/message")
-                  (data . ((content . ,(dsh-emacs--attachments-prompt-content
+                  (data . ((content . ,(dsh-protocol-prompt-content
                                         message blocks))))))
          (region (dsh-emacs-render--insert-user-block event nil)))
     (when region
@@ -4607,7 +4579,7 @@ matching runs only for a local server and a non-remote directory."
 (defun dsh-emacs-health ()
   "Check the dsh web service status."
   (interactive)
-  (dsh-emacs--rpc-async "session/list" (dsh-emacs--session-list-args)
+  (dsh-emacs--rpc-async "session/list" (dsh-protocol-session-list-request)
                         (lambda (ok value)
                           (if ok
                               (message "dsh service is running")

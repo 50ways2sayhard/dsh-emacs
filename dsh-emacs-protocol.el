@@ -14,6 +14,8 @@
 ;; Their `--from-alist' constructors own decoded fields; business code reads
 ;; those fields through accessors.  Opaque payloads stay with their existing
 ;; consumers until their own protocol views are introduced.
+;; Outbound `*-request' encoders own the migrated endpoint arguments; RPC and
+;; mux envelopes use `dsh-protocol-write-json' with fixed wire JSON settings.
 ;;
 ;; Structure overview (endpoint to protocol):
 ;;
@@ -93,6 +95,19 @@ to the transport boundary.  Input must already be decoded from UTF-8."
           (json-null nil)
           (json-false :json-false))
       (if string (json-read-from-string string) (json-read)))))
+
+(defun dsh-protocol-write-json (value)
+  "Encode wire VALUE independently of user json.el settings.
+Use nil for null, `:json-false' for false, t for true, alists or hash
+tables for objects and vectors for arrays.  Retain json.el's list-array
+support for opaque payloads such as question answers; native serialization
+is not a drop-in replacement for those lists.  Errors propagate to callers."
+  (let ((json-null nil)
+        (json-false :json-false)
+        (json-encoding-pretty-print nil)
+        (json-encoding-separator ",")
+        (json-encoding-object-sort-predicate nil))
+    (json-encode value)))
 
 (defun dsh-protocol--list (value)
   "JSON VALUE (list or vector) as a proper list."
@@ -1907,6 +1922,106 @@ wire array []; absent/null items retain the control-baseline route."
        ("waterfall" (dsh-protocol-waterfall--from-alist frame))
        ("cancel" (dsh-protocol--field 'eventId frame))
        (_ frame)))))
+
+(defun dsh-protocol-rpc-request-json (method rpc-id args)
+  "Encode METHOD, RPC-ID and ARGS into a client-request envelope.
+ARGS is the method's parameter alist, or nil for no parameters.  Empty
+arguments must be an object, not null."
+  (dsh-protocol-write-json
+   `((type . "client-request") (rpcId . ,rpc-id) (method . ,method)
+     (payload . ((args . ,(or args (make-hash-table))))))))
+
+(defun dsh-protocol-mux-open-json (stream-id endpoint args)
+  "Encode a mux open frame for STREAM-ID at ENDPOINT with ARGS.
+Parameter-less endpoints still carry an empty args object."
+  (dsh-protocol-write-json
+   `((type . "open") (streamId . ,stream-id) (endpoint . ,endpoint)
+     (payload . ((args . ,(or args (make-hash-table))))))))
+
+(defun dsh-protocol-mux-cancel-json (stream-id)
+  "Encode a mux cancel frame for STREAM-ID."
+  (dsh-protocol-write-json `((type . "cancel") (streamId . ,stream-id))))
+
+(defun dsh-protocol-session-list-request ()
+  "Encode the unfiltered session/list arguments.
+Its parameter is named `_request', unlike other session methods, and its
+empty value must be an object rather than null."
+  (list (cons '_request (make-hash-table))))
+
+(defun dsh-protocol-session-select-model-request (session provider model effort)
+  "Encode model selection for SESSION, PROVIDER and MODEL.
+Omit reasoningEffort when EFFORT is nil."
+  `((request . ((sessionId . ,session) (provider . ,provider) (model . ,model)
+                ,@(when effort `((reasoningEffort . ,effort)))))))
+
+(defun dsh-protocol-session-rename-request (session title)
+  "Encode a rename of SESSION to TITLE."
+  `((request . ((sessionId . ,session) (title . ,title)))))
+
+(defun dsh-protocol-session-cancel-request (session)
+  "Encode cancellation of SESSION's running turn."
+  `((request . ((sessionId . ,session)))))
+
+(defun dsh-protocol-prompt-content (text parts)
+  "Encode prompt TEXT followed by resolved attachment PARTS."
+  (vconcat `(((type . "text") (text . ,text))) parts))
+
+(defun dsh-protocol-session-prompt-request (session id mode content zone)
+  "Encode SESSION's prompt with request ID, MODE, CONTENT and time ZONE."
+  `((request . ((requestId . ,id) (sessionId . ,session) (mode . ,mode)
+                (content . ,content) (clientTimeZone . ,zone)))))
+
+(defun dsh-protocol-session-update-queue-request (session item action)
+  "Encode ACTION on queue ITEM in SESSION."
+  `((request . ((sessionId . ,session) (itemId . ,item) (action . ,action)))))
+
+(defun dsh-protocol-session-attachment-request (session attachment)
+  "Encode a fetch of ATTACHMENT bytes from SESSION."
+  `((request . ((sessionId . ,session) (attachmentId . ,attachment)))))
+
+(defun dsh-protocol-session-follow-request (session address max-messages)
+  "Encode a follow of SESSION or ADDRESS, bounded by MAX-MESSAGES.
+Always request assistant stream frames; omit a nil message bound."
+  `((request . ((address . ,(dsh-protocol-session-address-json session address))
+                (assistantStream . t)
+                ,@(when max-messages `((maxMessages . ,max-messages)))))))
+
+(defun dsh-protocol-workspace-archive-session-request (session)
+  "Encode archiving or unarchiving SESSION in the workspace registry."
+  `((request . ((sessionId . ,session)))))
+
+(defun dsh-protocol-workspace-create-request (path)
+  "Encode creation of a workspace at absolute PATH."
+  `((request . ((path . ,path)))))
+
+(defun dsh-protocol-workspace-rename-request (workspace title)
+  "Encode a rename of WORKSPACE to TITLE."
+  `((request . ((workspaceId . ,workspace) (title . ,title)))))
+
+(defun dsh-protocol-workspace-delete-request (workspace)
+  "Encode deletion of WORKSPACE from the registry."
+  `((request . ((workspaceId . ,workspace)))))
+
+(defun dsh-protocol-workspace-insert-before-request (workspace before)
+  "Encode moving WORKSPACE before BEFORE, or to the end when nil."
+  `((request . ((workspaceId . ,workspace)
+                ,@(when before `((beforeWorkspaceId . ,before)))))))
+
+(defun dsh-protocol-job-list-request (session)
+  "Encode a background job roster subscription for SESSION."
+  `((request . ((sessionId . ,session)))))
+
+(defun dsh-protocol-job-follow-request (job &optional session)
+  "Encode following JOB, scoped to SESSION for session-owned jobs."
+  `((request . ((jobId . ,job) ,@(when session `((sessionId . ,session)))))))
+
+(defun dsh-protocol-job-kill-request (session job)
+  "Encode stopping JOB on behalf of SESSION."
+  `((request . ((sessionId . ,session) (jobId . ,job)))))
+
+(defun dsh-protocol-skills-list-request (session)
+  "Encode a skill catalog read for SESSION."
+  `((request . ((sessionId . ,session)))))
 
 (defun dsh-protocol-session-address-json (session-id &optional address)
   "Serialize SESSION-ID or its durable subagent ADDRESS."

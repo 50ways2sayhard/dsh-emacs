@@ -172,7 +172,7 @@ socket is a replacement.  No-op when CHAT has no session or no live socket."
                   dsh-emacs-jobs--stream
                   (dsh-emacs-events-open-stream
                    process "job/list"
-                   `((request . ((sessionId . ,session-id))))
+                   (dsh-protocol-job-list-request session-id)
                    "job/list"
                    (dsh-emacs-jobs--roster-handler chat)))))))))
 
@@ -410,9 +410,9 @@ therefore also the recovery path after a drop."
             (and (process-live-p process)
                  (dsh-emacs-events-open-stream
                   process "job/follow"
-                  `((request . ((jobId . ,(dsh-protocol-job-id job))
-                                ,@(when (dsh-protocol-job-owner job)
-                                    `((sessionId . ,session-id))))))
+                  (dsh-protocol-job-follow-request
+                   (dsh-protocol-job-id job)
+                   (and (dsh-protocol-job-owner job) session-id))
                   "job/follow"
                   (dsh-emacs-jobs--output-item buffer)))))
     (pop-to-buffer buffer)))
@@ -454,7 +454,7 @@ the owning agent its completion notice; the roster converges through the
       (user-error "No session is open"))
     (dsh-emacs--rpc-async
      "job/kill"
-     `((request . ((sessionId . ,session-id) (jobId . ,job-id))))
+     (dsh-protocol-job-kill-request session-id job-id)
      (lambda (ok value)
        (when (buffer-live-p chat)
          (with-current-buffer chat

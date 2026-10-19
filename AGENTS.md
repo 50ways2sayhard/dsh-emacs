@@ -197,8 +197,13 @@ whole report blindly.
 - On the inbound/decoding path, wire field names (`sessionId`,
   `archivedSessionIds`, …) must appear **only** in the `--from-alist`
   constructors inside `dsh-emacs-protocol.el`; business code reads decoded
-  fields through `dsh-protocol-*` accessors exclusively. Outbound request
-  payloads are not centralized yet (see postmortem/135)
+  fields through `dsh-protocol-*` accessors exclusively.
+- On the outbound path, session/workspace/job/skills request arguments and
+  RPC/mux envelopes belong to protocol `*-request` / `*-json` encoders.
+  Do not reintroduce inline bodies for migrated RPCs. Commands, references,
+  goals, providers, interactions and nested queue/attachment subdocuments
+  remain to migrate (see postmortem/140). RPC/mux JSON uses
+  `dsh-protocol-write-json`, not a caller-configured `json-encode`.
 - Business functions that must accept legacy test fixtures use the
   `dsh-protocol--struct` compat gate to take either a wire alist or an
   already-converted struct; wire arrays are vectors and are normalized to

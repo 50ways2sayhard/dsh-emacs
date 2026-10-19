@@ -97,7 +97,7 @@
 ;; top level, args under `payload` with the request wrapper `job/list` wants.
 (ert-deftest dsh-emacs-test-jobs-job-open-is-open-frame ()
   :tags '(dsh-unit)
-  (let* ((json (dsh-emacs-events--open-message
+  (let* ((json (dsh-protocol-mux-open-json
                 "s1" "job/list" '((request . ((sessionId . "sess-1"))))))
          (msg (json-read-from-string json))
          (payload (dsh-protocol--field "payload" msg))

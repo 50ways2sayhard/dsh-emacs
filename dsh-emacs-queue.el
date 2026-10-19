@@ -439,9 +439,7 @@ the instant the RPC succeeds, without waiting for the frame round-trip."
         (buf (current-buffer)))
     (dsh-emacs--rpc-async
      "session/updateQueue"
-     `((request . ((sessionId . ,session-id)
-                   (itemId . ,item-id)
-                   (action . ,action))))
+     (dsh-protocol-session-update-queue-request session-id item-id action)
      (lambda (ok value)
        (when (buffer-live-p buf)
          (with-current-buffer buf
@@ -539,9 +537,8 @@ anything: the text-only resubmit cannot preserve their attachments."
       (push id dsh-emacs--queue-deleted) ; delete on send, not a consumption
       (dsh-emacs--rpc-async
        "session/updateQueue"
-       `((request . ((sessionId . ,session-id)
-                     (itemId . ,id)
-                     (action . ((kind . "remove"))))))
+       (dsh-protocol-session-update-queue-request
+        session-id id '((kind . "remove")))
        (lambda (ok value)
          (when (buffer-live-p buf)
            (with-current-buffer buf

@@ -682,7 +682,7 @@
 ;; --- Test 93g: /api/remote.mux open message and downstream frame envelope ---
 (ert-deftest dsh-emacs-test-events-mux-open-message-shape ()
   :tags '(dsh-unit)
-  (let* ((json (dsh-emacs-events--open-message
+  (let* ((json (dsh-protocol-mux-open-json
                 "follow-1" "session/follow"
                 '((request . ((address . ((kind . "session")
                                           (sessionId . "s1"))))))))
@@ -702,12 +702,12 @@
 
 (ert-deftest dsh-emacs-test-events-mux-open-no-args-encodes-empty-object ()
   :tags '(dsh-unit)
-  (let* ((json (dsh-emacs-events--open-message "events-1" "$events" nil))
+  (let* ((json (dsh-protocol-mux-open-json "events-1" "$events" nil))
          (msg (json-read-from-string json))
          (args (assq 'args (dsh-protocol--field "payload" msg))))
-    ;; An empty object decodes to nil in json-read: the wire frame must still
-    ;; carry the `args' key (a `{}' value), never drop it.
+    ;; The reader collapses both {} and null to nil; inspect the wire too.
     (ert-info ((format "%s" "mux-open-no-args-encodes-empty-object"))
+      (should (string-match-p "\"payload\":{\"args\":{}}" json))
       (should (and args (null (cdr args)))))))
 
 (ert-deftest dsh-emacs-test-events-mux-malformed-input-stays-quiet ()
