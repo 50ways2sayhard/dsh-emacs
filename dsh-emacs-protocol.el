@@ -408,7 +408,8 @@ decide whether the sample is usable and which estimate to display."
                                       (v (and p (cdr (assq 'values p))))
                                       (ms (and v
                                                (cdr (assq 'modelSelection v)))))
-                                 (and ms (cdr (assq 'lastUsed ms))))))))
+                                 (dsh-protocol-model-selection-projection--from-alist
+                                  ms))))))
   "One `session/list' item."
   session-id
   title
@@ -558,6 +559,12 @@ only; CREATED is nil there)."
   provider
   model
   reasoning-effort)
+
+(defun dsh-protocol-model-selection-projection--from-alist (value)
+  "Decode the last-used model from modelSelection projection VALUE.
+The next selection is a future request choice, not the model last used."
+  (when-let* ((selection (dsh-protocol--field 'lastUsed value)))
+    (dsh-protocol-model-selection--from-alist selection)))
 
 (cl-defstruct (dsh-protocol-model-selection-result
                (:constructor dsh-protocol-model-selection-result--from-alist
@@ -1744,7 +1751,7 @@ SUBAGENTS is one complete batch.  GOAL-UPDATE-P distinguishes a missing/null
 goal, which clears the row, from a non-object value, which leaves it alone.
 QUESTIONS is a decoded state including its watermark, or nil to skip it.
 Plan is applied earlier; inbox and unknown projections have no follow consumer."
-  subagents title context permission goal goal-update-p questions)
+  subagents title context permission goal goal-update-p questions model-selection)
 
 (defun dsh-protocol-follow-projections--from-alist (baseline)
   "Decode the late projections in a follow BASELINE.
@@ -1764,6 +1771,9 @@ must surface after history and the assistant prefix have been applied."
      :permission (and apply-values
                       (dsh-protocol-permission-value--from-alist
                        (dsh-protocol--field 'permissions values)))
+     :model-selection (and apply-values
+                           (dsh-protocol-model-selection-projection--from-alist
+                            (dsh-protocol--field 'modelSelection values)))
      :goal (and goal-update-p
                 (dsh-protocol-goal-projection--from-alist raw-goal))
      :goal-update-p goal-update-p
@@ -1785,6 +1795,7 @@ Subagent cells need the enclosing update frame and are decoded separately."
   (pcase key
     ("contextPressure" (dsh-protocol-context-pressure--from-alist value))
     ("permissions" (dsh-protocol-permission-value--from-alist value))
+    ("modelSelection" (dsh-protocol-model-selection-projection--from-alist value))
     ("goal" (dsh-protocol-goal-projection--from-alist value))
     ("inbox" (dsh-protocol-queue-items-from-inbox value))
     ("plan" (dsh-protocol-plan--from-alist value seq))

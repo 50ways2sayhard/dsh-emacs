@@ -4,6 +4,146 @@
 
 (require 'dsh-test-support)
 
+(ert-deftest dsh-emacs-test-events-model-selection-projections-update-chat-and-cache ()
+  :tags '(dsh-unit)
+  (dolist (route '(increment control follow))
+    (dolist (cached '(nil t))
+      (with-temp-buffer
+        (dsh-emacs-mode)
+        (setq-local dsh-emacs--buffer-session "model-session")
+        (setq dsh-emacs--modeline-model "old-model"
+              dsh-emacs--modeline-provider "old-provider"
+              dsh-emacs--modeline-effort "old-effort")
+        (let* ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+               (dsh-emacs--subagent-catalogs (make-hash-table :test 'equal))
+               (dsh-emacs--sessions
+                (and cached (list (dsh-protocol-session--from-alist
+                                   '((sessionId . "model-session"))))))
+               (dsh-emacs-sessions-buffer (generate-new-buffer-name " *absent-list*"))
+               (selection '((lastUsed . ((provider . "new-provider")
+                                         (model . "new-model")))
+                            (next . ((provider . "next-provider")
+                                     (model . "next-model")))))
+               (baseline `((asOfSeq . 5)
+                           (values . ((modelSelection . ,selection))))))
+          (puthash "model-session" (current-buffer) dsh-emacs--chat-buffers)
+          (pcase route
+            ('increment
+             (dsh-emacs-events--host-apply-projection
+              nil `((sessionId . "model-session") (key . "modelSelection")
+                    (seq . 5) (value . ,selection))))
+            ('control
+             (dsh-emacs-events--host-control-baseline
+              nil `((projections . ((model-session . ,baseline))))))
+            ('follow
+             (dsh-emacs-events--apply-snapshot-projections "model-session" baseline)))
+          (ert-info ((format "route=%s cached=%s" route cached))
+            (should (equal dsh-emacs--modeline-model "new-model"))
+            (should (equal dsh-emacs--modeline-provider "new-provider"))
+            (should-not dsh-emacs--modeline-effort)
+            (when cached
+              (should (equal (dsh-protocol-model-selection-model
+                              (dsh-emacs--session-model-selection "model-session"))
+                             "new-model")))))))))
+
+(ert-deftest dsh-emacs-test-events-model-selection-refresh-replays-live-update ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (setq-local dsh-emacs--buffer-session "model-refresh")
+    (let* ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+           (dsh-emacs--sessions nil)
+           (dsh-emacs--host-refresh-depth 0)
+           (dsh-emacs--host-refresh-frames nil)
+           (dsh-emacs-sessions-buffer (generate-new-buffer-name " *absent-list*"))
+           callback)
+      (puthash "model-refresh" (current-buffer) dsh-emacs--chat-buffers)
+      (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+                 (lambda (_method _args done) (setq callback done)))
+                ((symbol-function 'dsh-emacs-list-workspaces) #'ignore))
+        (dsh-emacs-list-sessions--fetch)
+        (dolist (model '("new-model" "newest-model"))
+          (dsh-emacs-events--host-apply-projection
+           nil `((sessionId . "model-refresh") (key . "modelSelection")
+                 (value . ((lastUsed . ((provider . "new-provider")
+                                        (model . ,model))))))))
+        (funcall callback t
+                 '((items . [((sessionId . "model-refresh")
+                              (projections . ((values . ((modelSelection
+                                                          . ((lastUsed
+                                                              . ((model . "old-model"))))))))))])))
+        (should (equal dsh-emacs--modeline-model "newest-model"))
+        (should (equal (dsh-protocol-model-selection-model
+                        (dsh-emacs--session-model-selection "model-refresh"))
+                       "newest-model"))
+        (should (= dsh-emacs--host-refresh-depth 0))
+        (should-not dsh-emacs--host-refresh-frames)))))
+
+(ert-deftest dsh-emacs-test-events-model-selection-refresh-outlives-origin-chat ()
+  :tags '(dsh-unit)
+  (let ((origin (generate-new-buffer " *model-fetch-origin*"))
+        (dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+        (dsh-emacs--sessions nil)
+        (dsh-emacs--host-refresh-depth 0)
+        (dsh-emacs--host-refresh-frames nil)
+        callback owner)
+    (unwind-protect
+        (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+                   (lambda (_method _args done)
+                     (setq owner (current-buffer) callback done)))
+                  ((symbol-function 'dsh-emacs-list-workspaces) #'ignore))
+          (with-current-buffer origin (dsh-emacs-list-sessions--fetch))
+          (kill-buffer origin)
+          ;; Match HTTP dispatch: callbacks are dropped for dead owners.
+          (when (buffer-live-p owner)
+            (with-current-buffer owner (funcall callback t '((items . [])))))
+          (should (= dsh-emacs--host-refresh-depth 0))
+          (should-not dsh-emacs--host-refresh-frames))
+      (when (buffer-live-p origin) (kill-buffer origin)))))
+
+(ert-deftest dsh-emacs-test-events-model-selection-during-follow-history-wins ()
+  :tags '(dsh-unit)
+  (dolist (refresh '(nil t))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "model-snapshot")
+      (let* ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+             (dsh-emacs--subagent-catalogs (make-hash-table :test 'equal))
+             (dsh-emacs--sessions nil)
+             (dsh-emacs--host-refresh-depth 0)
+             (dsh-emacs--host-refresh-frames nil)
+             (dsh-emacs-sessions-buffer (generate-new-buffer-name " *absent-list*"))
+             (snapshot
+              (dsh-protocol-read-json
+               (concat "{\"cursor\":20,\"records\":[{\"type\":\"event\",\"event\":{"
+                       "\"type\":\"request/header\",\"seq\":10,\"data\":{\"header\":{"
+                       "\"config\":{\"model\":\"historical-model\"}}}}}],"
+                       "\"projections\":{\"asOfSeq\":20,\"values\":{\"modelSelection\":{"
+                       "\"lastUsed\":{\"model\":\"snapshot-model\"}}}}}"))))
+        (puthash "model-snapshot" (current-buffer) dsh-emacs--chat-buffers)
+        (when refresh (dsh-emacs-events--host-refresh-begin))
+        (cl-letf (((symbol-function 'dsh-emacs-render-history-events)
+                   (lambda (records &rest _)
+                     (dsh-emacs-events--host-apply-projection
+                      nil (dsh-protocol-read-json
+                           (concat "{\"sessionId\":\"model-snapshot\","
+                                   "\"key\":\"modelSelection\",\"value\":{"
+                                   "\"lastUsed\":{\"model\":\"live-model\"}}}")))
+                     ;; Rendering can resume with an older request after yielding.
+                     (dsh-emacs-modeline-note-header
+                      (cdr (assq 'event (car records)))))))
+          (dsh-emacs-events--follow-snapshot (current-buffer) snapshot))
+        (should (equal dsh-emacs--modeline-model "live-model"))
+        ;; A list response can install the row only after the live increment.
+        (setq dsh-emacs--sessions
+              (list (dsh-protocol-session--from-alist
+                     '((sessionId . "model-snapshot")))))
+        (dsh-emacs-events--host-refresh-drain)
+        (should (equal dsh-emacs--modeline-model "live-model"))
+        (should (equal (and refresh
+                            (dsh-protocol-model-selection-model
+                             (dsh-emacs--session-model-selection "model-snapshot")))
+                       (and refresh "live-model")))))))
+
 (ert-deftest dsh-emacs-test-events-follow-projections-run-after-history ()
   :tags '(dsh-unit)
   (dolist (decoded '(nil t))

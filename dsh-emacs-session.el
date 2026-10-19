@@ -1210,7 +1210,9 @@ session list and the follow/control projection frames)."
                            kind)))
         (message "%s" info)
         (when-let* ((selection (dsh-protocol-session-model-selection session))
-                    (sel (dsh-protocol-model-selection--from-alist selection))
+                    (sel (dsh-protocol--struct
+                          #'dsh-protocol-model-selection-p
+                          #'dsh-protocol-model-selection--from-alist selection))
                     (model (dsh-protocol-model-selection-model sel)))
           (message "%s | Model: %s (%s)" info model
                    (or (dsh-protocol-model-selection-provider sel) ""))))))))

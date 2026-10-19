@@ -29,6 +29,11 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep the model indicator in sync**: modelSelection updates from the live
+  control stream and follow snapshots now update both the session cache and
+  model/provider/effort segments, including switches made in another client.
+  Older list responses and history rendering no longer undo a model update
+  delivered during them. (rationale: postmortem/141)
 - **Keep requests independent of JSON customization**: RPC and WebSocket
   requests retain their required booleans, nulls, arrays and empty objects
   even when user json.el encoding settings differ. (rationale: postmortem/140)

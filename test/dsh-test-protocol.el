@@ -716,6 +716,82 @@
                             "Renamed")
                    (null d))))))
 
+(ert-deftest dsh-emacs-test-protocol-model-selection-projection-last-used-only ()
+  :tags '(dsh-unit)
+  (dolist (wire
+           '(((lastUsed . ((provider . "used-provider") (model . "used-model")
+                           (reasoningEffort . "high")))
+              (next . ((provider . "next-provider") (model . "next-model"))))
+             (("lastUsed" . (("provider" . "used-provider")
+                             ("model" . "used-model")
+                             ("reasoningEffort" . "high")))
+              ("next" . (("provider" . "next-provider")
+                         ("model" . "next-model"))))))
+    (let ((selection
+           (dsh-protocol-model-selection-projection--from-alist wire)))
+      (should (dsh-protocol-model-selection-p selection))
+      (should (equal "used-provider"
+                     (dsh-protocol-model-selection-provider selection)))
+      (should (equal "used-model"
+                     (dsh-protocol-model-selection-model selection)))
+      (should (equal "high"
+                     (dsh-protocol-model-selection-reasoning-effort selection)))))
+  (dolist (wire
+           '(nil
+             ((next . ((provider . "next-provider") (model . "next-model"))))
+             ((lastUsed . nil)
+              (next . ((provider . "next-provider") (model . "next-model"))))
+             (("lastUsed" . nil)
+              ("next" . (("provider" . "next-provider")
+                         ("model" . "next-model"))))))
+    (should-not (dsh-protocol-model-selection-projection--from-alist wire))))
+
+(ert-deftest dsh-emacs-test-protocol-model-selection-projection-surfaces ()
+  :tags '(dsh-unit)
+  (dolist (effort '(nil "high"))
+    (let* ((projection
+            `((lastUsed . ((provider . "used-provider") (model . "used-model")
+                           ,@(when effort `((reasoningEffort . ,effort)))))
+              (next . ((provider . "next-provider") (model . "next-model")
+                       (reasoningEffort . "low")))))
+           (baseline `((asOfSeq . 23) (values (modelSelection . ,projection))))
+           (row (dsh-protocol-session--from-alist
+                 `((sessionId . "model-session") (projections . ,baseline))))
+           (increment (dsh-protocol-projection--from-alist
+                       `((sessionId . "model-session") (key . "modelSelection")
+                         (seq . 24) (value . ,projection))))
+           (control (dsh-protocol-control-session--from-alist
+                     (cons "model-session" baseline)))
+           (control-model
+            (cl-find "modelSelection"
+                     (dsh-protocol-control-session-projections control)
+                     :key #'dsh-protocol-projection-key :test #'equal))
+           (snapshot (dsh-protocol-follow-snapshot--from-alist
+                      `((cursor . 23) (records . [])
+                        (projections . ,baseline))))
+           (follow (dsh-protocol-follow-projections--from-alist
+                    (dsh-protocol-follow-snapshot-projections snapshot))))
+      (should (equal "model-session"
+                     (dsh-protocol-projection-session-id increment)))
+      (should (equal "model-session"
+                     (dsh-protocol-projection-session-id control-model)))
+      (dolist (surface
+               (list (cons 'row (dsh-protocol-session-model-selection row))
+                     (cons 'increment (dsh-protocol-projection-value increment))
+                     (cons 'control (dsh-protocol-projection-value control-model))
+                     (cons 'follow
+                           (dsh-protocol-follow-projections-model-selection follow))))
+        (ert-info ((format "surface=%s effort=%S" (car surface) effort))
+          (let ((selection (cdr surface)))
+            (should (dsh-protocol-model-selection-p selection))
+            (should (equal "used-provider"
+                           (dsh-protocol-model-selection-provider selection)))
+            (should (equal "used-model"
+                           (dsh-protocol-model-selection-model selection)))
+            (should (equal effort
+                           (dsh-protocol-model-selection-reasoning-effort
+                            selection)))))))))
+
 ;; session/selectModel response: {selected}
 (ert-deftest dsh-emacs-test-protocol-protocol-model-selection-result ()
   :tags '(dsh-unit)

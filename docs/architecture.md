@@ -562,9 +562,10 @@ protocol field changes stay in the decoder. Covered payloads:
   Plan before history rendering, then replays the assistant prefix and applies
   the remaining projections. The latter decode at that late application point
   into `dsh-protocol-follow-projections`: a complete subagent batch, title,
-  context, permission, goal/update flag and questions. Missing/null goal clears
-  the row; a non-object goal is skipped. Questions apply to the current follow
-  chat, after its cards exist. This path does not consume inbox or reapply Plan.
+  context, permission, model selection, goal/update flag and questions.
+  Missing/null goal clears the row; a non-object goal is skipped. Questions apply
+  to the current follow chat, after its cards exist. This path does not consume
+  inbox or reapply Plan.
   Keeping the late decoder separate also preserves history/prefix application
   before a migration-required error. See
   [128](../postmortem/128-follow-projection-view.md).
@@ -639,6 +640,15 @@ protocol field changes stay in the decoder. Covered payloads:
   `model-catalog-entry` → `reasoning` → `effort`, plus
   `dsh-protocol-model-selection` for `current`
 - `session/selectModel` → `dsh-protocol-model-selection-result` (selected)
+- `modelSelection.lastUsed` is decoded once to `dsh-protocol-model-selection`
+  in session rows, control baselines/increments and follow snapshots. Live
+  updates replace the cached row selection and its chat's model/provider/effort
+  without another RPC. Internal list fetches record/replay model updates just
+  like public refreshes; a stable internal callback buffer keeps global refresh
+  cleanup independent of a chat's lifetime. Snapshot history can yield to newer
+  control updates; scoped snapshot slots keep those live values authoritative at
+  late projection application, without comparing cached and connected sequence domains.
+  See [141](../postmortem/141-live-model-selection.md).
 - `agentPresets/list` → `dsh-protocol-agent-preset-list` (presets,
   mode-selection-enabled) → `dsh-protocol-agent-preset` (id, is-default, name,
   description, broken) — dsh 0.1.7 dropped the row's `trust` and the roster's

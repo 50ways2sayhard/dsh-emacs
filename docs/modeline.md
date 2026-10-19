@@ -88,9 +88,13 @@ Available stats segments:
 - **branch**: git branch name (auto-detected)
 - **provider**: provider id serving the model (e.g. `deepseek`), opt-in — the
   provider also rides the model segment's tooltip
-- **model**: current model name (fed live from `request/header` / `request/context`)
+- **model**: last-used model name, seeded from the session list and kept live
+  by `modelSelection.lastUsed` in control/follow projections, plus
+  `request/header` / `request/context` events; switches made in another client
+  update the cached selection and the model/provider/effort segments too
 - **effort**: reasoning effort — the `reasoningEffort` chosen via the model
-  picker, or the one the host announces in `request/header` (e.g. `high`)
+  picker, or the one the host announces in `request/header` or the model
+  projection (e.g. `high`); a model projection without effort clears an old one
 - **preset**: agent preset of the session (`agentPreset`, e.g. `standard` / `code`)
 - **permission**: the `permissions` session projection's current value, drawn
   as a shield icon so it costs one cell: the dsh-web SVG shield (check =

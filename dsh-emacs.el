@@ -561,8 +561,8 @@ fetch there re-runs this sync and fills the snapshot in)."
 
 (defun dsh-emacs--session-model-selection (session-id)
   "The cached `modelSelection' struct for SESSION-ID, or nil.
-Reads the session row's `modelSelection' projection (`lastUsed') and wraps
-it in `dsh-protocol-model-selection' so business code reads
+Reads the session row's decoded `modelSelection' projection (`lastUsed')
+as a `dsh-protocol-model-selection' so business code reads
 `provider'/'model'/'reasoning-effort' through accessors (the wire
 `lastUsed' alist keys stay inside the protocol layer).  Nil when the row
 is unknown or has no projection yet (fresh session before its first run)."
@@ -570,9 +570,11 @@ is unknown or has no projection yet (fresh session before its first run)."
     (when item
       (let ((selection (dsh-protocol-session-model-selection item)))
         (and selection
-             (dsh-protocol-model-selection--from-alist selection))))))
+             (dsh-protocol--struct
+              #'dsh-protocol-model-selection-p
+              #'dsh-protocol-model-selection--from-alist selection))))))
 
-(defun dsh-emacs--chat-buffer-model-sync (session-id buf)
+(defun dsh-emacs--chat-buffer-model-sync (session-id buf &optional selection)
   "Feed BUF's mode-line model/effort/provider for SESSION-ID.
 The authoritative (provider, model, reasoningEffort) triple comes from
 the cached session row's `modelSelection' projection (`lastUsed'); the
@@ -581,11 +583,13 @@ case nothing is touched and `dsh-emacs-default-model' remains the
 segment-level fallback — genuinely right for a session just created
 with it.  The projection rides `session/list' rows and the follow/control
 projection frames, so the feed is re-run by
-`dsh-emacs--chat-buffers-sync-all' whenever the cache refreshes."
+`dsh-emacs--chat-buffers-sync-all' whenever the cache refreshes.
+An explicit decoded SELECTION also works before the session row is cached."
   (when (and (buffer-live-p buf)
              (equal session-id
                     (buffer-local-value 'dsh-emacs--buffer-session buf)))
-    (when-let* ((sel (dsh-emacs--session-model-selection session-id)))
+    (when-let* ((sel (or selection
+                        (dsh-emacs--session-model-selection session-id))))
       (let ((model (dsh-protocol-model-selection-model sel))
             (provider (dsh-protocol-model-selection-provider sel))
             (effort (dsh-protocol-model-selection-reasoning-effort sel)))
@@ -613,31 +617,34 @@ known value."
 ;;;###autoload
 (defun dsh-emacs-list-sessions--fetch ()
   "Fetch the session list via RPC and populate `dsh-emacs--sessions'."
-  (dsh-emacs--rpc-async "session/list" (dsh-protocol-session-list-request)
-                        (lambda (ok value)
-                          (unwind-protect
-                              (if ok
-                                  (progn
-                                    ;; JSON arrays arrive as vectors; normalize
-                                    ;; them before the session list renderer uses
-                                    ;; `dolist', and wrap each item in a
-                                    ;; `dsh-protocol-session' struct so field
-                                    ;; access is centralized (protoco.el).
-                                    (setq dsh-emacs--sessions
-                                          (dsh-protocol-session-list--from-alist value))
-                                    ;; Title/workspace may have drifted
-                                    ;; (auto summary/rename/session move):
-                                    ;; re-sync all live chat buffers' name and
-                                    ;; default-directory.
-                                    (dsh-emacs--chat-buffers-sync-all)
-                                    ;; Refresh workspaces in parallel so the
-                                    ;; session list can group by workspace.
-                                    (dsh-emacs-list-workspaces))
-                                (message "Failed to fetch session list: %S" value))
-                            ;; Snapshot installed: replay any frame that arrived
-                            ;; while the refresh was in flight, so the list never
-                            ;; rolls back below the stream's latest state.
-                            (dsh-emacs-events--host-refresh-drain)))))
+  ;; This callback owns global caches, not the lifetime of the caller's chat.
+  (with-current-buffer (get-buffer-create " *dsh-session-cache*")
+    (dsh-emacs-events--host-refresh-begin)
+    (dsh-emacs--rpc-async "session/list" (dsh-protocol-session-list-request)
+                          (lambda (ok value)
+                            (unwind-protect
+				(if ok
+                                    (progn
+                                      ;; JSON arrays arrive as vectors; normalize
+                                      ;; them before the session list renderer uses
+                                      ;; `dolist', and wrap each item in a
+                                      ;; `dsh-protocol-session' struct so field
+                                      ;; access is centralized (protoco.el).
+                                      (setq dsh-emacs--sessions
+                                            (dsh-protocol-session-list--from-alist value))
+                                      ;; Title/workspace may have drifted
+                                      ;; (auto summary/rename/session move):
+                                      ;; re-sync all live chat buffers' name and
+                                      ;; default-directory.
+                                      (dsh-emacs--chat-buffers-sync-all)
+                                      ;; Refresh workspaces in parallel so the
+                                      ;; session list can group by workspace.
+                                      (dsh-emacs-list-workspaces))
+                                  (message "Failed to fetch session list: %S" value))
+                              ;; Snapshot installed: replay any frame that arrived
+                              ;; while the refresh was in flight, so the list never
+                              ;; rolls back below the stream's latest state.
+                              (dsh-emacs-events--host-refresh-drain))))))
 
 (defun dsh-emacs-list-sessions--fetch-when-ready (deadline)
   "Poll until the server is alive, then fetch the session list.
@@ -666,7 +673,6 @@ loads the plugin tree, which does not fit in a fixed few seconds."
   ;; When the server was just started, poll until it's ready before
   ;; firing the RPC to avoid a 404 race.
   (let ((alive (dsh-emacs-server-start)))
-    (dsh-emacs-events--host-refresh-begin)
     (if alive
         (dsh-emacs-list-sessions--fetch)
       ;; Server just launched — wait for it within the same grace period a

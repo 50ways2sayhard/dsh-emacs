@@ -41,6 +41,11 @@
 ;; Chunk block indices are unrelated to this frame counter.
 (defvar-local dsh-emacs--assistant-stream-attempt nil)
 
+(defvar dsh-emacs-events--snapshot-model-slots nil
+  "Dynamic stack of (SESSION-ID . SELECTION) slots for active snapshots.
+Core model updates delivered while history yields fill matching slots;
+the late snapshot projections must not replace those newer live values.")
+
 ;; Last wall-clock time (float-time) at which the stream delivered an event,
 ;; and watchdog bookkeeping for confirming the stream stays healthy mid-turn.
 (defvar-local dsh-emacs--ws-last-event-time nil)
@@ -130,6 +135,8 @@ generation and a new clientId.")
 (declare-function dsh-emacs--chat-session-item "dsh-emacs" (session-id))
 (declare-function dsh-emacs--seed-input-history "dsh-emacs" (events session-id &optional older))
 (declare-function dsh-emacs--chat-buffer-sync "dsh-emacs" (session-id))
+(declare-function dsh-emacs--chat-buffer-model-sync "dsh-emacs"
+                  (session-id buf &optional selection))
 (declare-function dsh-emacs--question-requested "dsh-emacs" (chat event-id session-id questions &optional wait))
 (declare-function dsh-emacs--session-questions-apply "dsh-emacs" (questions))
 (declare-function dsh-emacs--question-cancelled "dsh-emacs" (event-id))
@@ -300,6 +307,19 @@ NEXT is the byte offset following this frame; INPUT is never copied as a tail."
     (when (and (hash-table-p dsh-emacs--chat-buffers)
                (gethash session-id dsh-emacs--chat-buffers))
       (dsh-emacs--chat-buffer-sync session-id))))
+
+(defun dsh-emacs-events--apply-model-projection (session-id selection)
+  "Apply decoded last-used SELECTION to SESSION-ID's cache and live chat.
+Record the update even before its row exists, so a pending list refresh
+can replay it after installing its older snapshot."
+  (when selection
+    (when-let* ((item (dsh-emacs--chat-session-item session-id)))
+      (setf (dsh-protocol-session-model-selection item) selection))
+    (when-let* ((chat (dsh-emacs-events--chat-buffer session-id)))
+      (dsh-emacs--chat-buffer-model-sync session-id chat selection))
+    (dsh-emacs-events--host-frame-record
+     (list :apply-model-selection session-id selection))
+    (dsh-emacs-events--host-repaint)))
 
 (defun dsh-emacs--events-apply-context-projection (session-id value)
   "Update SESSION-ID's mode-line ctx% from context projection VALUE.
@@ -668,7 +688,10 @@ VALUE may already be a decoded `dsh-protocol-follow-snapshot'."
                    (dsh-protocol--struct
                     #'dsh-protocol-follow-snapshot-p
                     #'dsh-protocol-follow-snapshot--from-alist value))
-                  (session-id dsh-emacs--buffer-session))
+                  (session-id dsh-emacs--buffer-session)
+                  (model-slot (cons session-id nil))
+                  (dsh-emacs-events--snapshot-model-slots
+                   (cons model-slot dsh-emacs-events--snapshot-model-slots)))
         ;; A snapshot replaces transient output with its durable window
         ;; and active prefix; it must not append onto the disconnected
         ;; socket's partial text or folded Think fragments.
@@ -735,7 +758,7 @@ history can yield to newer updates; questions settle the cards just rendered
 in the current chat.  Inbox is owned by the control stream."
   (pcase-let (((cl-struct dsh-protocol-follow-projections
                          subagents title context permission
-                         goal goal-update-p questions)
+                         goal goal-update-p questions model-selection)
                (dsh-protocol--struct
                 #'dsh-protocol-follow-projections-p
                 #'dsh-protocol-follow-projections--from-alist projections)))
@@ -747,6 +770,9 @@ in the current chat.  Inbox is owned by the control stream."
       (dsh-emacs--events-apply-context-projection session-id context))
     (when permission
       (dsh-emacs--events-apply-permission-projection session-id permission))
+    (dsh-emacs-events--apply-model-projection
+     session-id (or (cdr (assoc session-id dsh-emacs-events--snapshot-model-slots))
+                    model-selection))
     (when goal-update-p
       (dsh-emacs-events--apply-goal-projection session-id goal))
     (when questions
@@ -1189,6 +1215,9 @@ repaint themselves here; the drain batches them and repaints once."
     (:session-status
      (dsh-emacs-events--host-session-status
       (cadr frame) (car (cddr frame))))
+    (:apply-model-selection
+     (dsh-emacs-events--apply-model-projection
+      (cadr frame) (car (cddr frame))))
     (:apply-title
      (dsh-emacs-events--apply-title
       nil (cadr frame) (car (cddr frame))))))
@@ -1486,6 +1515,11 @@ only reach their session's live chat; other cells update the shared caches."
          (dsh-emacs--events-apply-context-projection session-id value))
         ("permissions"
          (dsh-emacs--events-apply-permission-projection session-id value))
+        ("modelSelection"
+         (dsh-emacs-events--apply-model-projection session-id value)
+         (when value
+           (dolist (slot dsh-emacs-events--snapshot-model-slots)
+             (when (equal session-id (car slot)) (setcdr slot value)))))
         ("goal"
          (dsh-emacs-events--apply-goal-projection session-id value))
         ("plan"
