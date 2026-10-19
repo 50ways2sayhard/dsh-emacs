@@ -177,8 +177,14 @@ whole report blindly.
   `dsh-emacs-session.el`; mode-line → `dsh-emacs-modeline.el`; server
   lifecycle → `dsh-emacs-server.el`. Do not mix protocol parsing with
   rendering.
-- **`dsh-emacs.el` is the entry point and RPC client** — new self-contained
-  feature surfaces belong in the owning module, not in a growing grab bag.
+- **`dsh-emacs.el` is the entry point and session/command coordinator** — new
+  self-contained feature surfaces belong in the owning module, not in a growing
+  grab bag. **`dsh-emacs-server.el` owns HTTP/RPC transport and authentication**;
+  RPC consumers require it directly instead of depending back on the entry point.
+- Required same-package functions are called directly, with `declare-function`
+  at intentional cyclic boundaries. Reserve `fboundp` for optional external
+  integrations, version/build capabilities and genuinely dynamic dispatch;
+  missing package definitions must not silently suppress work.
 - **Loading a file must not change editing behavior** (no modes enabled, no
   hooks fired); registration side effects allowed at load are package-level
   ones (`auto-mode-alist`, `add-to-list 'minor-mode-map-alist`, …). The

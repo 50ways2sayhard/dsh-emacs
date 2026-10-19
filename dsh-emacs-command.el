@@ -66,11 +66,9 @@
 
 (require 'cl-lib)
 (require 'dsh-emacs-protocol)
+(require 'dsh-emacs-server)
 
-(declare-function dsh-emacs--rpc-async "dsh-emacs.el" (method params callback))
-(declare-function dsh-emacs--rpc-request "dsh-emacs.el" (method params))
 (declare-function dsh-emacs--active-session-id "dsh-emacs.el" ())
-(declare-function dsh-emacs-server-ensure "dsh-emacs-server.el" ())
 ;; The "/" completion and the slash menu also list the skill catalog (see
 ;; dsh-emacs-skill.el).
 (declare-function dsh-emacs-skill-catalog "dsh-emacs-skill.el"

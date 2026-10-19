@@ -4,7 +4,7 @@ Module ownership:
 
 ```
 dsh-emacs/
-├── dsh-emacs.el              # Main entry point, RPC client, session management, mode definition
+├── dsh-emacs.el              # Main entry point, session management, mode definition
 ├── dsh-emacs-protocol.el     # Typed views of dsh RPC payloads (cl-defstruct)
 ├── dsh-emacs-ui.el           # Fragment snapshots, borders, folding, fragment faces
 ├── dsh-emacs-faces.el        # Shared faces and palette defaults
@@ -18,7 +18,7 @@ dsh-emacs/
 ├── dsh-emacs-subagent.el     # Durable child catalogs, completion, availability and navigation
 ├── dsh-emacs-jobs.el         # Background jobs: job/list + job/follow streams, stop
 ├── dsh-emacs-plan.el         # Plan documents, asynchronous review and decisions
-├── dsh-emacs-server.el       # Server bootstrap, browser-session auth, configuration file entry
+├── dsh-emacs-server.el       # HTTP/RPC client, server bootstrap, authentication, configuration entry
 ├── dsh-emacs-provider.el     # Minibuffer provider setup through settings and credential RPCs
 ├── dsh-emacs-command.el      # Slash surface: commands/list + commands/execute, "/" completion and menu
 ├── dsh-emacs-skill.el        # Skill catalog (skills/list) and /name gestures
@@ -762,7 +762,7 @@ replay needs no separate persistence store. See
 
 ## RPC API
 
-`dsh-emacs.el` calls the dsh service's one-shot unary RPC API
+`dsh-emacs-server.el` owns the dsh service's one-shot unary RPC client
 (`POST /api/<namespace>/<method>`, e.g. `/api/session/list`) directly, with
 no server-side changes required.  Endpoint names are the two-segment
 slash form of the dsh 0.1.7 wire protocol (rpc.md §4); the request body
@@ -787,6 +787,24 @@ is the `client-request` envelope with `payload = {args: {...}}`:
 | `skills/list` | List the session's user-invocable skills (the `/` completion's second catalog; invocation is a `/name` gesture in a prompt, rpc.md §4.2) |
 | `$events/result` | Answer a `$events` waterfall (approval/question), args `{clientId, eventId, outcome}` |
 | `userQuestions/answer` | Answer a timed question whose foreground window closed (dsh 0.2.0), args `{agentId, callId, answer}`; `dsh-emacs-events-open-stream`/`-close-stream` carry the matching `userQuestions/attachWait` claim |
+
+Feature modules require the server module for `dsh-emacs--rpc-request`,
+`dsh-emacs--rpc-async` and binary `dsh-emacs--http-post`; these functions no
+longer depend on loading the entry point. Session arguments and other
+endpoint-specific outbound payloads stay with their feature owners. The
+server normalizes UTF-8 response bodies and reads JSON through protocol;
+`dsh-protocol-rpc-result--from-alist` still owns RPC versus upload envelopes.
+
+The server also supplies authentication headers. HTTP requests leave Basic
+credentials in URL userinfo for the URL library and add the package-owned
+cookie; raw WebSocket handshakes request both Basic and Cookie explicitly.
+Readiness and token exchange retain their separate pre-authentication rules.
+Synchronous error results, asynchronous callback buffer/lifetime and exception
+handling remain distinct. This is not a generic transport adapter or a new
+retry policy. Required package callbacks use direct calls with declarations
+at cyclic boundaries, not optional `fboundp` guards; external integrations
+and version/build capabilities still use guards. See
+[decision record 139](../postmortem/139-server-transport-ownership.md).
 
 Real-time state — the transcript, the session list, queue/steer mirrors,
 projections, and the approval/question waterfalls — is NOT polled; it

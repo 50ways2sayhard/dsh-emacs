@@ -1,5 +1,8 @@
 # 008 — Browser-Session Authentication for dsh web
 
+_Transport ownership superseded by [139](139-server-transport-ownership.md);
+the authentication model remains in force._
+
 _Updated to fold in the interactive launch-token ask for external servers
 (formerly drafted as postmortem 010; never released separately)._
 

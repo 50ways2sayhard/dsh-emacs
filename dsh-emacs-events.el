@@ -23,10 +23,11 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'dsh-emacs-subagent)
 (require 'json)
 (require 'url-parse)
 (require 'dsh-emacs-protocol)
+(require 'dsh-emacs-server)
+(require 'dsh-emacs-subagent)
 
 (defvar-local dsh-emacs--event-process nil)
 (defvar-local dsh-emacs--event-ready nil)
@@ -168,8 +169,6 @@ generation and a new clientId.")
 (declare-function dsh-emacs-queue-apply "dsh-emacs-queue" (chat process items))
 (declare-function dsh-emacs-composer-set-goal "dsh-emacs-composer" (goal))
 (declare-function dsh-emacs-jobs-reopen "dsh-emacs-jobs" (chat))
-(declare-function dsh-emacs-server--basic-auth-header "dsh-emacs-server" ())
-(declare-function dsh-emacs--server-auth-cookie-header "dsh-emacs-server" ())
 
 ;; Defined in dsh-emacs-modeline.el, which loads after this module.  Referenced
 ;; at runtime from teardown only.
@@ -212,18 +211,14 @@ socket; the caller opens its specific stream (a chat's
                (substring (secure-hash 'sha1 seed nil nil t) 0 16) t))
          (path "/api/remote.mux")
          (origin (format "%s://%s" (url-type url) host-header)))
-    (let* ((auth (dsh-emacs-server--basic-auth-header))
-           (cookie (dsh-emacs--server-auth-cookie-header))
+    (let* ((headers (dsh-emacs--server-auth-header t))
            (request (concat
                      (format "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nOrigin: %s\r\n"
                              path host-header key origin)
-                     ;; Under nginx basic auth the handshake must carry the
-                     ;; auth header, or 401 rejections drop every live mux/host
-                     ;; stream.
-                     (if auth (format "%s: %s\r\n" (car auth) (cdr auth)) "")
-                     ;; Browser session auth since 0.1.2-rc.1+: the handshake
-                     ;; must carry the dsh-auth-* cookie.
-                     (if cookie (format "Cookie: %s\r\n" cookie) "")
+                     (mapconcat (lambda (header)
+                                  (format "%s: %s\r\n"
+                                          (car header) (cdr header)))
+                                headers "")
                      "\r\n")))
       (process-send-string process request))))
 

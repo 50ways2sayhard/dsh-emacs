@@ -25,9 +25,10 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'button)
+(require 'dsh-emacs-protocol)
+(require 'dsh-emacs-server)
 (require 'dsh-emacs-ui)
 (require 'dsh-emacs-faces)
-(require 'dsh-emacs-protocol)
 (require 'dsh-emacs-tokens)
 (require 'dsh-emacs-markdown)
 (require 'dsh-emacs-plan)
@@ -75,7 +76,6 @@
 ;; Defined in dsh-emacs.el, which loads after this module.  Called at runtime
 ;; from the inline-image attachment path (placeholder fill / RET open).
 (declare-function dsh-emacs--active-session-id "dsh-emacs" ())
-(declare-function dsh-emacs--rpc-async "dsh-emacs" (method params callback))
 (declare-function dsh-emacs--forget-user-message-echo "dsh-emacs" (message))
 (declare-function dsh-emacs-fork-session "dsh-emacs" (session-id &optional at-seq))
 (defvar dsh-emacs--buffer-session)

@@ -65,8 +65,8 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'dsh-emacs-protocol)
+(require 'dsh-emacs-server)
 
-(declare-function dsh-emacs--rpc-async "dsh-emacs.el" (method params callback))
 (declare-function dsh-emacs--completing-read-ordered
                   "dsh-emacs.el" (prompt collection &rest args))
 ;; Corfu's native auto path is the same integration seam installed by
@@ -75,7 +75,6 @@
 (declare-function corfu-auto--complete-deferred "corfu-auto" (&optional tick))
 (declare-function dsh-emacs--active-session-id "dsh-emacs.el" ())
 (declare-function dsh-emacs--sessions-index "dsh-emacs.el" ())
-(declare-function dsh-emacs-server-ensure "dsh-emacs-server.el" ())
 ;; The session list owns the visible-session rule; @ suggestions mirror it.
 (declare-function dsh-emacs-session--visible-p
                   "dsh-emacs-session.el" (session &optional current-session-id))

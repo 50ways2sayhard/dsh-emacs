@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'xref)
 (require 'dsh-emacs-protocol)
+(require 'dsh-emacs-server)
 (require 'dsh-emacs-tokens)
 
 (declare-function dsh-emacs--session-list-args "dsh-emacs" ())
@@ -23,9 +24,7 @@
 (defvar dsh-emacs--buffer-subagent)
 (defvar dsh-emacs-sessions-buffer)
 (declare-function dsh-emacs-events--host-repaint "dsh-emacs-events" ())
-(declare-function dsh-emacs--rpc-request "dsh-emacs" (method params))
 (declare-function dsh-emacs--completing-read-ordered "dsh-emacs" (prompt collection &rest args))
-(declare-function dsh-emacs--rpc-async "dsh-emacs" (method params callback))
 (declare-function dsh-emacs--chat-session-item "dsh-emacs" (session-id))
 (declare-function dsh-emacs--chat-title "dsh-emacs" (session-id))
 (declare-function dsh-emacs--active-session-id "dsh-emacs" ())

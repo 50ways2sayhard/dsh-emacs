@@ -1,4 +1,4 @@
-;;; dsh-emacs-server.el --- dsh server bootstrap (probe / start / install) -*- lexical-binding: t; -*-
+;;; dsh-emacs-server.el --- HTTP/RPC transport and server lifecycle -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025 vritser
 
@@ -36,10 +36,11 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
+(require 'json)
+(require 'url)
 (require 'url-parse)
-
-(declare-function url-retrieve-synchronously "url"
-                  (url &optional silent inhibit-cookies timeout))
+(require 'dsh-emacs-protocol)
 
 (defgroup dsh-emacs-server nil
   "dsh server bootstrap: probe, auto-start, and on-demand install."
@@ -532,14 +533,15 @@ with a 303 whose header is the only place the minted cookie appears."
       (kill-buffer buf))
     cookie))
 
-(defun dsh-emacs--server-auth-header ()
-  "Return an alist of headers the RPC/WS layers must send, or nil.
-Currently just the browser-session cookie (merging the nginx Basic header is
-left to the consumers that already build it).  Kept as a function so the
-layers share the single mint/cache path."
-  (let ((cookie (dsh-emacs--server-auth-cookie-header)))
-    (when cookie
-      (list (cons "Cookie" cookie)))))
+(defun dsh-emacs--server-auth-header (&optional raw)
+  "Return authentication headers for an established server connection.
+Include the browser-session cookie, minting it lazily when needed.
+For a RAW request, also include Basic credentials from URL userinfo.
+Ordinary HTTP callers leave RAW nil: the URL library supplies Basic itself.
+Readiness probes and token exchanges keep their pre-authentication policy."
+  (let ((basic (and raw (dsh-emacs-server--basic-auth-header)))
+        (cookie (dsh-emacs--server-auth-cookie-header)))
+    (delq nil (list basic (and cookie (cons "Cookie" cookie))))))
 
 (defun dsh-emacs--server-auth-required-p ()
   "Return non-nil when the live server demands the browser-session cookie.
@@ -666,6 +668,193 @@ to prompt again."
           ;; session reuses it instead of re-prompting.
           (dsh-emacs--server-auth-remember-token token)))
       t))))
+
+;;; ---------------------------------------------------------------------------
+;;;  RPC client
+;;; ---------------------------------------------------------------------------
+
+(defun dsh-emacs--rpc-id ()
+  "Generate a unique RPC request id."
+  (format "emacs-%d-%d" (random 999999) (truncate (float-time))))
+
+(defun dsh-emacs--wrap-request (method params)
+  "Wrap METHOD and PARAMS into the DSH RPC envelope.
+PARAMS is the *content of the wire `args' object* (the method parameter
+fields, e.g. ((request . ((sessionId . S)))) or ((agentId . A))); the
+envelope always carries payload {args: {...}}, so nil PARAMS becomes
+`{}'.  METHOD must equal the HTTP endpoint (`<namespace>/<method>', e.g.
+\"session/list\" — `dsh-emacs--rpc-request'/`dsh-emacs--rpc-async'
+build the /api/ URL from it).  Returns a JSON string."
+  (let ((envelope `((type . "client-request")
+                    (rpcId . ,(dsh-emacs--rpc-id))
+                    (method . ,method)
+                    ;; The payload must be exactly an object `args' whose
+                    ;; fields are the method parameter names.  An empty
+                    ;; Elisp list encodes as JSON null, so use an empty hash
+                    ;; table to produce {} for parameter-less methods.
+                    (payload . ,(list (cons 'args
+                                            (or params (make-hash-table))))))))
+    (json-encode envelope)))
+
+(defun dsh-emacs--decode-response-body ()
+  "Read the current HTTP JSON body after the caller has removed its headers.
+Normalize a unibyte body to UTF-8 before passing it to the protocol reader.
+`url-retrieve' may leave JSON unibyte when the server omits a charset;
+parsing those bytes directly corrupts non-ASCII text.  Return raw decoded
+JSON; the caller chooses the RPC or upload envelope interpretation."
+  (unless enable-multibyte-characters
+    (let ((body (decode-coding-string
+                 (buffer-substring (point) (point-max)) 'utf-8)))
+      (delete-region (point) (point-max))
+      ;; Switch the response buffer before inserting decoded multibyte text.
+      (set-buffer-multibyte t)
+      (insert body)))
+  (goto-char (point-min))
+  (dsh-protocol-read-json))
+
+(defvar url-http-response-status)
+
+(defun dsh-emacs--rpc-request (method params)
+  "Send an RPC request to the dsh web service.
+METHOD is the `namespace/method' endpoint (e.g. \"session/list\") and
+PARAMS the wire `args' content (an alist, or nil for parameter-less
+methods).  Returns (ok-p . value) or nil."
+  (let* ((url (format "%s/api/%s" (dsh-emacs--server-base-url) method))
+         (json-data (dsh-emacs--wrap-request method params))
+         (url-request-noninteractive t)
+         (url-request-method "POST")
+         (url-request-extra-headers
+          (append '(("Content-Type" . "application/json"))
+                  (dsh-emacs--server-auth-header)))
+         (url-request-data (encode-coding-string json-data 'utf-8)))
+    (condition-case err
+        ;; Auth cookies are owned by dsh, not the global URL cookie jar.
+        (let ((buf (url-retrieve-synchronously url nil t)))
+          (unless (buffer-live-p buf)
+            (error "No HTTP response from dsh server"))
+          (unwind-protect
+              (with-current-buffer buf
+                (when-let* ((status (bound-and-true-p url-http-response-status))
+                            ((>= status 400)))
+                  (signal 'error (list 'http status)))
+                (goto-char (point-min))
+                (re-search-forward "^$")
+                (delete-region (point) (point-min))
+                (dsh-protocol-rpc-result--from-alist
+                 (dsh-emacs--decode-response-body)))
+            (kill-buffer buf)))
+      (error
+       ;; A 401 while we sent a cookie means the cached cookie is stale (an
+       ;; out-of-band server restarted and minted a new token): drop it so the
+       ;; next call re-mints / re-prompts instead of 401-looping until restart.
+       (when (dsh-emacs--server-auth-http-401-p err)
+         (dsh-emacs--server-auth-maybe-expire))
+       (message "RPC error: %s%s" (error-message-string err)
+                (dsh-emacs--http-error-hint err))
+       (cons nil nil)))))
+
+(defun dsh-emacs--http-error-hint (err)
+  "Human-readable hint for an HTTP error ERR, or \"\".
+ERR like `(error http 404)' comes from `url-retrieve' status.  404/405
+mean the `/api/<namespace>/<method>' endpoint is not claimed by this dsh
+server (unknown method or a non-POST RPC path; the gateway 404s
+unclaimed /api/* POSTs).  401 means the server requires browser-session
+authentication that was not satisfied."
+  (if (and (listp err) (numberp (nth 2 err)))
+      (let ((code (nth 2 err)))
+        (if (equal code 401)
+            (format " (HTTP 401: dsh web requires authentication; see `C-h v dsh-emacs-server-auth-token')")
+          (if (>= code 400)
+              (format " (HTTP %S: current dsh server may not expose this RPC)" code)
+            (format " (HTTP %S)" code))))
+    ""))
+
+(defun dsh-emacs--http-post (url content-type body callback)
+  "POST BODY to URL as CONTENT-TYPE; CALLBACK receives the decoded JSON.
+BODY is the exact bytes to send (a unibyte string already encoded by
+the caller) and CALLBACK is called as (funcall CALLBACK VALUE) in the
+buffer that made the request.  VALUE is the decoded JSON body, or nil
+when the request failed: a transport/HTTP-status failure, a body that
+does not parse, or an empty body.  Every failure is reported here (a
+message plus the stale-cookie 401 drop), so a caller only has to decide
+what its own body means.
+
+Both the RPC envelope calls and the raw file-upload route post through
+here; `url-request-data' carries BODY verbatim (no coding conversion),
+which is what makes the octet-stream upload byte-exact."
+  (let ((url-request-noninteractive t)
+        (url-request-method "POST")
+        (url-request-extra-headers
+         (append (list (cons "Content-Type" content-type))
+                 (dsh-emacs--server-auth-header)))
+        (url-request-data body)
+        (callback-buffer (current-buffer)))
+    (cl-labels
+        ((dispatch (value)
+           (when (buffer-live-p callback-buffer)
+             (with-current-buffer callback-buffer
+               ;; Callback that interacts inside the filter
+               ;; (completing-read etc.) and hits C-g: swallow the
+               ;; quit instead of a process-filter error.
+               (condition-case nil
+                   (funcall callback value)
+                 (quit nil))))))
+      ;; Keep progress messages out of the minibuffer.  In particular,
+      ;; `Contacting host...' otherwise remains visible when a successful
+      ;; callback does not emit a follow-up message.
+      (url-retrieve
+       url
+       (lambda (status)
+         ;; JSON decode of big history windows allocates heavily;
+         ;; Profiler-measured on the default window (~30k raw events):
+         ;; Automatic GC took ~46% of the whole open.  Enlarge the GC
+         ;; threshold dynamically to defer the GC storm into one collection
+         ;; after parsing — parsing and the callback run in the same dynamic
+         ;; scope.
+         (let ((gc-cons-threshold (* 64 1024 1024))
+               (gc-cons-percentage 0.6))
+           (if (plist-get status :error)
+               (let ((err (plist-get status :error)))
+                 (kill-buffer)
+                 ;; A 401 while we sent a cookie means the cached cookie is
+                 ;; stale (an out-of-band server restarted and minted a new
+                 ;; per-process token): drop it so the next call re-mints /
+                 ;; re-prompts instead of 401-looping until Emacs restarts.
+                 (when (dsh-emacs--server-auth-http-401-p err)
+                   (dsh-emacs--server-auth-maybe-expire))
+                 (message "HTTP POST error: %S%s" status
+                          (dsh-emacs--http-error-hint err))
+                 (dispatch nil))
+             (goto-char (point-min))
+             (re-search-forward "^$")
+             (delete-region (point) (point-min))
+             (let ((value (condition-case err
+                              (dsh-emacs--decode-response-body)
+                            (error
+                             ;; Body cannot be parsed (non-JSON, cut stream,
+                             ;; ...): print the reason but still dispatch the
+                             ;; callback (nil), so callers always reach their
+                             ;; failure branch instead of being silently
+                             ;; dropped.
+                             (message "HTTP POST response error: %s"
+                                      (error-message-string err))
+                             nil))))
+               (kill-buffer)
+               (dispatch value)))))
+       nil t t))))
+
+(defun dsh-emacs--rpc-async (method params callback)
+  "Asynchronous RPC request; CALLBACK receives (ok-p value-or-error).
+METHOD is the `namespace/method' endpoint, PARAMS the wire `args'
+content — see `dsh-emacs--wrap-request'."
+  (dsh-emacs--http-post
+   (format "%s/api/%s" (dsh-emacs--server-base-url) method)
+   "application/json"
+   (encode-coding-string (dsh-emacs--wrap-request method params) 'utf-8)
+   (lambda (response)
+     (let ((unwrapped (and response
+                           (dsh-protocol-rpc-result--from-alist response))))
+       (funcall callback (car unwrapped) (cdr unwrapped))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; CLI detection and install

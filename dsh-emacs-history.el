@@ -15,13 +15,13 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'dsh-emacs-server)
 (require 'dsh-emacs-render)
 
 (defvar dsh-emacs--buffer-session)
 (defvar dsh-emacs--buffer-subagent)
 (defvar dsh-emacs--input-marker)
 (defvar dsh-emacs-history-window)
-(declare-function dsh-emacs--rpc-async "dsh-emacs" (method params callback))
 (declare-function dsh-emacs--seed-input-history "dsh-emacs"
                   (events session-id &optional older))
 (declare-function dsh-emacs--active-session-id "dsh-emacs" ())

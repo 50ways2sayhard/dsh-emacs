@@ -42,6 +42,7 @@
 
 (require 'cl-lib)
 (require 'dsh-emacs-protocol)
+(require 'dsh-emacs-server)
 (require 'dsh-emacs-faces)
 
 ;; render.el calls back through this seam.  Declare it without requiring
@@ -61,8 +62,6 @@
 (defvar-local dsh-emacs--composer-goal-pending nil
   "Identity token of this buffer's in-flight `goals.*' mutation, or nil.")
 (declare-function dsh-emacs--active-session-id "dsh-emacs" ())
-(declare-function dsh-emacs--rpc-async "dsh-emacs"
-                  (method params callback))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Customization

@@ -38,13 +38,13 @@
 
 (require 'cl-lib)
 (require 'dsh-emacs-protocol)
+(require 'dsh-emacs-server)
 
 ;; Lazy boundary with same-package modules (see AGENTS.md): dsh-emacs.el
 ;; assembles this module, which calls back into its symbols through
 ;; declare-function at runtime, avoiding a top-level require cycle.
 (declare-function dsh-emacs--active-session-id "dsh-emacs" ())
 (declare-function dsh-emacs--busy-p "dsh-emacs" ())
-(declare-function dsh-emacs--rpc-async "dsh-emacs" (method params callback))
 (declare-function dsh-emacs--submit-prompt "dsh-emacs" (message &optional attachments mode))
 (declare-function dsh-emacs-composer-render "dsh-emacs-composer" ())
 

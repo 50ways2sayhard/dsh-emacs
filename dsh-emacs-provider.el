@@ -18,8 +18,6 @@
 (require 'dsh-emacs-protocol)
 (require 'dsh-emacs-server)
 
-(declare-function dsh-emacs--rpc-async "dsh-emacs" (method params callback))
-
 (defun dsh-emacs-provider--request (server method args callback &optional failure)
   "Call METHOD with ARGS on SERVER and pass its value to CALLBACK.
 Reject a changed connection before each call and callback.  FAILURE names

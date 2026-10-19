@@ -51,9 +51,8 @@
 
 (require 'cl-lib)
 (require 'dsh-emacs-protocol)
+(require 'dsh-emacs-server)
 
-(declare-function dsh-emacs--rpc-async "dsh-emacs.el" (method params callback))
-(declare-function dsh-emacs--rpc-request "dsh-emacs.el" (method params))
 (declare-function dsh-emacs--active-session-id "dsh-emacs.el" ())
 
 (defgroup dsh-emacs-skill nil
