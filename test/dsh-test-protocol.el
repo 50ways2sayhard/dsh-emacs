@@ -1086,5 +1086,57 @@
           (should (= (dsh-protocol-goal-revision goal) revision))
           (should (equal (dsh-protocol-goal-objective goal) "Original")))))))
 
+(ert-deftest dsh-emacs-test-protocol-outbound-provider-settings-create ()
+  :tags '(dsh-unit)
+  (let* ((section (dsh-protocol-provider-settings--from-alist
+                   '((ns . "adapter") (revision . 0))))
+         (args (dsh-protocol-provider-settings-request
+                section "custom" nil :endpoint "https://example.invalid/v1"
+                :api "openai-completions" :models '("m1" "m2") :key-ref "TEST_KEY"))
+         (json (concat "{\"ns\":\"adapter\",\"expectedRevision\":0,\"ops\":[{\"op\":\"set\","
+                       "\"path\":[\"providers\",\"custom\"],\"value\":{\"apiKeyEnv\":\"TEST_KEY\","
+                       "\"models\":[{\"id\":\"m1\"},{\"id\":\"m2\"}],\"api\":\"openai-completions\","
+                       "\"baseURL\":\"https://example.invalid/v1\"}}]}")))
+    (should (equal args (dsh-protocol-read-json json)))
+    (should (equal (dsh-protocol-write-json args) json))
+    (should (= (dsh-protocol-provider-settings-revision section) 0))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-provider-settings-update ()
+  :tags '(dsh-unit)
+  (let* ((section (dsh-protocol-provider-settings--from-alist
+                   '((ns . "adapter") (revision . 7))))
+         (profile (dsh-protocol-provider-profile--from-alist
+                   '((baseURL . "https://old.invalid") (apiKeyEnv . "KEEP_KEY"))))
+         (args (dsh-protocol-provider-settings-request
+                section "keep" profile :endpoint "https://new.invalid"))
+         (json (concat "{\"ns\":\"adapter\",\"expectedRevision\":7,\"ops\":[{\"op\":\"set\","
+                       "\"path\":[\"providers\",\"keep\",\"baseURL\"],"
+                       "\"value\":\"https://new.invalid\"}]}")))
+    (should (equal args (dsh-protocol-read-json json)))
+    (should (equal (dsh-protocol-write-json args) json))
+    (should (equal (dsh-protocol-provider-profile-endpoint profile)
+                   "https://old.invalid"))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-provider-empty-settings ()
+  :tags '(dsh-unit)
+  (let ((section (dsh-protocol-provider-settings--from-alist
+                  '((ns . "adapter") (revision . 9)))))
+    (dolist (profile (list nil (dsh-protocol-provider-profile--from-alist nil)))
+      (let ((args (dsh-protocol-provider-settings-request section "catalog" profile)))
+        (should (equal (dsh-protocol-write-json args)
+                       (if profile
+                           "{\"ns\":\"adapter\",\"expectedRevision\":9,\"ops\":[]}"
+                         (concat "{\"ns\":\"adapter\",\"expectedRevision\":9,\"ops\":[{"
+                                 "\"op\":\"set\",\"path\":[\"providers\",\"catalog\"],"
+                                 "\"value\":{}}]}"))))))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-credential-requests ()
+  :tags '(dsh-unit)
+  (should (equal (dsh-protocol-credentials-describe-request "TEST_KEY")
+                 '((refs . ["TEST_KEY"]))))
+  (should (equal (dsh-protocol-write-json
+                  (dsh-protocol-credentials-set-request "TEST_KEY" "fake-key"))
+                 "{\"ref\":\"TEST_KEY\",\"value\":\"fake-key\"}")))
+
 (provide 'dsh-test-protocol)
 ;;; dsh-test-protocol.el ends here

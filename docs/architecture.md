@@ -114,6 +114,11 @@ namespaces require an explicit owner choice; namespace ids are not hardcoded.
 
 Minibuffer readers gather the required fields. A new route is written at its
 own dictionary entry; existing routes receive only explicitly changed fields.
+The provider command decides which values changed; protocol request encoders
+own field names, model-ID objects, vector operation paths and the settings CAS
+envelope. An empty new profile remains `{}`, while an unchanged existing route
+has `ops: []`. Credential status/write argument encoding is also in protocol;
+the secret key never enters the settings request.
 Every `settings/mutate` uses the captured namespace revision. Credential
 storage follows a successful settings write and partial success is reported
 without rollback or automatic retries. Each asynchronous stage checks the
@@ -510,16 +515,15 @@ still owns UTF-8 decoding and error reporting. See
 [112](../postmortem/112-native-wire-json.md).
 
 Outbound `*-request` functions return method argument alists for session RPCs,
-workspace mutations, job streams/kill, skills/list, commands, goals and reference
-queries. Both model and effort pickers use
+workspace mutations, job streams/kill, skills/list, commands, goals, provider
+configuration/credentials and reference queries. Both model and effort pickers use
 `dsh-protocol-session-select-model-request`. The same boundary owns
 prompt text content and session/follow arguments. Absent effort, ordering target,
 job scope and follow limit fields are omitted, not sent as null; session/list
 retains its distinct `_request: {}` parameter.
 Callers still choose endpoints and supply ids, modes, expanded paths, time zones
 and resolved attachments. Queue action and attachment-part subdocuments, plus
-providers and interaction requests remain with their feature owners for
-later batches.
+interaction requests remain with their feature owners for later batches.
 
 Command catalog reads and execution keep flat `agentId` arguments, without a
 `request` wrapper. The execute encoder owns the required `submittedAttachments`

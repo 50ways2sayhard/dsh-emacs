@@ -2057,6 +2057,41 @@ OBJECTIVE adds the edit request; nil omits it for pause, resume and clear."
             (revision . ,(dsh-protocol-goal-revision goal))))
     ,@(when objective `((request . ((objective . ,objective)))))))
 
+(cl-defun dsh-protocol-provider-settings-request
+    (section provider profile &key endpoint api models key-ref)
+  "Encode changed provider settings in SECTION using its current revision.
+For an existing PROFILE, update only supplied fields; otherwise set the new
+PROVIDER entry.  MODELS contains model IDs.  Nil keyword values omit fields."
+  (let* ((fields
+          `(,@(when key-ref `((apiKeyEnv . ,key-ref)))
+            ,@(when models
+                `((models . ,(vconcat
+                              (mapcar (lambda (id) `((id . ,id))) models)))))
+            ,@(when api `((api . ,api)))
+            ,@(when endpoint `((baseURL . ,endpoint)))))
+         (ops
+          (if profile
+              (vconcat
+               (mapcar (lambda (field)
+                         `((op . "set")
+                           (path . ,(vector "providers" provider
+                                            (symbol-name (car field))))
+                           (value . ,(cdr field))))
+                       fields))
+            (vector `((op . "set") (path . ,(vector "providers" provider))
+                      (value . ,(or fields (make-hash-table))))))))
+    `((ns . ,(dsh-protocol-provider-settings-name section))
+      (expectedRevision . ,(dsh-protocol-provider-settings-revision section))
+      (ops . ,ops))))
+
+(defun dsh-protocol-credentials-describe-request (ref)
+  "Encode credential status lookup for REF without reading its secret."
+  `((refs . ,(vector ref))))
+
+(defun dsh-protocol-credentials-set-request (ref key)
+  "Encode a write of KEY to credential REF."
+  `((ref . ,ref) (value . ,key)))
+
 (defun dsh-protocol-session-address-json (session-id &optional address)
   "Serialize SESSION-ID or its durable subagent ADDRESS."
   (if address

@@ -123,7 +123,8 @@ preserving its other settings.  No active chat session is required."
                     (concat (upcase (replace-regexp-in-string
                                      "-" "_" provider)) "_API_KEY"))))
       (dsh-emacs-provider--request
-       server "credentials/describe" `((refs . ,(vector ref)))
+       server "credentials/describe"
+       (dsh-protocol-credentials-describe-request ref)
        (lambda (value)
          (dsh-emacs-provider--edit
           server section provider profile
@@ -144,32 +145,27 @@ and CREDENTIAL describes the write-only API key named by REF."
                                  old-endpoint)))
          (parsed (and (not (string-empty-p endpoint))
                       (url-generic-parse-url endpoint)))
-         (fields nil))
+         (api nil)
+         (models nil))
     (unless (or (and (or old-endpoint (not custom)) (string-empty-p endpoint))
                 (and parsed (member (url-type parsed) '("http" "https"))
                      (url-host parsed) (not (string-empty-p (url-host parsed)))))
       (user-error "Provider endpoint must be an HTTP or HTTPS URL"))
-    (unless (or (string-empty-p endpoint) (equal endpoint old-endpoint))
-      (push (cons 'baseURL endpoint) fields))
     (unless profile
       (when custom
-        (push (cons 'api (completing-read
-                          "Protocol: "
-                          (dsh-protocol-provider-settings-protocols section)
-                          nil t nil nil
-                          (car (dsh-protocol-provider-settings-protocols section))))
-              fields))
-      (let ((models (delete-dups
-                     (split-string
-                      (read-string
-                       (if custom "Model IDs (comma-separated): "
-                         "Model IDs (comma-separated; empty keeps catalog): "))
-                      "[,[:space:]]+" t))))
-        (when (and custom (null models))
-          (user-error "A custom provider needs at least one model ID"))
-        (when models
-          (push (cons 'models (vconcat (mapcar (lambda (id) `((id . ,id))) models)))
-                fields))))
+        (setq api (completing-read
+                   "Protocol: "
+                   (dsh-protocol-provider-settings-protocols section)
+                   nil t nil nil
+                   (car (dsh-protocol-provider-settings-protocols section)))))
+      (setq models (delete-dups
+                    (split-string
+                     (read-string
+                      (if custom "Model IDs (comma-separated): "
+                        "Model IDs (comma-separated; empty keeps catalog): "))
+                     "[,[:space:]]+" t)))
+      (when (and custom (null models))
+        (user-error "A custom provider needs at least one model ID")))
     (let* ((configured (dsh-protocol-provider-credential-configured credential))
            (key (and (dsh-protocol-provider-credential-writable credential)
                      (string-trim
@@ -178,40 +174,34 @@ and CREDENTIAL describes the write-only API key named by REF."
                                (if configured
                                    (format "empty keeps %s; typing replaces it" ref)
                                  "empty uses provider-native authentication"))))))
-           (stores-key (and key (not (string-empty-p key)))))
-      (when (and (or stores-key configured)
-                 (not (and profile
-                           (equal ref (dsh-protocol-provider-profile-key-ref profile)))))
-        (push (cons 'apiKeyEnv ref) fields))
+           (stores-key (and key (not (string-empty-p key))))
+           (key-ref (and (or stores-key configured)
+                         (not (and profile
+                                   (equal ref
+                                          (dsh-protocol-provider-profile-key-ref profile))))
+                         ref)))
       (when (and (not (dsh-protocol-provider-credential-writable credential))
                  (not configured))
         (user-error "Credential %s is unavailable and read-only" ref))
-      (let ((ops (if profile
-                     (vconcat
-                      (mapcar (lambda (field)
-                                `((op . "set")
-                                  (path . ,(vector "providers" provider
-                                                   (symbol-name (car field))))
-                                  (value . ,(cdr field))))
-                              fields))
-                   (vector `((op . "set") (path . ,(vector "providers" provider))
-                             (value . ,(or fields (make-hash-table))))))))
-        (dsh-emacs-provider--request
-         server "settings/mutate"
-         `((ns . ,(dsh-protocol-provider-settings-name section))
-           (expectedRevision . ,(dsh-protocol-provider-settings-revision section))
-           (ops . ,ops))
-         (lambda (_value)
-           (if stores-key
-               (dsh-emacs-provider--request
-                server "credentials/set" `((ref . ,ref) (value . ,key))
-                (lambda (_value)
-                  (message "Provider %s saved; use C-c C-m to select a model"
-                           provider))
-                (format "Provider %s saved, API key not confirmed; run dsh-emacs-add-provider again to retry"
-                        provider))
-             (message "Provider %s saved; use C-c C-m to select a model"
-                      provider))))))))
+      (dsh-emacs-provider--request
+       server "settings/mutate"
+       (dsh-protocol-provider-settings-request
+        section provider profile
+        :endpoint (and (not (string-empty-p endpoint))
+                       (not (equal endpoint old-endpoint)) endpoint)
+        :api api :models models :key-ref key-ref)
+       (lambda (_value)
+         (if stores-key
+             (dsh-emacs-provider--request
+              server "credentials/set"
+              (dsh-protocol-credentials-set-request ref key)
+              (lambda (_value)
+                (message "Provider %s saved; use C-c C-m to select a model"
+                         provider))
+              (format "Provider %s saved, API key not confirmed; run dsh-emacs-add-provider again to retry"
+                      provider))
+           (message "Provider %s saved; use C-c C-m to select a model"
+                    provider)))))))
 
 (provide 'dsh-emacs-provider)
 ;;; dsh-emacs-provider.el ends here
