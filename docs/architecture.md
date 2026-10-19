@@ -507,15 +507,24 @@ still owns UTF-8 decoding and error reporting. See
 [112](../postmortem/112-native-wire-json.md).
 
 Outbound `*-request` functions return method argument alists for session RPCs,
-workspace mutations, job streams/kill and skills/list. Both model and effort
-pickers use `dsh-protocol-session-select-model-request`. The same boundary owns
+workspace mutations, job streams/kill, skills/list, commands and reference
+queries. Both model and effort pickers use
+`dsh-protocol-session-select-model-request`. The same boundary owns
 prompt text content and session/follow arguments. Absent effort, ordering target,
 job scope and follow limit fields are omitted, not sent as null; session/list
 retains its distinct `_request: {}` parameter.
 Callers still choose endpoints and supply ids, modes, expanded paths, time zones
 and resolved attachments. Queue action and attachment-part subdocuments, plus
-commands, references, goals, providers and interaction requests remain with
-their feature owners for later batches.
+goals, providers and interaction requests remain with their feature owners for
+later batches.
+
+Command catalog reads and execution keep flat `agentId` arguments, without a
+`request` wrapper. The execute encoder owns the required `submittedAttachments`
+array, preserving resolved parts and using `[]` for text-only commands. Both
+reference discovery endpoints share `dsh-protocol-reference-query-request` for
+flat `agentId` / `query` arguments, including the empty warm-up query. Command
+admission, sync/async catalogs, reference generations and callback settlement
+remain with their feature modules.
 
 `dsh-protocol-rpc-request-json` and the mux open/cancel encoders own outgoing
 envelopes. `dsh-protocol-write-json` fixes null/false sentinels and compact

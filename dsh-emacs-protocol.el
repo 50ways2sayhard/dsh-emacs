@@ -2034,6 +2034,21 @@ Always request assistant stream frames; omit a nil message bound."
   "Encode a skill catalog read for SESSION."
   `((request . ((sessionId . ,session)))))
 
+(defun dsh-protocol-commands-list-request (session)
+  "Encode a command catalog read scoped to SESSION as an agent."
+  `((agentId . ,session)))
+
+(defun dsh-protocol-commands-execute-request (session line parts)
+  "Encode command LINE and resolved attachment PARTS for SESSION.
+The required submittedAttachments argument is an array, including when empty."
+  `((agentId . ,session) (line . ,line)
+    (submittedAttachments . ,(vconcat parts))))
+
+(defun dsh-protocol-reference-query-request (session query)
+  "Encode SESSION and QUERY for file and session reference discovery.
+Both endpoints take the same flat arguments; preserve an empty query string."
+  `((agentId . ,session) (query . ,query)))
+
 (defun dsh-protocol-session-address-json (session-id &optional address)
   "Serialize SESSION-ID or its durable subagent ADDRESS."
   (if address

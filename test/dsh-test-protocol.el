@@ -1039,5 +1039,34 @@
                        (concat "{\"request\":{\"sessionId\":\"s\",\"itemId\":\"item-2\",\"action\":"
                                action-json "}}")))))))
 
+(ert-deftest dsh-emacs-test-protocol-outbound-command-requests ()
+  :tags '(dsh-unit)
+  (should (equal (dsh-protocol-commands-list-request "s") '((agentId . "s"))))
+  (should (equal (dsh-protocol-write-json
+                  (dsh-protocol-commands-execute-request "s" "/plan off" nil))
+                 (concat "{\"agentId\":\"s\",\"line\":\"/plan off\","
+                         "\"submittedAttachments\":[]}")))
+  (let* ((parts '(((type . "image") (mediaType . "image/png") (data . "eA=="))
+                  ((type . "file") (receiptId . "receipt-2"))))
+         (json (concat "{\"agentId\":\"s\",\"line\":\"/inspect\","
+                       "\"submittedAttachments\":[{\"type\":\"image\","
+                       "\"mediaType\":\"image/png\",\"data\":\"eA==\"},"
+                       "{\"type\":\"file\",\"receiptId\":\"receipt-2\"}]}")))
+    (dolist (input (list parts (vconcat parts)))
+      (let ((args (dsh-protocol-commands-execute-request "s" "/inspect" input)))
+        (should (equal args (dsh-protocol-read-json json)))
+        (should (equal (dsh-protocol-write-json args) json))
+        (should (eq (aref (cdr (assq 'submittedAttachments args)) 0)
+                    (car parts)))))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-reference-query-request ()
+  :tags '(dsh-unit)
+  (dolist (case '(("" "{\"agentId\":\"s\",\"query\":\"\"}")
+                  ("src/a b" "{\"agentId\":\"s\",\"query\":\"src/a b\"}")))
+    (pcase-let* ((`(,query ,json) case)
+                 (args (dsh-protocol-reference-query-request "s" query)))
+      (should (equal args `((agentId . "s") (query . ,query))))
+      (should (equal (dsh-protocol-write-json args) json)))))
+
 (provide 'dsh-test-protocol)
 ;;; dsh-test-protocol.el ends here

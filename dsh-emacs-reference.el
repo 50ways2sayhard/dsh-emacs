@@ -360,7 +360,7 @@ newer generation.  Empty and failed replies are distinct from pending."
     (let ((gen (cl-incf dsh-emacs--reference-fetch-gen)))
       (dsh-emacs--rpc-async
        "fileReferences/list"
-       `((agentId . ,session-id) (query . ,query))
+       (dsh-protocol-reference-query-request session-id query)
        (lambda (ok value)
          (when (= gen dsh-emacs--reference-fetch-gen)
            (setq dsh-emacs--reference-files
@@ -370,7 +370,7 @@ newer generation.  Empty and failed replies are distinct from pending."
            (dsh-emacs-reference--fetch-settle session-id query))))
       (dsh-emacs--rpc-async
        "sessionReferenceResolver/candidates"
-       `((agentId . ,session-id) (query . ,query))
+       (dsh-protocol-reference-query-request session-id query)
        (lambda (ok value)
          (when (= gen dsh-emacs--reference-fetch-gen)
            (setq dsh-emacs--reference-sessions

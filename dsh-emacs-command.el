@@ -198,9 +198,7 @@ asynchronously; returns nil."
   (dsh-emacs-subagent-require 'mutate session-id)
   (dsh-emacs--rpc-async
    "commands/execute"
-   `((agentId . ,session-id)
-     (line . ,line)
-     (submittedAttachments . ,(vconcat parts)))
+   (dsh-protocol-commands-execute-request session-id line parts)
    (lambda (ok value)
      (let ((execution (and ok value
                            (dsh-protocol-command-execution--from-alist
@@ -258,7 +256,7 @@ overwriting the newer catalog."
                   (assoc-delete-all session-id dsh-emacs--command-fetch-stamps)))
       (dsh-emacs--rpc-async
        "commands/list"
-       `((agentId . ,session-id))
+       (dsh-protocol-commands-list-request session-id)
        (lambda (ok value)
          (when (equal stamp
                       (cdr (assoc session-id dsh-emacs--command-fetch-stamps)))
@@ -280,7 +278,7 @@ Returns the item list, or nil on failure (a message is emitted)."
   (or (dsh-emacs-command-catalog session-id)
       (let* ((res (dsh-emacs--rpc-request
                    "commands/list"
-                   `((agentId . ,session-id))))
+                   (dsh-protocol-commands-list-request session-id)))
              (items (and (car res)
                          (mapcar #'dsh-protocol-command--from-alist
                                  (dsh-protocol--list (cdr res))))))

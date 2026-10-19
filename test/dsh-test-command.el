@@ -122,7 +122,9 @@
         (old dsh-emacs--command-catalogs))
     (unwind-protect
         (cl-letf (((symbol-function 'dsh-emacs--rpc-request)
-                   (lambda (_m _p)
+                   (lambda (method params)
+                     (should (equal method "commands/list"))
+                     (should (equal params '((agentId . "sess-cat"))))
                      (setq rpc-calls (1+ rpc-calls))
                      (cons t [((name . "compact") (description . "c"))
                               ((name . "goal") (description . "g"))]))))
@@ -143,7 +145,9 @@
         (old dsh-emacs--command-catalogs))
     (unwind-protect
         (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
-                   (lambda (_m _p cb)
+                   (lambda (method params cb)
+                     (should (equal method "commands/list"))
+                     (should (equal params '((agentId . "sess-async"))))
                      (funcall cb t [((name . "plan") (description . "p"))]))))
           (dsh-emacs-command-catalog-fetch sid
                                            (lambda (items)

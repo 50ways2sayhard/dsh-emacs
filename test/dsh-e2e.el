@@ -812,14 +812,25 @@ DSH_E2E_PRESET selects the preset; existing chats and connections are preserved.
                                   (not (string-empty-p
                                         (dsh-emacs-modeline-format))))
 
+                  (dsh-emacs-command-catalog-invalidate dsh-e2e--session-id)
+                  (dsh-e2e--check
+                   "command-catalog-scoped"
+                   (cl-some (lambda (command)
+                              (equal (dsh-protocol-command-name command) "plan"))
+                            (dsh-emacs-command-catalog-sync dsh-e2e--session-id)))
+                  (dolist (method '("fileReferences/list"
+                                    "sessionReferenceResolver/candidates"))
+                    (dsh-e2e--check
+                     (concat "reference-query-" method)
+                     (vectorp (dsh-e2e--rpc
+                               method (dsh-protocol-reference-query-request
+                                       dsh-e2e--session-id "")))))
+
                   (dsh-e2e--check
                    "plan-projection-available"
                    (dsh-e2e--wait-until
                     (lambda () (dsh-protocol-plan-p dsh-emacs--modeline-plan)) 10))
-                  (dsh-e2e--rpc
-                   "commands/execute"
-                   `((agentId . ,dsh-e2e--session-id) (line . "/plan")
-                     (submittedAttachments . [])))
+                  (dsh-emacs-command-execute dsh-e2e--session-id "/plan")
                   (dsh-e2e--check
                    "plan-command-enters-mode"
                    (dsh-e2e--wait-until
