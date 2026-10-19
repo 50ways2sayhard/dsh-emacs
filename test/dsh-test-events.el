@@ -644,23 +644,28 @@
 ;; payload args {clientId, eventId, outcome:{kind:result, value:{answers}}}
 (ert-deftest dsh-emacs-test-events-events-result-wire-envelope ()
   :tags '(dsh-unit)
-  (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
-             (lambda (method params cb)
-               (ert-info ((format "%s" "events-result-wire-envelope"))
-                 (should (string= "$events/result" method))
-                 (should (let ((outcome (cdr (assq 'outcome params))))
-                           (and (equal "c1" (cdr (assq 'clientId params)))
-                                (equal "wf-1" (cdr (assq 'eventId params)))
-                                (equal "result" (cdr (assq 'kind outcome)))
-                                (equal '((answers . (((id . "q1")
-                                                      (selected "Yes")))))
-                                       (cdr (assq 'value outcome)))))))
-               (funcall cb t nil))))
-    (dsh-emacs--events-result-async
-     "c1" "wf-1"
-     '((kind . "result")
-       (value . ((answers . (((id . "q1") (selected "Yes")))))))
-     (lambda (&rest _) nil))))
+  (let* (calls delivered
+         (callback (lambda (ok value) (setq delivered (list ok value)))))
+    (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
+               (lambda (method params cb)
+                 (push (list method params cb) calls)
+                 (funcall cb t "accepted"))))
+      (dsh-emacs--events-result-async
+       "c1" "wf-1"
+       '((kind . "result")
+         (value . ((answers . (((id . "q1") (selected "Yes")))))))
+       callback))
+    (ert-info ((format "%s" "events-result-wire-envelope"))
+      (should (= 1 (length calls)))
+      (should (equal (caar calls) "$events/result"))
+      (should (equal (cadar calls)
+                     '((clientId . "c1")
+                       (eventId . "wf-1")
+                       (outcome . ((kind . "result")
+                                   (value . ((answers . (((id . "q1")
+                                                         (selected "Yes")))))))))))
+      (should (eq (nth 2 (car calls)) callback))
+      (should (equal delivered '(t "accepted"))))))
 
 ;; --- Test 78j: $events ready -> capture clientId; generation change retires pending
 ;; waterfalls ---

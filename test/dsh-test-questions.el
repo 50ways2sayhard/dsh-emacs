@@ -1274,6 +1274,7 @@
 (ert-deftest dsh-emacs-test-questions-approval-allow-once-outcome ()
   :tags '(dsh-unit)
   (let* ((chat (get-buffer-create " *dsh-test-approval-decision*"))
+         (dsh-emacs-events--client-id "approval-client")
          (responds nil))
     (unwind-protect
         (let ((dsh-emacs-enable-notifications nil))
@@ -1282,30 +1283,32 @@
           (cl-letf (((symbol-function 'dsh-emacs--approval-prompt)
                      (lambda (&rest _) t))
                     ((symbol-function 'dsh-emacs--events-result-async)
-                     (lambda (_client-id event-id outcome cb)
-                       (push (list event-id outcome) responds)
+                     (lambda (client-id event-id outcome cb)
+                       (push (list client-id event-id outcome) responds)
                        (funcall cb t nil))))
             (dsh-emacs--approval-requested
              chat "rpc-ad1" "sess-ad" "bash"
              "needs /etc/passwd" "call-1")
             (ert-info ((format "%s" "approval-allow-once-outcome"))
-              (should (equal (list "rpc-ad1"
-                                   '((kind . "result") (value . "allowed-once")))
-                             (car responds)))))
+              (should (equal responds
+                             '(("approval-client" "rpc-ad1"
+                                ((kind . "result")
+                                 (value . "allowed-once"))))))))
           (setq responds nil)
           (cl-letf (((symbol-function 'dsh-emacs--approval-prompt)
                      (lambda (&rest _) nil))
                     ((symbol-function 'dsh-emacs--events-result-async)
-                     (lambda (_client-id event-id outcome cb)
-                       (push (list event-id outcome) responds)
+                     (lambda (client-id event-id outcome cb)
+                       (push (list client-id event-id outcome) responds)
                        (funcall cb t nil))))
             (dsh-emacs--approval-requested
              chat "rpc-ad2" "sess-ad" "fs"
              "write outside workspace" "call-2")
             (ert-info ((format "%s" "approval-reject-outcome"))
-              (should (equal (list "rpc-ad2"
-                                   '((kind . "result") (value . "rejected")))
-                             (car responds))))))
+              (should (equal responds
+                             '(("approval-client" "rpc-ad2"
+                                ((kind . "result")
+                                 (value . "rejected")))))))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
 
 ;; --- Test 78h: approval prompt over multiple lines: full justification + concrete
@@ -1856,22 +1859,31 @@
                   (dsh-protocol-user-questions--from-alist
                    '((active . [((callId . "c1") (state . "continued")
                                  (questions . [((id . "q1")
-                                                (question . "Which?"))]))])
+                                                (question . "Which?"))
+                                               ((id . "q2")
+                                                (question . "Anything else?"))
+                                               ((id . "q3")
+                                                (question . "Skip?"))]))])
                      (settled . []))))
       (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                  (lambda (method params _callback)
-                   (setq sent (cons method params))))
+                   (push (cons method params) sent)))
                 ((symbol-function 'dsh-emacs--collect-question-answers)
                  (lambda (_questions _session)
-                   '(((id . "q1") (selected . ["A"]))))))
+                   '(((id . "q1") (selected . ("A" "B")))
+                     ((id . "q2") (selected . []) (custom . "my note"))
+                     ((id . "q3") (selected . []))))))
         (dsh-emacs-answer-question))
       (ert-info ((format "%s" "answer-question-submits-late-batch"))
-        (should (equal "userQuestions/answer" (car sent)))
-        (should (equal "sess-uq" (cdr (assq 'agentId (cdr sent)))))
-        (should (equal "c1" (cdr (assq 'callId (cdr sent)))))
-        (should (equal '(((id . "q1") (selected . ["A"])))
-                       (cdr (assq 'answers
-                                  (cdr (assq 'answer (cdr sent)))))))))))
+        (should
+         (equal sent
+                '(("userQuestions/answer"
+                   (agentId . "sess-uq")
+                   (callId . "c1")
+                   (answer . ((answers . (((id . "q1") (selected . ("A" "B")))
+                                          ((id . "q2") (selected . [])
+                                           (custom . "my note"))
+                                          ((id . "q3") (selected . []))))))))))))))
 
 (ert-deftest dsh-emacs-test-questions-answer-question-reports-without-continued-call ()
   :tags '(dsh-unit)
@@ -2296,14 +2308,13 @@
           ;; A reader error must still answer the host: the waterfall is
           ;; declined instead of being dropped when the minibuffer is busy.
           (dsh-emacs--question-answer (list chat "rpc-q-error" "sess-q" nil nil))
-          (let ((response (car responds)))
-            (ert-info ((format "%s" "question-read-error-declines-waterfall"))
-              (should (equal "c-error" (nth 0 response)))
-              (should (equal "rpc-q-error" (nth 1 response)))
-              (should (equal "rejected" (alist-get 'kind (nth 2 response))))
-              (should (equal "cancelled"
-                             (alist-get 'name
-                                        (alist-get 'error (nth 2 response))))))))
+          (ert-info ((format "%s" "question-read-error-declines-waterfall"))
+            (should
+             (equal responds
+                    '(("c-error" "rpc-q-error"
+                       ((kind . "rejected")
+                        (error . ((name . "cancelled")
+                                  (message . "User abandoned the questions"))))))))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
 
 (ert-deftest dsh-emacs-test-questions-approval-read-error-rejects-waterfall ()
@@ -2319,12 +2330,10 @@
                    (lambda (&rest _) (error "reader blew up"))))
           (dsh-emacs--approval-answer
            (list chat "wf-error" "sess-a" "bash" "why" "call-1"))
-          (let ((response (car responds)))
-            (ert-info ((format "%s" "approval-read-error-rejects-waterfall"))
-              (should (equal "c-error" (nth 0 response)))
-              (should (equal "wf-error" (nth 1 response)))
-              (should (equal '((kind . "result") (value . "rejected"))
-                             (nth 2 response))))))
+          (ert-info ((format "%s" "approval-read-error-rejects-waterfall"))
+            (should (equal responds
+                           '(("c-error" "wf-error"
+                              ((kind . "result") (value . "rejected"))))))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
 
 (provide 'dsh-test-questions)

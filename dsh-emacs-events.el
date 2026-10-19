@@ -1439,7 +1439,8 @@ retires a pending waterfall by `eventId'."
              ;; not wait on us.
              (when (and event-id dsh-emacs-events--client-id)
                (dsh-emacs--events-result-async
-                dsh-emacs-events--client-id event-id '((kind . "next"))
+                dsh-emacs-events--client-id event-id
+                (dsh-protocol-events-next-outcome)
                 (lambda (_ok _value) nil)))
            (pcase event-name
              ("approval/request"

@@ -254,7 +254,7 @@ its own outcome answers the waterfall."
                         dsh-emacs-events--client-id))
         (dsh-emacs--events-result-async
          (plist-get review :client-id) (plist-get review :event-id)
-         '((kind . "next"))
+         (dsh-protocol-events-next-outcome)
          (lambda (ok value)
            (unless ok (message "Plan handoff failed: %s" value))))))))
 
@@ -277,15 +277,13 @@ its own outcome answers the waterfall."
     (let* ((question (plist-get review :question))
            (outcome
             (if approve
-                `((kind . "result")
-                  (value . ((answers .
-                                     [((id . ,(dsh-protocol-question-id question))
-                                       (selected .
-                                                 [,(dsh-protocol-question-approve-label
-                                                    question)]))]))))
-              '((kind . "rejected")
-                (error . ((name . "cancelled")
-                          (message . "User requested plan changes"))))))
+                (dsh-protocol-question-result-outcome
+                 (vector
+                  (dsh-protocol-question-answer-request
+                   (dsh-protocol-question-id question)
+                   (vector (dsh-protocol-question-approve-label question)))))
+              (dsh-protocol-events-cancelled-outcome
+               "User requested plan changes")))
            (done
             (lambda (ok value)
               (when (and (buffer-live-p chat)

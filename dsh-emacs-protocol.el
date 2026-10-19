@@ -2092,6 +2092,42 @@ PROVIDER entry.  MODELS contains model IDs.  Nil keyword values omit fields."
   "Encode a write of KEY to credential REF."
   `((ref . ,ref) (value . ,key)))
 
+(defun dsh-protocol-events-result-request (client-id event-id outcome)
+  "Encode OUTCOME for EVENT-ID on the CLIENT-ID waterfall generation."
+  `((clientId . ,client-id) (eventId . ,event-id) (outcome . ,outcome)))
+
+(defun dsh-protocol-question-answer-request (id selected &optional custom)
+  "Encode an answer for question ID with SELECTED labels and optional CUSTOM.
+Keep SELECTED's list or vector representation; nil CUSTOM omits the field."
+  `((id . ,id) (selected . ,selected)
+    ,@(when custom `((custom . ,custom)))))
+
+(defun dsh-protocol-question-result-outcome (answers)
+  "Encode the successful question waterfall's ANSWERS, preserving their shape."
+  `((kind . "result") (value . ((answers . ,answers)))))
+
+(defun dsh-protocol-approval-outcome (allow)
+  "Encode an approval decision: allow once when ALLOW, otherwise reject.
+Both decisions are result values, not rejected waterfall errors."
+  `((kind . "result") (value . ,(if allow "allowed-once" "rejected"))))
+
+(defun dsh-protocol-events-cancelled-outcome (message)
+  "Encode a cancelled waterfall with its caller-supplied MESSAGE."
+  `((kind . "rejected") (error . ((name . "cancelled") (message . ,message)))))
+
+(defun dsh-protocol-events-next-outcome ()
+  "Encode a waterfall handoff, with no result value or error."
+  '((kind . "next")))
+
+(defun dsh-protocol-question-wait-request (session call-id)
+  "Encode the timed wait claim for CALL-ID in SESSION."
+  `((agentId . ,session) (callId . ,call-id)))
+
+(defun dsh-protocol-question-late-answer-request (session call-id answers)
+  "Encode a late ANSWERS batch for CALL-ID in SESSION without array coercion."
+  `((agentId . ,session) (callId . ,call-id)
+    (answer . ((answers . ,answers)))))
+
 (defun dsh-protocol-session-address-json (session-id &optional address)
   "Serialize SESSION-ID or its durable subagent ADDRESS."
   (if address

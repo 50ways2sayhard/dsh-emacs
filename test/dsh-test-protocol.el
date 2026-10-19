@@ -1138,5 +1138,66 @@
                   (dsh-protocol-credentials-set-request "TEST_KEY" "fake-key"))
                  "{\"ref\":\"TEST_KEY\",\"value\":\"fake-key\"}")))
 
+(ert-deftest dsh-emacs-test-protocol-outbound-interaction-args ()
+  :tags '(dsh-unit)
+  (let* ((outcome '((kind . "result") (value . "opaque")))
+         (args (dsh-protocol-events-result-request "client" "event" outcome)))
+    (should (equal args '((clientId . "client") (eventId . "event")
+                          (outcome . ((kind . "result") (value . "opaque"))))))
+    (should (eq (cdr (assq 'outcome args)) outcome))
+    (should (equal (dsh-protocol-write-json args)
+                   (concat "{\"clientId\":\"client\",\"eventId\":\"event\","
+                           "\"outcome\":{\"kind\":\"result\",\"value\":\"opaque\"}}"))))
+  (should (equal (dsh-protocol-question-wait-request "s" "call")
+                 '((agentId . "s") (callId . "call")))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-question-answer-shapes ()
+  :tags '(dsh-unit)
+  (dolist (case '((nil nil "{\"id\":\"q\",\"selected\":null}")
+                  ([] nil "{\"id\":\"q\",\"selected\":[]}")
+                  (("B" "A") nil "{\"id\":\"q\",\"selected\":[\"B\",\"A\"]}")
+                  (["B" "A"] nil "{\"id\":\"q\",\"selected\":[\"B\",\"A\"]}")
+                  ([] "" "{\"id\":\"q\",\"selected\":[],\"custom\":\"\"}")
+                  ([] "Other" "{\"id\":\"q\",\"selected\":[],\"custom\":\"Other\"}")))
+    (pcase-let* ((`(,selected ,custom ,json) case)
+                 (answer (dsh-protocol-question-answer-request "q" selected custom)))
+      (should (eq (cdr (assq 'selected answer)) selected))
+      (should (equal (dsh-protocol-write-json answer) json)))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-interaction-outcomes ()
+  :tags '(dsh-unit)
+  (dolist (case
+           (list
+            (list (dsh-protocol-approval-outcome t)
+                  "{\"kind\":\"result\",\"value\":\"allowed-once\"}")
+            (list (dsh-protocol-approval-outcome nil)
+                  "{\"kind\":\"result\",\"value\":\"rejected\"}")
+            (list (dsh-protocol-events-next-outcome) "{\"kind\":\"next\"}")
+            (list (dsh-protocol-events-cancelled-outcome "User abandoned the questions")
+                  (concat "{\"kind\":\"rejected\",\"error\":{\"name\":\"cancelled\","
+                          "\"message\":\"User abandoned the questions\"}}"))
+            (list (dsh-protocol-events-cancelled-outcome "User requested plan changes")
+                  (concat "{\"kind\":\"rejected\",\"error\":{\"name\":\"cancelled\","
+                          "\"message\":\"User requested plan changes\"}}"))))
+    (pcase-let ((`(,outcome ,json) case))
+      (should (equal (dsh-protocol-write-json outcome) json)))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-question-batch-shapes ()
+  :tags '(dsh-unit)
+  (let* ((rows '(((id . "q1") (selected . ("B" "A")))
+                 ((id . "q2") (selected . []) (custom . "Other"))))
+         (json (concat "[{\"id\":\"q1\",\"selected\":[\"B\",\"A\"]},"
+                       "{\"id\":\"q2\",\"selected\":[],\"custom\":\"Other\"}]")))
+    (dolist (answers (list rows (vconcat rows)))
+      (let ((outcome (dsh-protocol-question-result-outcome answers))
+            (late (dsh-protocol-question-late-answer-request "s" "call" answers)))
+        (should (eq (cdr (assq 'answers (cdr (assq 'value outcome)))) answers))
+        (should (eq (cdr (assq 'answers (cdr (assq 'answer late)))) answers))
+        (should (equal (dsh-protocol-write-json outcome)
+                       (concat "{\"kind\":\"result\",\"value\":{\"answers\":" json "}}")))
+        (should (equal (dsh-protocol-write-json late)
+                       (concat "{\"agentId\":\"s\",\"callId\":\"call\","
+                               "\"answer\":{\"answers\":" json "}}")))))))
+
 (provide 'dsh-test-protocol)
 ;;; dsh-test-protocol.el ends here

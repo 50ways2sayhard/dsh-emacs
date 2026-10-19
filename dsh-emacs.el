@@ -4753,9 +4753,7 @@ args {clientId, eventId, outcome} (rpc.md §3.3).  CALLBACK receives
 (ok-p . value-or-error) like `dsh-emacs--rpc-async'."
   (dsh-emacs--rpc-async
    "$events/result"
-   `((clientId . ,client-id)
-     (eventId . ,event-id)
-     (outcome . ,outcome))
+   (dsh-protocol-events-result-request client-id event-id outcome)
    callback))
 
 (defun dsh-emacs--question-answer (frame)
@@ -4790,8 +4788,7 @@ claim until its asynchronous response arrives; other exits release it."
                   (dsh-emacs--events-result-async
                    dsh-emacs-events--client-id
                    event-id
-                   `((kind . "result")
-                     (value . ((answers . ,answers))))
+                   (dsh-protocol-question-result-outcome answers)
                    (lambda (ok value)
                      (unwind-protect
                          (if ok
@@ -4839,7 +4836,7 @@ claim — no live socket, or no named call."
           (let ((stream
                  (dsh-emacs-events-open-stream
                   process "userQuestions/attachWait"
-                  `((agentId . ,session-id) (callId . ,call-id))
+                  (dsh-protocol-question-wait-request session-id call-id)
                   "userQuestions/attachWait"
                   (lambda (_value) nil))))
             (and stream (cons process stream))))))))
@@ -5149,21 +5146,20 @@ area; each option's description rides along with its candidate."
                  (read-string (format "%s%s%s: "
                                       dsh-emacs--question-where text
                                       dsh-emacs--question-hint)))))
-          (if (string-empty-p custom)
-              `((id . ,id) (selected . []))
-            `((id . ,id) (selected . []) (custom . ,custom))))
+          (dsh-protocol-question-answer-request
+           id [] (unless (string-empty-p custom) custom)))
       (let ((answer (dsh-emacs--question-choose labels)))
         (pcase answer
           (:skip
            (when (and index total)
              (message "Question %d/%d skipped" index total))
-           `((id . ,id) (selected . [])))
+           (dsh-protocol-question-answer-request id []))
           (`(:custom . ,custom)
-           `((id . ,id) (selected . []) (custom . ,custom)))
+           (dsh-protocol-question-answer-request id [] custom))
           (`(:selected . ,selected)
-           `((id . ,id) (selected . ,selected)))
+           (dsh-protocol-question-answer-request id selected))
           (`(:one . ,label)
-           `((id . ,id) (selected . (,label))))
+           (dsh-protocol-question-answer-request id (list label)))
           (_ (error "Unhandled question answer: %S" answer)))))))
 
 (defun dsh-emacs--question-preview-item (id text detail multi options)
@@ -5302,9 +5298,7 @@ process filter: Quit\"."
   (dsh-emacs--events-result-async
    dsh-emacs-events--client-id
    event-id
-   `((kind . "rejected")
-     (error . ((name . "cancelled")
-               (message . "User abandoned the questions"))))
+   (dsh-protocol-events-cancelled-outcome "User abandoned the questions")
    (lambda (ok value)
      (if ok
          (message "Question cancelled")
@@ -5349,9 +5343,7 @@ into the agent as a late reply; a later `userQuestions' projection frame
 reports the call settled."
   (dsh-emacs--rpc-async
    "userQuestions/answer"
-   `((agentId . ,session-id)
-     (callId . ,call-id)
-     (answer . ((answers . ,answers))))
+   (dsh-protocol-question-late-answer-request session-id call-id answers)
    (lambda (ok value)
      (cond
       ((not ok) (message "Question answer not accepted (%s)" value))
@@ -5521,8 +5513,7 @@ buffer-local transcript state."
               (dsh-emacs--events-result-async
                dsh-emacs-events--client-id
                event-id
-               `((kind . "result")
-                 (value . ,(if allow "allowed-once" "rejected")))
+               (dsh-protocol-approval-outcome allow)
                (lambda (ok value)
                  (if ok
                      (message "%s %s for %s"
@@ -5545,7 +5536,7 @@ buffer-local transcript state."
            (condition-case fallback
                (dsh-emacs--events-result-async
                 dsh-emacs-events--client-id event-id
-                '((kind . "result") (value . "rejected"))
+                (dsh-protocol-approval-outcome nil)
                 (lambda (ok value)
                   (unless ok
                     (message "Approval response not accepted (%s)" value))))

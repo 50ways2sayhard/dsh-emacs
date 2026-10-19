@@ -267,6 +267,7 @@
                             (user-error t)))))
               (ert-info ((format "%s" "plan-read-and-approve-preserve-chat-draft"))
                 (should (equal (buffer-string) "draft feedback"))))
+            (setq sent nil)
             (dsh-emacs--question-requested
              chat "plan-changes" "plan-session"
              (list (dsh-test--plan-question "plan-two")))
@@ -274,12 +275,13 @@
                    (document (plist-get review :buffer)) returned)
               (with-current-buffer document (dsh-emacs-plan-request-changes))
               (ert-info ((format "%s" "plan-request-changes-cancels-instead-of-replanning"))
-                (should (equal (alist-get 'kind (alist-get 'outcome (cdr (car sent))))
-                               "rejected"))
-                (should (equal (alist-get 'name (alist-get 'error
-                                                           (alist-get 'outcome
-                                                                      (cdr (car sent)))))
-                               "cancelled")))
+                        (should (equal sent
+                                       '(("$events/result"
+                                          (clientId . "plan-client")
+                                          (eventId . "plan-changes")
+                                          (outcome . ((kind . "rejected")
+                                                      (error . ((name . "cancelled")
+                                                                (message . "User requested plan changes"))))))))))
               (cl-letf (((symbol-function 'pop-to-buffer)
                          (lambda (buffer &rest _) (setq returned buffer))))
                 (funcall callback t nil))
@@ -318,8 +320,8 @@
         (cl-letf (((symbol-function 'display-buffer)
                    (lambda (buffer &rest _) (push buffer documents) nil))
                   ((symbol-function 'dsh-emacs--rpc-async)
-                   (lambda (_method args callback)
-                     (push args sent) (funcall callback t nil))))
+                   (lambda (method args callback)
+                     (push (cons method args) sent) (funcall callback t nil))))
           (dsh-emacs--question-requested
            first "review-first" "first" (list (dsh-test--plan-question)))
           (dsh-emacs--question-requested
@@ -337,7 +339,8 @@
           (kill-buffer second)
           (ert-info ((format "%s" "plan-chat-closure-hands-back-only-own-request"))
             (should (equal sent
-                           '(((clientId . "isolated-client")
+                           '(("$events/result"
+                              (clientId . "isolated-client")
                               (eventId . "review-second")
                               (outcome . ((kind . "next")))))))
             (should (with-current-buffer (car documents)

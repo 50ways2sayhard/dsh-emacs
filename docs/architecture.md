@@ -516,14 +516,15 @@ still owns UTF-8 decoding and error reporting. See
 
 Outbound `*-request` functions return method argument alists for session RPCs,
 workspace mutations, job streams/kill, skills/list, commands, goals, provider
-configuration/credentials and reference queries. Both model and effort pickers use
+configuration/credentials, interaction replies/wait claims and reference queries.
+Both model and effort pickers use
 `dsh-protocol-session-select-model-request`. The same boundary owns
 prompt text content and session/follow arguments. Absent effort, ordering target,
 job scope and follow limit fields are omitted, not sent as null; session/list
 retains its distinct `_request: {}` parameter.
 Callers still choose endpoints and supply ids, modes, expanded paths, time zones
-and resolved attachments. Queue action and attachment-part subdocuments, plus
-interaction requests remain with their feature owners for later batches.
+and resolved attachments. Queue action and attachment-part subdocuments remain
+with their feature owners for later batches.
 
 Command catalog reads and execution keep flat `agentId` arguments, without a
 `request` wrapper. The execute encoder owns the required `submittedAttachments`
@@ -532,6 +533,16 @@ reference discovery endpoints share `dsh-protocol-reference-query-request` for
 flat `agentId` / `query` arguments, including the empty warm-up query. Command
 admission, sync/async catalogs, reference generations and callback settlement
 remain with their feature modules.
+
+Interaction encoders own the flat `$events/result` envelope, timed wait/late
+answer arguments, answer rows and explicit result/rejected/next outcomes.
+Approval denial remains a result value (`"rejected"`), distinct from a
+cancelled question or plan waterfall's rejected error. Ordinary answer batches
+and selected labels retain their list representation; skipped/custom selections
+stay empty vectors, and plan approval retains vectors at both array levels.
+These encoders do not normalize opaque arrays. Readers, FIFO/shared prompt-slot
+ownership, wait-claim lifetimes, callback handling and plan retirement remain
+with their existing feature owners. Local settled-answer replay is unchanged.
 
 `dsh-protocol-rpc-request-json` and the mux open/cancel encoders own outgoing
 envelopes. `dsh-protocol-write-json` fixes null/false sentinels and compact
