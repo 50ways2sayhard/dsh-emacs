@@ -21,7 +21,6 @@
 (defvar dsh-emacs--chat-buffers)
 (defvar dsh-emacs--buffer-session)
 (defvar dsh-emacs--buffer-subagent)
-(defvar dsh-emacs--subagent-input-read-only)
 (defvar dsh-emacs-sessions-buffer)
 (declare-function dsh-emacs-events--host-repaint "dsh-emacs-events" ())
 (declare-function dsh-emacs--rpc-request "dsh-emacs" (method params))

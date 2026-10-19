@@ -90,6 +90,12 @@ entries from personal configuration. Tool cards still fold independently and
 assistant message spacing is unchanged. See
 [Customization](docs/customization.md).
 
+The unused Lisp helpers `dsh-emacs-modeline-set-cwd`,
+`dsh-emacs-modeline-set-branch`, `dsh-emacs-modeline-teardown` and
+`dsh-emacs-usage-p` are also removed in 0.7.0 without aliases. Remove calls
+from personal Lisp code; cwd and branch follow the chat's `default-directory`
+and cached Git detection. See [Mode-line](docs/modeline.md).
+
 ### References, commands, and attachments
 
 - **`@` references** select server-side files, directories, or sessions.

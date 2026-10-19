@@ -1057,10 +1057,13 @@
                     (ert-info ((format "%s" "mode-line-cached-branch-stale-refetches"))
                       (should (equal "other" (dsh-emacs-modeline--cached-branch))))))))
             ;; segment-branch: a branch renders wrapped in parentheses
-            (let ((dsh-emacs--modeline-branch "main"))
+            (cl-letf (((symbol-function 'dsh-emacs-modeline--cached-branch)
+                       (lambda () "main")))
               (let ((seg (dsh-emacs-modeline--segment-branch)))
                 (ert-info ((format "%s" "mode-line-segment-branch-renders"))
-                  (should (string-match-p "main" seg)))))
+                  (should (equal "(main)" seg))
+                  (should (equal "Git branch: main"
+                                 (get-text-property 0 'help-echo seg))))))
             ;; segment-cwd: propertize face
             (let ((seg (dsh-emacs-modeline--segment-cwd)))
               (ert-info ((format "%s" "mode-line-segment-cwd-face"))

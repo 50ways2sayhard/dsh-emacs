@@ -308,6 +308,14 @@ Background jobs use their transcript tool rows for status. `C-c C-j`
 
 ### Why the branch segment is cached
 
+Cwd is read from the chat buffer's `default-directory`; Git branch detection
+runs in that directory. There is no separate display override. The unused
+Lisp APIs `dsh-emacs-modeline-set-cwd`, `dsh-emacs-modeline-set-branch` and
+`dsh-emacs-modeline-teardown` are removed in 0.7.0 without aliases; remove
+external calls to them. Doom segment registration stays package-scoped,
+not a per-chat teardown operation. Opening a chat no longer prints internal
+mode-line setup flags. See [decision record 138](../postmortem/138-unused-helpers-and-modeline-overrides.md).
+
 The branch segment has a 10-second TTL cache
 (`dsh-emacs-modeline-branch-refresh-interval`): the running whale animation
 can trigger a mode-line recomputation about every 50ms, and without caching each

@@ -49,14 +49,6 @@
 (require 'json)
 (require 'url)
 (require 'cl-lib)
-(declare-function x-show-tip "xfns.c"
-                  (string &optional frame parms timeout dx dy))
-(declare-function tooltip-hide "tooltip" (&optional ignored-arg))
-(defvar tooltip-frame-parameters)
-(defvar tooltip-hide-delay)
-(defvar use-system-tooltips)
-(defvar x-max-tooltip-size)
-(declare-function icomplete-force-complete-and-exit "icomplete" ())
 ;; `yank-media-preferred-types' is Emacs 31+ and is not declared here: a
 ;; load-time `defvar' would shadow the package's default.  Its one use site
 ;; guards on `boundp' and suppresses the byte-compiler warning instead.
@@ -496,7 +488,7 @@ methods).  Returns (ok-p . value) or nil."
          (url-request-method "POST")
          (url-request-extra-headers
           (append '(("Content-Type" . "application/json"))
-                  (dsh-emacs--extra-request-headers)))
+                  (dsh-emacs--server-auth-header)))
          (url-request-data (encode-coding-string json-data 'utf-8)))
     (condition-case err
         ;; Auth cookies are owned by dsh, not the global URL cookie jar.
@@ -519,8 +511,7 @@ methods).  Returns (ok-p . value) or nil."
        ;; A 401 while we sent a cookie means the cached cookie is stale (an
        ;; out-of-band server restarted and minted a new token): drop it so the
        ;; next call re-mints / re-prompts instead of 401-looping until restart.
-       (when (and (dsh-emacs--server-auth-http-401-p err)
-                  (fboundp 'dsh-emacs--server-auth-maybe-expire))
+       (when (dsh-emacs--server-auth-http-401-p err)
          (dsh-emacs--server-auth-maybe-expire))
        (message "RPC error: %s%s" (error-message-string err)
                 (dsh-emacs--http-error-hint err))
@@ -542,13 +533,6 @@ authentication that was not satisfied."
             (format " (HTTP %S)" code))))
     ""))
 
-(defun dsh-emacs--extra-request-headers ()
-  "Extra `url-request-extra-headers' for RPC posts: the browser-session
-cookie when this dsh server needs authentication, else nil.  Re-mints the
-cookie lazily when a token became available after the server was probed."
-  (when-let* ((auth (dsh-emacs--server-auth-header)))
-    auth))
-
 (defun dsh-emacs--http-post (url content-type body callback)
   "POST BODY to URL as CONTENT-TYPE; CALLBACK receives the decoded JSON.
 BODY is the exact bytes to send (a unibyte string already encoded by
@@ -566,7 +550,7 @@ which is what makes the octet-stream upload byte-exact."
         (url-request-method "POST")
         (url-request-extra-headers
          (append (list (cons "Content-Type" content-type))
-                 (dsh-emacs--extra-request-headers)))
+                 (dsh-emacs--server-auth-header)))
         (url-request-data body)
         (callback-buffer (current-buffer)))
     (cl-labels
@@ -600,8 +584,7 @@ which is what makes the octet-stream upload byte-exact."
                  ;; stale (an out-of-band server restarted and minted a new
                  ;; per-process token): drop it so the next call re-mints /
                  ;; re-prompts instead of 401-looping until Emacs restarts.
-                 (when (and (dsh-emacs--server-auth-http-401-p err)
-                            (fboundp 'dsh-emacs--server-auth-maybe-expire))
+                 (when (dsh-emacs--server-auth-http-401-p err)
                    (dsh-emacs--server-auth-maybe-expire))
                  (message "HTTP POST error: %S%s" status
                           (dsh-emacs--http-error-hint err))
@@ -643,15 +626,6 @@ content — see `dsh-emacs--wrap-request'."
 ;;; ---------------------------------------------------------------------------
 ;;;  Session management
 ;;; ---------------------------------------------------------------------------
-
-(defun dsh-emacs--sequence-list (value)
-  "Convert JSON VALUE, a list or vector, to a proper list.
-JSON arrays are decoded as vectors by `json-read', while the UI iteration
-helpers expect lists."
-  (cond
-   ((vectorp value) (append value nil))
-   ((listp value) value)
-   (t nil)))
 
 (defun dsh-emacs--absolute-cwd (cwd)
   "Return CWD as an absolute path.
@@ -2070,7 +2044,7 @@ title prompt is prefilled with the session's current title."
 (defun dsh-emacs--normalize-archived (archived)
   "Normalize ARCHIVED (JSON array) into a hash table of session ids."
   (let ((table (make-hash-table :test 'equal)))
-    (dolist (id (dsh-emacs--sequence-list archived))
+    (dolist (id (dsh-protocol--list archived))
       (puthash id t table))
     table))
 
@@ -2950,7 +2924,7 @@ attachment-bearing prompt."
   (when (and events session-id)
     (let ((own (gethash session-id dsh-emacs--input-history-by-session))
           (missing nil))
-      (dolist (entry (dsh-emacs--sequence-list events))
+      (dolist (entry (dsh-protocol--list events))
         (let ((text (dsh-protocol-input-prompt--from-alist entry)))
           (when (and text (not (string-empty-p text))
                      (not (member text own))
@@ -5006,7 +4980,7 @@ A timed frame claims its foreground wait before reading, so the host cannot
 expire the question out from under the user.  A submitted answer keeps the
 claim until its asynchronous response arrives; other exits release it."
   (pcase-let* ((`(,chat ,event-id ,session-id ,raw-questions ,wait) frame)
-               (questions (dsh-emacs--sequence-list raw-questions))
+               (questions (dsh-protocol--list raw-questions))
                (claim nil)
                (submitted nil))
     (unwind-protect
@@ -5513,7 +5487,7 @@ Explicit plan-review intent opens a document without occupying the minibuffer."
     ;; chat.  Acceptance-gated: a replayed duplicate waterfall is dropped
     ;; above and must never re-notify.
     (when (buffer-live-p chat)
-      (let* ((qs (dsh-emacs--sequence-list questions))
+      (let* ((qs (dsh-protocol--list questions))
              (first-text
               (dsh-protocol-question-text
                (dsh-protocol--struct #'dsh-protocol-question-p

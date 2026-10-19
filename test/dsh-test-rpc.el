@@ -79,7 +79,7 @@
 (ert-deftest dsh-emacs-test-rpc-json-array-and-symbol-keys-supported ()
   :tags '(dsh-unit)
   (ert-info ((format "%s" "json-array-and-symbol-keys-supported"))
-    (should (and (equal '(a b) (dsh-emacs--sequence-list [a b]))
+    (should (and (equal '(a b) (dsh-protocol--list [a b]))
                  (equal "assistant/message"
                         (dsh-protocol--field "type"
                                                 '((type . "assistant/message"))))))))

@@ -44,12 +44,10 @@
 ;; declare-function at runtime, avoiding a top-level require cycle.
 (declare-function dsh-emacs--active-session-id "dsh-emacs" ())
 (declare-function dsh-emacs--busy-p "dsh-emacs" ())
-(declare-function dsh-emacs--replace-input "dsh-emacs" (text))
 (declare-function dsh-emacs--rpc-async "dsh-emacs" (method params callback))
 (declare-function dsh-emacs--submit-prompt "dsh-emacs" (message &optional attachments mode))
 (declare-function dsh-emacs-composer-render "dsh-emacs-composer" ())
 
-(defvar dsh-emacs--buffer-session)
 ;; Borrowed vertico runtime variables (see `dsh-emacs-queue--menu-item'):
 ;; declare-only so the byte-compiler stays quiet — always read under `boundp'.
 (defvar vertico--index)

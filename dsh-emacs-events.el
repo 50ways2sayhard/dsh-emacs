@@ -183,8 +183,7 @@ generation and a new clientId.")
                   (&optional key))
 (declare-function dsh-emacs--command-spinner-clear-all "dsh-emacs-render" ())
 (declare-function dsh-emacs--command-spinner-revive "dsh-emacs-render" ())
-;; Runtime dependencies defined in dsh-emacs.el / dsh-emacs-render.el.
-(declare-function dsh-emacs--sequence-list "dsh-emacs" (value))
+;; Runtime dependencies defined in dsh-emacs-render.el.
 (declare-function dsh-emacs-render-history-events "dsh-emacs-render" (events &optional stream bound &key insert-before follow-p))
 (declare-function dsh-emacs-render--note-history-window "dsh-emacs-render" (entries has-more))
 (declare-function dsh-emacs-render--consume-pending-user-message "dsh-emacs-render" (event))

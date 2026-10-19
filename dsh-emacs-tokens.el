@@ -83,12 +83,6 @@
 ;;; usage plist
 ;;; ---------------------------------------------------------------------------
 
-(defun dsh-emacs-usage-p (obj)
-  "Return t if OBJ is a usage plist."
-  (and (listp obj)
-       (keywordp (car-safe obj))
-       (memq :input obj)))
-
 (defun dsh-emacs-make-usage (&optional input output cache-read cache-write cost)
   "Create a new usage plist with the given keys."
   (list :input (or input 0)

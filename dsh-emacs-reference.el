@@ -74,7 +74,6 @@
 ;; dispatch, which treats a sole non-exact candidate differently.
 (declare-function corfu-auto--complete-deferred "corfu-auto" (&optional tick))
 (declare-function dsh-emacs--active-session-id "dsh-emacs.el" ())
-(declare-function dsh-emacs--get-input "dsh-emacs.el" ())
 (declare-function dsh-emacs--sessions-index "dsh-emacs.el" ())
 (declare-function dsh-emacs-server-ensure "dsh-emacs-server.el" ())
 ;; The session list owns the visible-session rule; @ suggestions mirror it.

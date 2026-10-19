@@ -41,7 +41,6 @@
 (require 'cl-lib)
 (require 'color)
 (require 'dsh-emacs-protocol)
-(require 'dsh-emacs-ui)
 (require 'dsh-emacs-faces)
 (require 'dsh-emacs-tokens)
 ;; Animation is optional; a missing library leaves a static running caption.
@@ -59,7 +58,6 @@
 ;; mode-line-format splice.
 (declare-function doom-modeline-def-segment "doom-modeline-core" (name &rest body))
 (declare-function doom-modeline-add-segment "doom-modeline-core" (segment anchor &optional position modeline))
-(declare-function doom-modeline-remove-segment "doom-modeline-core" (segment &optional modeline))
 (defvar nerd-icons-mode-icon-alist)
 
 ;; The renderer's pending text refresh can also redraw the running indicator.
@@ -156,12 +154,6 @@ last result — including a \"not a git repo\" nil — is reused."
 ;;; Internal state (buffer-local)
 ;;; ---------------------------------------------------------------------------
 
-(defvar-local dsh-emacs--modeline-cwd nil
-  "Override the cwd displayed in the mode-line. Default: use `default-directory'.")
-
-(defvar-local dsh-emacs--modeline-branch nil
-  "Override the git branch displayed. Default: detect via `vc-git'.")
-
 (defvar-local dsh-emacs--modeline-branch-cache nil
   "Cons (branch-or-nil . timestamp) memoizing git branch detection.
 Nil (no repo) is cached too so non-git dirs never spawn git per redraw.")
@@ -240,16 +232,15 @@ input-area geometry relies on (not part of the mode line proper).")
 
 (defun dsh-emacs-modeline--detect-branch ()
   "Return current git branch, or nil.
-Uses `call-process' straight on the git binary — no intermediate shell —
+Uses `call-process' straight on the git binary -- no intermediate shell --
 because this runs in the mode-line path and must stay cheap."
   (when (and default-directory (not (file-remote-p default-directory)))
     (ignore-errors
-      (let ((default-directory (or dsh-emacs--modeline-cwd default-directory)))
-        (with-temp-buffer
-          (let ((ret (call-process "git" nil t nil
-                                   "rev-parse" "--abbrev-ref" "HEAD")))
-            (when (eq 0 ret)
-              (string-trim (buffer-string)))))))))
+      (with-temp-buffer
+        (let ((ret (call-process "git" nil t nil
+                                 "rev-parse" "--abbrev-ref" "HEAD")))
+          (when (eq 0 ret)
+            (string-trim (buffer-string))))))))
 
 (defun dsh-emacs-modeline--cached-branch ()
   "Return the git branch from cache, refreshing when stale.
@@ -283,17 +274,15 @@ keeping the existing hidden-segment semantics intact."
 
 (defun dsh-emacs-modeline--segment-cwd ()
   "Render the cwd segment."
-  (let ((cwd (dsh-emacs-modeline--shorten-cwd (or dsh-emacs--modeline-cwd default-directory))))
+  (let ((cwd (dsh-emacs-modeline--shorten-cwd default-directory)))
     (dsh-emacs-modeline--annotate
      (propertize cwd 'face 'dsh-emacs-modeline-face)
-     (format "Working directory: %s"
-             (or dsh-emacs--modeline-cwd default-directory)))))
+     (format "Working directory: %s" default-directory))))
 
 (defun dsh-emacs-modeline--segment-branch ()
   "Render the git branch segment (cached; see
 `dsh-emacs-modeline-branch-refresh-interval')."
-  (let ((branch (or dsh-emacs--modeline-branch
-                    (dsh-emacs-modeline--cached-branch))))
+  (let ((branch (dsh-emacs-modeline--cached-branch)))
     (when (and branch (not (string-empty-p branch)))
       (dsh-emacs-modeline--annotate
        (concat (propertize "(" 'face 'dsh-emacs-modeline-face)
@@ -814,18 +803,6 @@ PERMISSION is the `permissions' projection's `currentValue'."
   (setq dsh-emacs--modeline-permission permission)
   (dsh-emacs-modeline-update))
 
-(defun dsh-emacs-modeline-set-cwd (cwd)
-  "Override the cwd segment to CWD. Invalidates the branch cache."
-  (setq dsh-emacs--modeline-cwd cwd
-        dsh-emacs--modeline-branch-cache nil)
-  (dsh-emacs-modeline-update))
-
-(defun dsh-emacs-modeline-set-branch (branch)
-  "Set the displayed branch name to BRANCH. Invalidates the branch cache."
-  (setq dsh-emacs--modeline-branch branch
-        dsh-emacs--modeline-branch-cache nil)
-  (dsh-emacs-modeline-update))
-
 ;;; ---------------------------------------------------------------------------
 ;;; Mode line running-state animation
 ;;; ---------------------------------------------------------------------------
@@ -1016,7 +993,7 @@ clip the last visible column."
                       (and (boundp 'dsh-emacs-default-model)
                            dsh-emacs-default-model))
                   dsh-emacs--modeline-provider dsh-emacs--modeline-effort
-                  dsh-emacs--modeline-preset dsh-emacs--modeline-cwd
+                  dsh-emacs--modeline-preset
                   default-directory
                   dsh-emacs--modeline-permission
                   dsh-emacs-modeline-permission-style
@@ -1029,9 +1006,8 @@ clip the last visible column."
                          dsh-emacs--modeline-permission)))
                   (and (memq 'cwd segments)
                        (or (getenv "HOME") (user-login-name)))
-                  (or dsh-emacs--modeline-branch
-                      (and dsh-emacs-modeline-enabled (memq 'branch segments)
-                           (dsh-emacs-modeline--cached-branch)))
+                  (and dsh-emacs-modeline-enabled (memq 'branch segments)
+                       (dsh-emacs-modeline--cached-branch))
                   dsh-emacs--modeline-context-pressure
                   dsh-emacs--modeline-context-window-server
                   dsh-emacs--modeline-usage)))
@@ -1557,20 +1533,6 @@ anchor (caller then falls back to the plain mode-line splice)."
       (and (memq 'dsh-emacs-whale lhs)
            (memq 'dsh-emacs-stats rhs)))))
 
-(defun dsh-emacs-modeline--remove-doom-segment ()
-  "Unregister the DSH whale and stats segments from Doom Modeline."
-  (when (boundp 'doom-modeline--fn-alist)
-    (let ((renderer (alist-get 'major-mode
-                               (symbol-value 'doom-modeline--fn-alist))))
-      (when (and (symbolp renderer) (fboundp renderer))
-        (advice-remove renderer #'dsh-emacs-modeline--doom-major-mode))))
-  (when (and dsh-emacs-modeline--doom-segment-installed
-             (featurep 'doom-modeline)
-             (fboundp 'doom-modeline-remove-segment))
-    (doom-modeline-remove-segment 'dsh-emacs-whale)
-    (doom-modeline-remove-segment 'dsh-emacs-stats)
-    (setq dsh-emacs-modeline--doom-segment-installed nil)))
-
 (defun dsh-emacs-modeline-setup ()
   "Initialize the mode-line structures and splice dsh segments into the mode line.
 The buffer keeps its existing (default or user-customized) mode-line-format;
@@ -1620,20 +1582,7 @@ dsh-emacs buffer."
         (setq dsh-emacs-modeline--modeline-patched t))))
 
   ;; Initial render (also forces the `:eval' segments to re-evaluate).
-  (dsh-emacs-modeline-update)
-  (message "dsh: mode-line setup (mode=%S enabled=%S patched=%S)"
-           (if dsh-emacs-modeline--doom-segment-installed 'doom 'splice)
-           dsh-emacs-modeline-enabled dsh-emacs-modeline--modeline-patched))
-
-(defun dsh-emacs-modeline-teardown ()
-  "Clean up the structural end-of-buffer overlay and the mode-line splicing
-when leaving dsh-emacs-mode."
-  (dsh-emacs-modeline--remove-doom-segment)
-  (setq dsh-emacs-modeline--modeline-patched nil)
-  (kill-local-variable 'mode-line-format)
-  (when dsh-emacs--modeline-overlay
-    (delete-overlay dsh-emacs--modeline-overlay)
-    (setq dsh-emacs--modeline-overlay nil)))
+  (dsh-emacs-modeline-update))
 
 ;;; ---------------------------------------------------------------------------
 

@@ -37,7 +37,6 @@
 
 (require 'cl-lib)
 (require 'url-parse)
-(require 'dsh-emacs-ui)
 
 (declare-function url-retrieve-synchronously "url"
                   (url &optional silent inhibit-cookies timeout))

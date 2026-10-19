@@ -47,8 +47,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'hl-line)
-(require 'dsh-emacs-ui)
 (require 'dsh-emacs-faces)
 
 ;; These commands are defined in dsh-emacs.el, which loads this module to

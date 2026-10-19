@@ -291,10 +291,6 @@
                    (equal "<$0.001" (dsh-emacs-format-cost 0.0005))
                    (equal "$0.000" (dsh-emacs-format-cost "x"))
                    (equal "$1.234" (dsh-emacs-format-cost 1.234)))))
-    ;; usage-p: valid plist detection (returns truthy), non-plist is nil
-    (ert-info ((format "%s" "usage-p-detects-plist"))
-      (should (and (dsh-emacs-usage-p '(:input 1 :output 2))
-                   (null (dsh-emacs-usage-p '(a b))))))
     ;; http-error-hint: 4xx/5xx hint that the RPC does not exist, other codes
     ;; short form, non-error empty
     (ert-info ((format "%s" "http-error-hint-branches"))

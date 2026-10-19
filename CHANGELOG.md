@@ -10,6 +10,13 @@ minor) and stay undated until the release is cut.
 
 ### Breaking Changes
 
+- **Remove unused Lisp helper APIs**: `dsh-emacs-modeline-set-cwd`,
+  `dsh-emacs-modeline-set-branch`, `dsh-emacs-modeline-teardown` and
+  `dsh-emacs-usage-p` are removed without aliases. External callers must
+  remove these calls; mode-line cwd and branch use the chat's
+  `default-directory` and cached Git detection, not separate overrides.
+  Chat commands and keybindings are unchanged. (rationale: postmortem/138)
+
 - **Emacs 28.1 is now the minimum**: 27.1 support is removed. The code
   already relied on 28.1 APIs (`setf` on `plist-get`, `ensure-list`),
   and CI now runs the gate on 28.1 and a current stable release.
@@ -22,6 +29,8 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep chat startup quiet**: mode-line setup no longer prints internal
+  integration flags each time a chat opens. (rationale: postmortem/138)
 - **Reorder multilingual session lists safely**: workspace regrouping no longer
   triggers the Emacs transposition crash or corrupts multibyte row text;
   navigation markers stay attached to their sessions. (rationale: postmortem/137)
