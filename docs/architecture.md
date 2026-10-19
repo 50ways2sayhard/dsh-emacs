@@ -396,6 +396,9 @@ Upload completion stores the receipt's typed file reference as `uploaded-file`
 on a per-submit copy of staging, so the echo uses the host's sanitized name and
 actual byte count while retries retain the original local upload name.  The
 wire prompt still carries only the receipt ID.
+Image descriptor/base64 encoding, image tagging and receipt-only file parts
+belong to protocol encoders. Acquisition, MIME/size checks, conversion and the
+sequential raw upload/rollback lifecycle remain in `dsh-emacs.el`.
 
 Geometry: `dsh-emacs--composer-top-marker` and
 `dsh-emacs--composer-end-marker` delimit the complete read-only chrome region,
@@ -523,8 +526,8 @@ prompt text content and session/follow arguments. Absent effort, ordering target
 job scope and follow limit fields are omitted, not sent as null; session/list
 retains its distinct `_request: {}` parameter.
 Callers still choose endpoints and supply ids, modes, expanded paths, time zones
-and resolved attachments. Queue action and attachment-part subdocuments remain
-with their feature owners for later batches.
+and resolved attachments. Protocol also owns nested queue action and attachment
+content encoders; feature modules do not construct their wire fields.
 
 Command catalog reads and execution keep flat `agentId` arguments, without a
 `request` wrapper. The execute encoder owns the required `submittedAttachments`
@@ -543,6 +546,19 @@ stay empty vectors, and plan approval retains vectors at both array levels.
 These encoders do not normalize opaque arrays. Readers, FIFO/shared prompt-slot
 ownership, wait-claim lifetimes, callback handling and plan retirement remain
 with their existing feature owners. Local settled-answer replay is unchanged.
+
+Queue encoders retain remove/steer actions and edit's one text-block vector,
+including empty text. Image descriptors retain media/data/name field order and
+encode raw bytes once as continuous base64. Image tagging keeps descriptor order,
+extra fields and tail identity; files instead emit only `type` and `receiptId`
+from the decoded upload receipt. Feature modules still own staging, sequential
+upload, confirmed queue identity, optimistic updates and draft restoration;
+restored files upload again rather than reuse a receipt.
+
+This boundary covers production RPC/mux payloads. Literal ERT and real E2E
+request fixtures intentionally remain independent. Local staging metadata,
+display-only optimistic/replay events, raw upload URL/query construction and
+octet-stream bodies are not RPC/mux JSON and retain their existing owners.
 
 `dsh-protocol-rpc-request-json` and the mux open/cancel encoders own outgoing
 envelopes. `dsh-protocol-write-json` fixes null/false sentinels and compact

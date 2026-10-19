@@ -406,33 +406,35 @@
         (with-current-buffer buf
           (dsh-emacs-mode)
           (dsh-emacs-modeline-setup)
-          (dsh-emacs--yank-media-handler
-           'image/png (base64-decode-string png-b64))
-          (ert-info ((format "%s" "yank-media-handler-stages"))
-            (should (equal "image/png"
-                           (cdr (assq 'mediaType
-                                      (car (dsh-emacs-pending-attachments)))))))
-          (ert-info ((format "%s" "yank-media-handler-refuses-unsupported"))
-            (should (equal "Unsupported clipboard media type: image/bmp"
-                           (condition-case e
-                               (progn (dsh-emacs--yank-media-handler 'image/bmp "x") nil)
-                             (user-error (error-message-string e))))))
-          ;; A TIFF selection matches its own magic number, but the host does
-          ;; not accept TIFF: it must be converted, never staged as-is.
-          (cl-letf (((symbol-function 'executable-find) (lambda (_) "/usr/bin/sips"))
-                    ((symbol-function 'call-process)
-                     (lambda (_p _i _d _disp &rest args)
-                       (dsh-emacs--write-binary-file
-                        (cadr (member "--out" args))
-                        (base64-decode-string png-b64))
-                       0)))
-            (setq dsh-emacs--pending-attachments nil)
+          (cl-letf (((symbol-function 'dsh-emacs--clipboard-image-name)
+                     (lambda (_media) "yanked.png")))
             (dsh-emacs--yank-media-handler
-             'image/tiff (concat (unibyte-string 73 73 42 0) "rest"))
-            (ert-info ((format "%s" "yank-media-handler-converts-tiff"))
-              (should (equal "image/png"
-                             (cdr (assq 'mediaType
-                                        (car (dsh-emacs-pending-attachments)))))))))
+             'image/png (base64-decode-string png-b64))
+            (ert-info ((format "%s" "yank-media-handler-stages"))
+              (should (equal `(((mediaType . "image/png") (data . ,png-b64)
+                                (name . "yanked.png")))
+                             (dsh-emacs-pending-attachments))))
+            (ert-info ((format "%s" "yank-media-handler-refuses-unsupported"))
+              (should (equal "Unsupported clipboard media type: image/bmp"
+                             (condition-case e
+                                 (progn (dsh-emacs--yank-media-handler 'image/bmp "x") nil)
+                               (user-error (error-message-string e))))))
+            ;; A TIFF selection matches its own magic number, but the host does
+            ;; not accept TIFF: it must be converted, never staged as-is.
+            (cl-letf (((symbol-function 'executable-find) (lambda (_) "/usr/bin/sips"))
+                      ((symbol-function 'call-process)
+                       (lambda (_p _i _d _disp &rest args)
+                         (dsh-emacs--write-binary-file
+                          (cadr (member "--out" args))
+                          (base64-decode-string png-b64))
+                         0)))
+              (setq dsh-emacs--pending-attachments nil)
+              (dsh-emacs--yank-media-handler
+               'image/tiff (concat (unibyte-string 73 73 42 0) "rest"))
+              (ert-info ((format "%s" "yank-media-handler-converts-tiff"))
+                (should (equal `(((mediaType . "image/png") (data . ,png-b64)
+                                  (name . "yanked.png")))
+                               (dsh-emacs-pending-attachments)))))))
       (kill-buffer buf))))
 
 (defvar yank-media-preferred-types)
@@ -714,31 +716,33 @@
 ;; metadata-only staged entry uploaded at submit time (see 122b-122e).
 (ert-deftest dsh-emacs-test-attachments-attachable-file-inlines-image ()
   :tags '(dsh-unit)
-  (let* ((png (make-temp-file "dsh-fa-img" nil ".png"))
+  (let* ((png-b64 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+         (png (make-temp-file "dsh-fa-img" nil ".png"))
          (txt (make-temp-file "dsh-fa-note" nil ".txt"))
          (big (make-temp-file "dsh-fa-big" nil ".bin")))
     (unwind-protect
         (progn
           (with-temp-file png
             (set-buffer-multibyte nil)
-            (insert (base64-decode-string
-                     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")))
+            (insert (base64-decode-string png-b64)))
           (with-temp-file txt (insert "notes\n"))
           (with-temp-file big (insert (make-string 32 ?x)))
           (let ((image (dsh-emacs--attachable-file png))
                 (file (dsh-emacs--attachable-file txt)))
             (ert-info ((format "%s" "attachable-file-inlines-image"))
-              (should (equal "image/png" (cdr (assq 'mediaType image))))
-              (should (stringp (cdr (assq 'data image))))
-              (should (equal (file-name-nondirectory png) (cdr (assq 'name image))))
-              (should (equal (dsh-emacs--attachment-part image)
-                             (cons '(type . "image") image))))
+              (should (equal image
+                             `((mediaType . "image/png") (data . ,png-b64)
+                               (name . ,(file-name-nondirectory png)))))
+              (should (equal (dsh-protocol-image-content-part image)
+                             `((type . "image") (mediaType . "image/png")
+                               (data . ,png-b64)
+                               (name . ,(file-name-nondirectory png))))))
             (ert-info ((format "%s" "attachable-file-stages-other-file"))
               (should (equal (expand-file-name txt) (cdr (assq 'file file))))
               (should (equal (file-name-nondirectory txt) (cdr (assq 'name file))))
               (should (equal 6 (cdr (assq 'bytes file))))
               (should (dsh-emacs--attachment-file-p file))
-              (should (null (dsh-emacs--attachment-part file)))
+              (should (null (dsh-protocol-image-content-part file)))
               (should (null (dsh-emacs--attachment-file-p image))))
             ;; The cap refuses before anything is read; nil lifts it.
             (let ((dsh-emacs-attach-max-file-size 8))
@@ -838,7 +842,8 @@
 ;; upload after another ---
 (ert-deftest dsh-emacs-test-attachments-upload-attachments-resolves-in-staged-order ()
   :tags '(dsh-unit)
-  (let* ((image '((mediaType . "image/png") (data . "eA==") (name . "shot.png")))
+  (let* ((image '((mediaType . "image/png") (extra . "keep")
+                  (data . "eA==") (name . "shot.png")))
          (fa (list (cons 'file "/tmp/a.pdf") (cons 'name "a.pdf") (cons 'bytes 1)))
          (fb (list (cons 'file "/tmp/b.log") (cons 'name "b.log") (cons 'bytes 2)))
          (uploaded nil)
@@ -849,18 +854,23 @@
                  (funcall callback
                           t
                           (dsh-protocol-file-receipt--from-alist
-                           (list (cons 'receiptId
-                                       (concat "r-" (cdr (assq 'name attachment))))))
+                           `((receiptId . ,(concat "r-" (cdr (assq 'name attachment))))
+                             (file . ((attachmentId . "sha256:remote")
+                                      (name . "remote.txt") (bytes . 9)))))
                           nil))))
       (dsh-emacs--upload-attachments
        "sess-up" (list image fa fb)
        (lambda (ok value error) (setq parts (list ok value error)))))
     (ert-info ((format "%s" "upload-attachments-resolves-in-staged-order"))
       (should (eq t (car parts)))
-      (should (equal (append (nth 1 parts) nil)
-                     (list (dsh-emacs--attachment-part image)
-                           '((type . "file") (receiptId . "r-a.pdf"))
-                           '((type . "file") (receiptId . "r-b.log")))))
+      (should (equal (nth 1 parts)
+                     '(((type . "image") (mediaType . "image/png")
+                        (extra . "keep") (data . "eA==") (name . "shot.png"))
+                       ((type . "file") (receiptId . "r-a.pdf"))
+                       ((type . "file") (receiptId . "r-b.log")))))
+      (should (eq image (cdr (car (nth 1 parts)))))
+      (should (equal image '((mediaType . "image/png") (extra . "keep")
+                             (data . "eA==") (name . "shot.png"))))
       (should (null (nth 2 parts)))
       (should (equal '("a.pdf" "b.log") (nreverse uploaded))))))
 

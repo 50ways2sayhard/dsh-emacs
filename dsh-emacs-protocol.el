@@ -1977,10 +1977,39 @@ Omit reasoningEffort when EFFORT is nil."
   "Encode prompt TEXT followed by resolved attachment PARTS."
   (vconcat `(((type . "text") (text . ,text))) parts))
 
+(defun dsh-protocol-image-attachment (media bytes name)
+  "Encode raw image BYTES as a staged descriptor with MEDIA and NAME.
+Base64 is continuous, without line breaks, as required by the host."
+  `((mediaType . ,media) (data . ,(base64-encode-string bytes t)) (name . ,name)))
+
+(defun dsh-protocol-image-content-part (attachment)
+  "Tag staged image ATTACHMENT as a content part, retaining its fields.
+A staged file has no image media type and cannot become a part before upload."
+  (when (assq 'mediaType attachment)
+    (cons '(type . "image") attachment)))
+
+(defun dsh-protocol-file-content-part (receipt)
+  "Encode decoded file upload RECEIPT as a single-use content part.
+Only the receipt ID travels; display metadata and local paths do not."
+  `((type . "file")
+    (receiptId . ,(dsh-protocol-file-receipt-receipt-id receipt))))
+
 (defun dsh-protocol-session-prompt-request (session id mode content zone)
   "Encode SESSION's prompt with request ID, MODE, CONTENT and time ZONE."
   `((request . ((requestId . ,id) (sessionId . ,session) (mode . ,mode)
                 (content . ,content) (clientTimeZone . ,zone)))))
+
+(defun dsh-protocol-queue-remove-action ()
+  "Encode removal of a confirmed queue item."
+  '((kind . "remove")))
+
+(defun dsh-protocol-queue-steer-action ()
+  "Encode promotion of a confirmed queue item into the running turn."
+  '((kind . "steer")))
+
+(defun dsh-protocol-queue-edit-action (text)
+  "Encode replacement of a queue item's content with one TEXT block."
+  `((kind . "edit") (content . ,(dsh-protocol-prompt-content text nil))))
 
 (defun dsh-protocol-session-update-queue-request (session item action)
   "Encode ACTION on queue ITEM in SESSION."

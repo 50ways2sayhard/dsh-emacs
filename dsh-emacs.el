@@ -2789,7 +2789,8 @@ is not recorded for `M-p' recall: every submit path skips it."
                       (or (dsh-protocol-error-message--from-alist err)
                           err "transport error"))))))
     (dsh-emacs--submit-dispatch
-     message :parts (delq nil (mapcar #'dsh-emacs--attachment-part attachments))
+     message :parts (delq nil (mapcar #'dsh-protocol-image-content-part
+                                    attachments))
      :staged attachments :mode mode)))
 
 (cl-defun dsh-emacs--submit-dispatch
@@ -3132,9 +3133,8 @@ one continuous base64 run."
          (supported (and media (member media dsh-emacs-attach-media-types))))
     (when (and supported (file-readable-p file))
       (let ((bytes (dsh-emacs--binary-file-string file)))
-        (list (cons 'mediaType media)
-              (cons 'data (base64-encode-string bytes t))
-              (cons 'name (file-name-nondirectory file)))))))
+        (dsh-protocol-image-attachment
+         media bytes (file-name-nondirectory file))))))
 
 ;; A non-image attachment is a *staged file entry*: metadata only, no
 ;; bytes.  The host admits a file into a prompt as a one-time receipt
@@ -3145,14 +3145,6 @@ one continuous base64 run."
 (defun dsh-emacs--attachment-file-p (attachment)
   "Non-nil when staged ATTACHMENT is a local file awaiting upload."
   (and (consp attachment) (assq 'file attachment)))
-
-(defun dsh-emacs--attachment-part (attachment)
-  "Return staged ATTACHMENT as a tagged wire content part, or nil.
-An image's base64 bytes ride the prompt inline (a `{type: \"image\"}'
-part, the shape `session/prompt' has always taken); a file entry has no
-part yet — its upload returns the receipt that becomes one."
-  (when (assq 'mediaType attachment)
-    (cons '(type . "image") attachment)))
 
 (defun dsh-emacs--staged-file-attachment (file)
   "Return FILE as a staged local file attachment, or nil.
@@ -3239,33 +3231,30 @@ upload's value, with no part list (the caller restores its draft)."
   (let ((pending attachments)
         (parts nil))
     (cl-labels
-        ((next ()
-           (if (null pending)
-               (funcall callback t (nreverse parts) nil)
-             (let* ((entry pending)
-                    (attachment (car entry)))
-               (setq pending (cdr pending))
-               (if (dsh-emacs--attachment-file-p attachment)
-                   (dsh-emacs--upload-file
-                    session-id attachment
-                    (lambda (ok receipt err)
-                      (if ok
-                          (progn
-                            ;; Keep authoritative display metadata separate
-                            ;; from the local name used for retry uploads.
-                            (let ((file (dsh-protocol-file-receipt-file receipt)))
-                              (when (or file (assq 'uploaded-file attachment))
-                                (setf (alist-get 'uploaded-file (car entry)) file)))
-                            (push (list (cons 'type "file")
-                                        (cons 'receiptId
-                                              (dsh-protocol-file-receipt-receipt-id
-                                               receipt)))
-                                  parts)
-                            (next))
-                        (funcall callback nil nil err))))
-                 (push (dsh-emacs--attachment-part attachment) parts)
-                 (next))))))
-      (next))))
+     ((next ()
+        (if (null pending)
+            (funcall callback t (nreverse parts) nil)
+          (let* ((entry pending)
+                 (attachment (car entry)))
+            (setq pending (cdr pending))
+            (if (dsh-emacs--attachment-file-p attachment)
+                (dsh-emacs--upload-file
+                 session-id attachment
+                 (lambda (ok receipt err)
+                   (if ok
+                       (progn
+                         ;; Keep authoritative display metadata separate
+                         ;; from the local name used for retry uploads.
+                         (let ((file (dsh-protocol-file-receipt-file receipt)))
+                           (when (or file (assq 'uploaded-file attachment))
+                             (setf (alist-get 'uploaded-file (car entry)) file)))
+                         (push (dsh-protocol-file-content-part receipt)
+                               parts)
+                         (next))
+                     (funcall callback nil nil err))))
+              (push (dsh-protocol-image-content-part attachment) parts)
+              (next))))))
+     (next))))
 
 ;;; Clipboard images
 ;;
@@ -3464,9 +3453,9 @@ submit uploads it again and never reuses a spent receipt."
 (defun dsh-emacs--stage-clipboard-image (image)
   "Stage clipboard IMAGE (a (MEDIA-TYPE . BYTES) pair) as an attachment."
   (dsh-emacs--stage-attachments
-   (list (list (cons 'mediaType (car image))
-               (cons 'data (base64-encode-string (cdr image) t))
-               (cons 'name (dsh-emacs--clipboard-image-name (car image)))))))
+   (list (dsh-protocol-image-attachment
+          (car image) (cdr image)
+          (dsh-emacs--clipboard-image-name (car image))))))
 
 ;;;###autoload
 (defun dsh-emacs-attach-clipboard-image ()
@@ -3524,11 +3513,7 @@ the host accepts are taken as-is; TIFF is converted to PNG through
                         (cons "image/png" png))))))
     (unless converted
       (user-error "Unsupported clipboard media type: %s" media))
-    (dsh-emacs--stage-attachments
-     (list (list (cons 'mediaType (car converted))
-                 (cons 'data (base64-encode-string (cdr converted) t))
-                 (cons 'name (dsh-emacs--clipboard-image-name
-                              (car converted))))))))
+    (dsh-emacs--stage-clipboard-image converted)))
 
 ;;;###autoload
 (defun dsh-emacs-clear-attachments ()
@@ -4270,7 +4255,7 @@ rejected."
                                        (bytes . ,(if file
                                                      (dsh-protocol-file-ref-bytes file)
                                                    (cdr (assq 'bytes attachment)))))))
-                                (dsh-emacs--attachment-part attachment)))
+                                (dsh-protocol-image-content-part attachment)))
                             attachments)))
          (event `((type . "user/message")
                   (data . ((content . ,(dsh-protocol-prompt-content

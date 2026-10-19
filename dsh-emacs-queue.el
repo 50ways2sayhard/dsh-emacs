@@ -453,7 +453,7 @@ the instant the RPC succeeds, without waiting for the frame round-trip."
   (let ((id (dsh-protocol-queue-item-id item)))
     (push id dsh-emacs--queue-deleted)
     (dsh-emacs-queue--update
-     id '((kind . "remove"))
+     id (dsh-protocol-queue-remove-action)
      (lambda (_value)
        ;; Delete failed: the item is still queued, so restore the
        ;; consumption-feedback semantics.
@@ -478,7 +478,7 @@ announced as a consumption (`running'); the `steering' feedback still
 rides the re-insertion frame's diff (the mirror is cleared in between)."
   (let ((id (dsh-protocol-queue-item-id item)))
     (dsh-emacs-queue--update
-     id '((kind . "steer"))
+     id (dsh-protocol-queue-steer-action)
      nil
      (lambda (_value)
        (push id dsh-emacs--queue-deleted)
@@ -500,9 +500,7 @@ edited preview at once; the confirming frame overwrites the mirror."
   (let ((id (dsh-protocol-queue-item-id item)))
     (dsh-emacs-queue--update
      id
-     `((kind . "edit")
-       (content . ,(vector (list (cons 'type "text")
-                                 (cons 'text new-text)))))
+     (dsh-protocol-queue-edit-action new-text)
      nil
      (lambda (_value)
        (dolist (it dsh-emacs--queue-items)
@@ -538,7 +536,7 @@ anything: the text-only resubmit cannot preserve their attachments."
       (dsh-emacs--rpc-async
        "session/updateQueue"
        (dsh-protocol-session-update-queue-request
-        session-id id '((kind . "remove")))
+        session-id id (dsh-protocol-queue-remove-action))
        (lambda (ok value)
          (when (buffer-live-p buf)
            (with-current-buffer buf

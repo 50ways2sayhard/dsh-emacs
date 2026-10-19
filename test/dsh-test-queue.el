@@ -862,7 +862,7 @@
                    (push (list method args) calls)
                    (funcall callback t nil)))
                 ((symbol-function 'dsh-emacs--submit-prompt)
-                 (lambda (&rest args) (setq submitted args))))
+                 (lambda (&rest args) (push args submitted))))
         (setq dsh-emacs--queue-items (list item))
         (condition-case nil
             (call-interactively
@@ -890,7 +890,7 @@
               dsh-emacs--queue-items (list item))
         (dsh-emacs-queue--send-now item)
         (ert-info ((format "%s" "inline-idle-send-still-resubmits-text"))
-          (should (equal submitted '("Plain")))
+          (should (equal submitted '(("Plain"))))
           (should (equal calls
                          '(("session/updateQueue"
                             ((request (sessionId . "inline-send") (itemId . "text-q")
@@ -1255,23 +1255,29 @@
                 (dsh-emacs-queue--delete item)
                 (dsh-emacs-queue--steer item)
                 (dsh-emacs-queue--edit item "rewritten")
-                (let* ((ordered (nreverse (copy-sequence calls)))
-                       (reqs (mapcar (lambda (call)
-                                       (cdr (assq 'request (cadr call))))
-                                     ordered))
-                       (actions (mapcar (lambda (req)
-                                          (cdr (assq 'action req)))
-                                        reqs)))
+                (dsh-emacs-queue--edit item "")
+                (let ((ordered (nreverse (copy-sequence calls))))
                   (ert-info ((format "%s" "queue-update-wire-actions"))
-                    (should (= 3 (length ordered)))
-                    (should (equal "session/updateQueue" (car (car ordered))))
-                    (should (equal '((kind . "remove")) (nth 0 actions)))
-                    (should (equal '((kind . "steer")) (nth 1 actions)))
-                    (should (equal "it1" (cdr (assq 'itemId (car reqs)))))
-                    (should (equal "sess-a" (cdr (assq 'sessionId (car reqs)))))
-                    (should (equal "rewritten"
-                                   (cdr (assq 'text
-                                              (aref (cdr (assq 'content (nth 2 actions))) 0))))))))))
+                    (should (= 4 (length ordered)))
+                    (should
+                     (equal
+                      ordered
+                      '(("session/updateQueue"
+                         ((request (sessionId . "sess-a") (itemId . "it1")
+                                   (action (kind . "remove")))))
+                        ("session/updateQueue"
+                         ((request (sessionId . "sess-a") (itemId . "it1")
+                                   (action (kind . "steer")))))
+                        ("session/updateQueue"
+                         ((request (sessionId . "sess-a") (itemId . "it1")
+                                   (action (kind . "edit")
+                                           (content . [((type . "text")
+                                                        (text . "rewritten"))])))))
+                        ("session/updateQueue"
+                         ((request (sessionId . "sess-a") (itemId . "it1")
+                                   (action (kind . "edit")
+                                           (content . [((type . "text")
+                                                        (text . ""))])))))))))))))
           ;; Rollback on failed delete: consumption feedback is not swallowed
           (with-current-buffer buf
             (setq dsh-emacs--queue-deleted '("it1"))

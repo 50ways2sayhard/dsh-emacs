@@ -1023,11 +1023,14 @@
 
 (ert-deftest dsh-emacs-test-protocol-outbound-queue-action-contracts ()
   :tags '(dsh-unit)
-  (dolist (case '((((kind . "remove")) "{\"kind\":\"remove\"}")
-                  (((kind . "steer")) "{\"kind\":\"steer\"}")
-                  (((kind . "edit")
-                    (content . [((type . "text") (text . "replacement"))]))
-                   "{\"kind\":\"edit\",\"content\":[{\"type\":\"text\",\"text\":\"replacement\"}]}")))
+  (dolist (case
+           (list
+            (list (dsh-protocol-queue-remove-action) "{\"kind\":\"remove\"}")
+            (list (dsh-protocol-queue-steer-action) "{\"kind\":\"steer\"}")
+            (list (dsh-protocol-queue-edit-action "replacement")
+                  "{\"kind\":\"edit\",\"content\":[{\"type\":\"text\",\"text\":\"replacement\"}]}")
+            (list (dsh-protocol-queue-edit-action "")
+                  "{\"kind\":\"edit\",\"content\":[{\"type\":\"text\",\"text\":\"\"}]}")))
     (pcase-let* ((`(,action ,action-json) case)
                  (args (dsh-protocol-session-update-queue-request
                         "s" "item-2" action)))
@@ -1198,6 +1201,46 @@
         (should (equal (dsh-protocol-write-json late)
                        (concat "{\"agentId\":\"s\",\"callId\":\"call\","
                                "\"answer\":{\"answers\":" json "}}")))))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-image-descriptor ()
+  :tags '(dsh-unit)
+  (let* ((bytes (concat (unibyte-string 0 255 13 10) (make-string 80 ?x)))
+         (expected (concat "AP8NCnh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4"
+                           "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4"))
+         (attachment (dsh-protocol-image-attachment "image/png" bytes "fake.png")))
+    (should (> (length expected) 76))
+    (should (equal attachment
+                   `((mediaType . "image/png") (data . ,expected) (name . "fake.png"))))
+    (should-not (string-match-p "\n" (cdr (assq 'data attachment))))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-image-part-preserves-descriptor ()
+  :tags '(dsh-unit)
+  (let* ((attachment '((name . "fake.png") (data . "eA==")
+                       (mediaType . "image/png") (extra . "opaque")))
+         (part (dsh-protocol-image-content-part attachment)))
+    (should (eq (cdr part) attachment))
+    (should (equal part '((type . "image") (name . "fake.png") (data . "eA==")
+                          (mediaType . "image/png") (extra . "opaque"))))
+    (should (equal attachment '((name . "fake.png") (data . "eA==")
+                                (mediaType . "image/png") (extra . "opaque")))))
+  (should-not (dsh-protocol-image-content-part nil))
+  (should-not (dsh-protocol-image-content-part
+               '((file . "/local/fake.pdf") (name . "fake.pdf") (bytes . 3))))
+  (should (equal (dsh-protocol-image-content-part '((mediaType . nil)))
+                 '((type . "image") (mediaType . nil)))))
+
+(ert-deftest dsh-emacs-test-protocol-outbound-file-part-is-receipt-only ()
+  :tags '(dsh-unit)
+  (let* ((receipt (dsh-protocol-file-receipt--from-alist
+                   '((receiptId . "receipt-1")
+                     (file . ((attachmentId . "sha256:fake")
+                              (name . "remote.pdf") (bytes . 23))))))
+         (part (dsh-protocol-file-content-part receipt)))
+    (should (equal part '((type . "file") (receiptId . "receipt-1"))))
+    (should (equal (dsh-protocol-write-json part)
+                   "{\"type\":\"file\",\"receiptId\":\"receipt-1\"}"))
+    (should (equal (dsh-protocol-file-ref-name
+                    (dsh-protocol-file-receipt-file receipt)) "remote.pdf"))))
 
 (provide 'dsh-test-protocol)
 ;;; dsh-test-protocol.el ends here

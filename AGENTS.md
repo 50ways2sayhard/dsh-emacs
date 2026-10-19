@@ -200,10 +200,11 @@ whole report blindly.
   fields through `dsh-protocol-*` accessors exclusively.
 - On the outbound path, session/workspace/job/skills/commands/goals arguments,
   provider configuration/credentials, interaction replies/wait claims, reference
-  queries and RPC/mux envelopes belong to protocol `*-request` / `*-outcome` /
-  `*-json` encoders. Do not reintroduce inline bodies for migrated RPCs.
-  Nested queue/attachment subdocuments remain to migrate (see postmortem/140).
-  RPC/mux JSON uses
+  queries, nested queue actions/attachment parts and RPC/mux envelopes belong to
+  protocol request/content/action/outcome/JSON encoders. Do not construct these
+  wire bodies inline in production callers (rationale: postmortem/140).
+  Local staging metadata and display-only synthetic events are not RPC payloads;
+  literal ERT/E2E wire fixtures remain independent by design. RPC/mux JSON uses
   `dsh-protocol-write-json`, not a caller-configured `json-encode`.
 - Business functions that must accept legacy test fixtures use the
   `dsh-protocol--struct` compat gate to take either a wire alist or an
