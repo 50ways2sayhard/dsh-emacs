@@ -146,6 +146,9 @@ See [Question prompts](docs/customization.md#ask-question-prompts).
 The mode line shows model, usage, and activity. Install
 [Motion Line](https://github.com/vritser/motion-line) separately for an animated
 whale and elapsed clock; without it, activity captions remain static.
+Native mode lines always keep the plain `DSH` major-mode label; the separate
+whale-tail animation, caption and clock appear only during activity.
+Doom keeps its static whale logo and existing layout.
 Completed replies provide configurable Copy, Fork, token, and time controls.
 
 See [Mode line](docs/modeline.md),

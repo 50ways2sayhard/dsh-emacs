@@ -1180,6 +1180,60 @@
             (ert-info ((format "%s" "modeline-empty-composition-has-no-padding"))
               (should (equal (dsh-emacs-modeline--doom-segment) "")))))))))
 
+(ert-deftest dsh-emacs-test-modeline-native-text-with-combined-activity ()
+  :tags '(dsh-unit)
+  (skip-unless (featurep 'motion-line))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (let ((dsh-emacs-modeline--doom-segment-installed nil)
+          (motion-line--timer nil)
+          (motion-line--buffers nil)
+          (now 100.0)
+          (motion-line-current-time-function (lambda () 100.0)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'float-time) (lambda (&rest _) now))
+                    ((symbol-function 'display-graphic-p) (lambda (&rest _) nil))
+                    ((symbol-function 'dsh-emacs-modeline--whale-label)
+                     (lambda () (propertize "DSH" 'display 'static-whale)))
+                    ((symbol-function 'dsh-emacs-modeline--running-frame)
+                     (lambda (phase)
+                       (propertize "DSH" 'display (list 'frame phase)))))
+            (should (equal-including-properties
+                     (dsh-emacs-modeline--mode-name) "DSH"))
+            (should (equal (dsh-emacs-modeline--ml-indicator) ""))
+            (dsh-emacs--ml-busy-set t)
+            (setq now 105.0)
+            (motion-line-seek 'dsh-running 1.5)
+            (let ((activity (dsh-emacs-modeline--ml-indicator)))
+              (should (equal-including-properties
+                       (dsh-emacs-modeline--mode-name) "DSH"))
+              (should (equal activity " DSH Deep diving · 5s "))
+              (should (equal (get-text-property 1 'display activity)
+                             '(frame 1.5))))
+            (dsh-emacs-modeline-note-execution
+             (dsh-protocol-execution-event--from-alist
+              '((type . "compaction/start") (seq . 1)
+                (data . ((compactionId . "native"))))))
+            (let ((activity (dsh-emacs-modeline--ml-indicator)))
+              (should (equal-including-properties
+                       (dsh-emacs-modeline--mode-name) "DSH"))
+              (should (equal activity " DSH Compacting · 0s "))
+              (should (get-text-property 1 'display activity))
+              (should (eq (get-text-property 5 'local-map activity)
+                          dsh-emacs-modeline--status-map)))
+            (let ((dsh-emacs-modeline--doom-segment-installed t))
+              (should (eq (get-text-property
+                           0 'display (dsh-emacs-modeline--mode-name))
+                          'static-whale))
+              (should (equal (dsh-emacs-modeline--ml-indicator) ""))
+              (should (equal (dsh-emacs-modeline--whale-tail-label)
+                             "DSH Compacting · 0s")))
+            (dsh-emacs--ml-busy-clear)
+            (should (equal-including-properties
+                     (dsh-emacs-modeline--mode-name) "DSH"))
+            (should (equal (dsh-emacs-modeline--ml-indicator) "")))
+        (dsh-emacs--ml-busy-clear)))))
+
 ;; A source-only installation can omit an installed Motion Line.
 ;; Use a fresh Emacs so this suite's already-loaded engine cannot mask failures.
 (ert-deftest dsh-emacs-test-modeline-modeline-without-motion-line ()
@@ -1219,16 +1273,25 @@
                                  (lambda (&rest _) (error "Unexpected timer")))
                                 ((symbol-function 'dsh-emacs-modeline--running-frame)
                                  (lambda (&rest _) (error "Unexpected animation")))
+                                ((symbol-function 'dsh-emacs-modeline--whale-label)
+                                 (lambda ()
+                                   (propertize "DSH" 'display 'static-whale)))
                                 ((symbol-function 'force-mode-line-update)
                                  (lambda (&rest _) (cl-incf redraws))))
                         (dsh-emacs--ml-busy-set nil)
                         (cl-assert (equal (dsh-emacs--ml-busy-indicator) ""))
+                        (cl-assert (equal-including-properties
+                                    (dsh-emacs-modeline--mode-name) "DSH"))
                         (setq redraws 0)
                         (dsh-emacs--ml-busy-set t)
                         (cl-assert dsh-emacs--ml-busy)
                         (cl-assert (> redraws 0))
                         (cl-assert (equal (dsh-emacs--ml-busy-indicator)
                                           "Deep diving"))
+                        (cl-assert (equal-including-properties
+                                    (dsh-emacs-modeline--mode-name) "DSH"))
+                        (cl-assert (equal (dsh-emacs-modeline--ml-indicator)
+                                          " Deep diving "))
                         (let ((start dsh-emacs--modeline-run-start))
                           (dsh-emacs--ml-busy-set t)
                           (cl-assert (= start dsh-emacs--modeline-run-start)))
@@ -1251,6 +1314,13 @@
                             (data . ((compactionId . "static") (turn . 1))))))
                         (cl-assert (equal (dsh-emacs--ml-busy-indicator)
                                           "Compacting"))
+                        (cl-assert (equal-including-properties
+                                    (dsh-emacs-modeline--mode-name) "DSH"))
+                        (cl-assert (equal (dsh-emacs-modeline--ml-indicator)
+                                          " Compacting step 2 "))
+                        (cl-assert
+                         (not (get-text-property
+                               0 'local-map (dsh-emacs-modeline--mode-name))))
                         (let* ((dsh-emacs-modeline--doom-segment-installed t)
                                (label (dsh-emacs-modeline--doom-major-mode
                                        (propertize " DSH " 'face 'mode-line))))
@@ -1359,6 +1429,11 @@
               (dsh-emacs--ml-busy-set t)
               (ert-info ((format "%s" "whale-running-snapshot-keeps-playback-position"))
                 (should (equal (dsh-emacs--ml-busy-indicator) "DSH..  Deep diving · 1s")))
+              (let ((dsh-emacs-modeline--doom-segment-installed nil))
+                (should (equal-including-properties
+                         (dsh-emacs-modeline--mode-name) "DSH"))
+                (should (equal (dsh-emacs-modeline--ml-indicator)
+                               " DSH..  Deep diving · 1s ")))
               (let ((dsh-emacs-modeline--doom-segment-installed t)
                     (dsh-emacs-modeline-show-step t)
                     (dsh-emacs--modeline-step '(:turn 1 :step 2 :start 100)))

@@ -1402,10 +1402,11 @@ caption and clock while preserving the enclosing turn's running interval."
 (eval-after-load 'nerd-icons #'dsh-emacs-modeline--install-nerd-icon)
 
 (defun dsh-emacs-modeline--mode-name ()
-  "Return a blue whale on dark frames, black on light frames, or DSH.
-Displays without SVG support use the text label.
-Keep the underlying text for accessibility and the standard major-mode menu."
-  (dsh-emacs-modeline--whale-label))
+  "Return plain DSH for native mode lines, or Doom's static whale label.
+Native activity stays in its separate animation segment."
+  (if dsh-emacs-modeline--doom-segment-installed
+      (dsh-emacs-modeline--whale-label)
+    "DSH"))
 
 (defun dsh-emacs-modeline--splice (base)
   "Return BASE with the dsh mode-line segments spliced in.

@@ -29,6 +29,11 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Restore the native DSH mode label**: native mode lines always show plain
+  `DSH` instead of a static whale in the major-mode name. The separate active
+  whale-tail animation, caption and elapsed time stay together; without Motion
+  Line, only the static activity caption appears. Doom's static whale, layout
+  and the native major-mode menu are unchanged.
 - **Open file links with line ranges locally**: assistant links such as
   `source.el#L10-L20`, `source.el#L10-20` and `source.el:10-20` now open
   in Emacs at the first line instead of falling back to a browser. This also

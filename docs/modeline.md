@@ -1,12 +1,15 @@
 # Mode-line Status
 
-The major-mode label uses the DeepSeek Harness whale SVG with its vertical
-padding cropped to match the permission shield's visible height, without
-making the mode line taller or adding a badge or background. In native mode
-lines, it stays in the major-mode cluster. With Doom Modeline, the larger mark
-appears just before `buffer-info`, beside the buffer name, and the DSH Web
-running-status whale tail appears in the right-side major-mode slot. During an
-active turn, graphical Emacs with Motion Line and GIF support displays the web whale's
+Native mode lines always show plain `DSH` as the major-mode label, whether
+idle, running or compacting. The separate activity segment keeps the whale-tail
+animation, caption and clock together and disappears when idle.
+
+With Doom Modeline, the static DeepSeek Harness whale SVG appears just before
+`buffer-info`, beside the buffer name. Its vertical padding is cropped to match
+the permission shield's visible height, without making the mode line taller or
+adding a badge or background. The DSH Web running-status whale tail appears in
+Doom's right-side major-mode slot. During an active turn, graphical Emacs with
+Motion Line and GIF support displays the web whale's
 60-frame, 28-pixel animation with 50ms per frame and a three-second loop.
 Both the running GIF and idle SVG use an 18×18 display box with a centered
 baseline. The larger box makes the tail clearer despite its transparent
@@ -136,7 +139,9 @@ the projection immediately.
 dsh-emacs does **not replace** your mode line; instead it adds small
 segments to your existing (default or custom) `mode-line-format`. While **dsh
 is running** (after sending a prompt, before `turn/end` is received), the
-whale tail swings. Native mode lines place it beside the DSH mode name;
+whale tail swings. Native mode lines keep the plain `DSH` major-mode name and
+its standard menu, with the combined whale-tail animation, caption and clock
+in the appended activity segment;
 Doom animates its existing right-side major-mode tail, followed by the stats,
 while the larger logo stays before `buffer-info`. No extra progress bar or
 second tail is added. The modified flag, line/column position, primary/secondary modes,
@@ -160,8 +165,11 @@ misc-info, and all other existing content are preserved:
   that chat's slot. Buffer death and major-mode changes also release it.
   No scheduler remains once all slots stop. Hidden buffers skip intermediate
   rendering and catch up when visible.
-- The native running indicator is hidden when idle. Doom returns to its static
-  major-mode tail; other status labels and stats retain their normal layout.
+- When idle, the native activity segment disappears; the major-mode name
+  remains plain `DSH`. Without Motion Line, it still stays plain during
+  activity, beside static `Deep diving` or `Compacting` text with no clock.
+  Doom returns to its static major-mode tail; its larger whale logo, other
+  status labels and stats retain their normal layout.
 - The splicing is done with `(:eval …)` and is recomputed live on
   `force-mode-line-update`.
 - **Buffer name**: session buffers are named `dsh: <list title>` (matching the

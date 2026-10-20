@@ -1171,8 +1171,13 @@ Library load errors other than a missing file still propagate. The modeline
 module owns the web whale asset,
 color cache and `dsh-running` slot. The independent package owns elapsed-time
 sampling, cached output, one shared scheduler and buffer cleanup. Native
-mode lines render the slot next to the mode name; Doom reuses its major-mode
-slot. The modeline sets a buffer-local redisplay callback to preserve batching.
+mode lines keep a plain DSH major-mode name and render the combined whale,
+caption and clock in the separate activity segment only while active. The
+mode name retains the standard major-mode menu; the compaction activity keeps
+its status-details map. Doom consumes the same combined output in its existing
+major-mode slot, with its separate static logo unchanged. Without Motion
+Line, the native DSH label remains plain and the activity caption has no clock.
+The modeline sets a buffer-local redisplay callback to preserve batching.
 See [095](../postmortem/095-running-status.md) and
 [096](../postmortem/096-standalone-motion-line.md).
 The same cached output includes the English Deep diving caption and its
