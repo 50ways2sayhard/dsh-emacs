@@ -24,7 +24,7 @@ dsh-emacs/
 ├── dsh-emacs-skill.el        # Skill catalog (skills/list) and /name gestures
 ├── dsh-emacs-shell.el        # Client-side `!command` shell commands (local execution)
 ├── dsh-emacs-reference.el    # @ reference completion, chips and navigation
-├── dsh-emacs-composer.el     # Composer chrome: Goal and Next Message rows above the input
+├── dsh-emacs-composer.el     # Composer chrome: Next Message and Goal rows above the input
 ├── dsh-emacs-reload.el       # Local source reload and bounded presentation refresh
 └── dsh-emacs-session.el      # Session list card view
 ```
@@ -255,7 +255,7 @@ correction in [086](../postmortem/086-reply-footer-turn-tail.md).
 ## Composer (`dsh-emacs-composer.el`)
 
 The bottom of a chat buffer is a **Composer**: a persistent, non-transcript UI
-region with optional read-only **Goal Row**, **Next Message** and
+region with optional read-only **Next Message**, **Goal Row** and
 **Attachments** rows, in that order, above the editable **Input Area**. The
 input geometry (the `❯ ` prompt,
 `dsh-emacs--input-marker` /

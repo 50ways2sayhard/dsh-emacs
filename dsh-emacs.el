@@ -2405,7 +2405,7 @@ metadata preserves nearest-first ordering for display and cycling."
   ;; Initialize the input area
   (dsh-emacs--setup-input-area)
   ;; Reset Composer chrome with the buffer; the next projection or snapshot
-  ;; rebuilds the Goal Row and its top marker.
+  ;; rebuilds the chrome rows and their top marker.
   (dsh-emacs-composer-reset)
   ;; Clipboard images may also arrive through stock `yank-media' (Emacs 29+),
   ;; which dispatches by media type to a buffer-local handler.  The handler is

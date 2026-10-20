@@ -1361,7 +1361,7 @@
       (should (equal (buffer-substring-no-properties
                       (dsh-emacs-render--input-anchor-pos) dsh-emacs--input-marker)
                      "❯ "))
-      (should (string-match-p "Current goal.*\n.*Queued work.*\n❯ draft"
+      (should (string-match-p "Queued work.*\n.*Current goal.*\n❯ draft"
                               (buffer-string))))
     ;; Use the actual transcript insertion seam while both chrome rows exist.
     (save-excursion

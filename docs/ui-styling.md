@@ -373,7 +373,7 @@ remain available. Action tooltips show readable labels and keyboard shortcuts.
 Use `C-c C-g ?` for the full objective and blocked reason, also available in
 the objective tooltip. SVG icons occupy at most two columns of pixel space.
 
-The Next Message row sits below the Goal Row and above `❯`, built like that
+The Next Message row sits above the Goal Row and above `❯`, built like that
 row: dsh web's queue glyph (a chat bubble with two text lines,
 `IconQueueOutlineRegular`) tinted with `dsh-emacs-composer-next-face` — the
 queue amber `dsh-emacs-color-queue` / `dsh-emacs-color-queue-dark` — then the

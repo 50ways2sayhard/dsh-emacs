@@ -27,6 +27,12 @@ minor) and stay undated until the release is cut.
   and assistant bodies retain their existing spacing. Remove these settings
   from personal configuration. (rationale: postmortem/122)
 
+### Changed
+
+- **Next Message above the Goal Row**: the queued-message preview now leads the
+  composer chrome, with the active goal row beneath it. Faces, actions and the
+  `C-c C-g` / `C-c C-q` keys are unchanged.
+
 ### Fixed
 
 - **Keep each chat window's draft cursor while following output**: background

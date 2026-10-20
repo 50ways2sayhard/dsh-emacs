@@ -344,8 +344,9 @@ like any other segment (see [Mode-line Status](modeline.md)).
 
 ## Goal actions
 
-The composer shows the session's current goal above the input. In a chat
-buffer, `C-c C-g` opens the goal-action prefix:
+The composer shows the session's current goal above the input; when a message
+is queued, its preview sits above the goal row, still above the input. In a
+chat buffer, `C-c C-g` opens the goal-action prefix:
 
 | Key | Action |
 |---|---|

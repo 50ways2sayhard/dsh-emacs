@@ -130,8 +130,9 @@ below the title.
 
 ### Goals, subagents, and questions
 
-The composer shows the active goal and next pending message. `C-c C-g` opens
-[goal actions](docs/customization.md#goal-actions); `C-c C-q` manages the queue.
+The composer shows the next pending message, then the active goal. `C-c C-g`
+opens [goal actions](docs/customization.md#goal-actions); `C-c C-q` manages the
+queue.
 The default busy-send behavior is configurable with
 `dsh-emacs-busy-enter-behavior`.
 

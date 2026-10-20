@@ -14,8 +14,8 @@
 ;;   Conversation Buffer
 ;;   ├── Transcript            -- owned by dsh-emacs-render.el
 ;;   └── Composer
-;;       ├── Goal Row          -- optional goal, phase and actions
 ;;       ├── Next Message      -- optional pending-message preview
+;;       ├── Goal Row          -- optional goal, phase and actions
 ;;       ├── Attachments       -- optional staged-attachment row
 ;;       └── Input Area        -- editing/geometry owned by dsh-emacs.el
 ;;
@@ -670,7 +670,7 @@ goal is a finished target, not an active strip.  Paused/blocked stay visible."
        (not (equal (dsh-protocol-goal-phase goal) "complete"))))
 
 (defun dsh-emacs-composer-render ()
-  "Render Goal and Next Message rows as one owned region above the input.
+  "Render the Next Message and Goal rows as one owned region above the input.
 Queue selection and visibility belong to the queue module.  Composer reads
 that mirror without copying it, and retains only a presentation signature.
 Repeated renders preserve the region when content and width are unchanged."
@@ -689,14 +689,14 @@ Repeated renders preserve the region when content and width are unchanged."
         (let ((text (concat
                      (when notice
                        (propertize (concat notice "\n") 'face 'dsh-emacs-hint-face))
-                     (when goal
-                       (propertize
-                        (concat (dsh-emacs-composer--render-row goal) "\n")
-                        'dsh-emacs-composer-goal-row t))
                      (when next
                        (propertize
                         (concat (dsh-emacs-composer--render-next-row next) "\n")
                         'dsh-emacs-composer-next-row t))
+                     (when goal
+                       (propertize
+                        (concat (dsh-emacs-composer--render-row goal) "\n")
+                        'dsh-emacs-composer-goal-row t))
                      (when attachments
                        (propertize
                         (concat (dsh-emacs-composer--render-attachments-row
@@ -730,7 +730,7 @@ never sent to the model."
   (dsh-emacs-composer-render))
 
 (defun dsh-emacs-composer-refresh ()
-  "Re-render this buffer's Goal, Next Message and Attachments rows.
+  "Re-render this buffer's Next Message, Goal and Attachments rows.
 Forces a repaint even when their content is unchanged, for example after
 changing `dsh-emacs-composer-goal-actions'."
   (when (and (markerp dsh-emacs--input-marker)
