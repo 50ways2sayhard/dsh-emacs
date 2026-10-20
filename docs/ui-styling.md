@@ -412,15 +412,17 @@ text over 100ms; event boundaries flush it immediately.
 Chat socket reads also coalesce over 50ms; received events retain their order.
 The running indicator shares pending text redraws. Clearing the transcript's
 modified flag does not itself invalidate the mode line. Reading windows are
-excluded before screen-row scans. Native recentering keeps the selected draft
+excluded before screen-row scans. Native recentering keeps each window's draft
 point visible with line spacing and variable face heights, avoiding competing
-scroll corrections. See [037](../postmortem/037-streaming-display-cpu.md).
+scroll corrections. Unselected chat windows retain their own editing positions,
+and long drafts still follow when the prompt is above the viewport.
+See [037](../postmortem/037-streaming-display-cpu.md) for the original geometry fix.
 
 The live Markdown watermark is a stream-owned marker; advancing it does not
 modify the reply's first character. When no text is ready to format, the
 formatter skips its passes entirely. Bottom detection and scroll pinning use
-each window's screen rows, including line wrapping, while preserving the
-selected input cursor. See [031](../postmortem/031-stream-frontier-and-screen-rows.md).
+each window's screen rows, including line wrapping, while preserving each
+window's input cursor. See [031](../postmortem/031-stream-frontier-and-screen-rows.md).
 
 Large first chunks, queued reply/reasoning bursts and corrected replies keep
 the windows that were following immediately before the edit pinned afterward.

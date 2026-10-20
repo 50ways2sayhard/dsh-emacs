@@ -143,11 +143,15 @@ Imenu rebuilds its directory automatically while the buffer stays under its own
 past that — for example with `dsh-emacs-max-buffer-size` nil — needs the
 directory's `Rescan` entry to pick up newly loaded questions.
 
-Each window follows output only while its point is at the input and its view
-is near the bottom (the bottom test allows roughly one window height plus ten
-rows of slack, so a small scroll keeps following). Move point into earlier
-text, or scroll past that slack, to read independently of other windows. The
-default `dsh-emacs-max-buffer-size` is 200000 characters; trimming is deferred
+Each window follows output only while its point is in the input and its view
+is near that draft point (the bottom test allows roughly one window height
+plus ten rows of slack, so a small scroll keeps following). This applies to
+multiple views of one chat and to different chat buffers: each keeps its own
+draft cursor, even in an unselected window or a long multiline draft with the
+prompt above the viewport. Move point into earlier text, or scroll past that
+slack, to read independently of other windows.
+
+The default `dsh-emacs-max-buffer-size` is 200000 characters; trimming is deferred
 during history insertion, while a displayed window is not following (its point
 is above the input, or its view is scrolled beyond the slack), and when the
 input area's position cannot be located — so a cut never lands inside the

@@ -83,6 +83,9 @@ theme's `shadow` face (grey by default); running session dots are orange.
 Ordinary Emacs undo applies only to the input, leaving the transcript intact.
 `M-x imenu` navigates the conversation's questions. Click a folded tool or
 thinking header, or press `RET` on it, to expand it.
+Visible chat windows follow new output independently while their cursors and
+views stay near the draft, preserving each editing position. Windows reading
+older messages stay put; `C-c >` returns that window to the draft and following.
 
 The 0.7.0 release removes `dsh-emacs-group-consecutive-tools` and
 `dsh-emacs-assistant-divider`; both are deleted, so remove any remaining

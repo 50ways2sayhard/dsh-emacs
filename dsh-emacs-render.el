@@ -648,7 +648,7 @@ message is inserted strictly above it."
     found))
 
 (defun dsh-emacs-render--following-windows ()
-  "Return windows currently following this buffer's input anchor.
+  "Return windows currently following this buffer's draft input.
 Capture this immediately before a stream edit so large writes cannot make
 a following window look manually scrolled away.  No state survives the edit."
   (when-let* ((windows (get-buffer-window-list (current-buffer) nil t))
@@ -656,7 +656,8 @@ a following window look manually scrolled away.  No state survives the edit."
     (cl-loop for window in windows
              when (and (window-live-p window)
                        (>= (window-point window) anchor)
-                       (dsh-emacs-ui--window-at-bottom-p window anchor))
+                       (dsh-emacs-ui--window-at-bottom-p
+                        window (window-point window)))
              collect window)))
 
 ;; Declared before their first reader: the FOLLOW-STREAM default argument
@@ -761,7 +762,7 @@ wrong text above the repaired one.  The caller binds `inhibit-read-only'."
                 (unless (or (plist-get dsh-emacs--streaming-assistant :timer)
                             (plist-get dsh-emacs--streaming-thinking :timer))
                   (dsh-emacs-render--following-windows))))
-  "Pin WINDOWS to input, keeping the selected draft point visible.
+  "Pin WINDOWS to input, keeping each window's own draft point visible.
 When omitted, select current following windows unless a stream batch is
 pending.  A supplied list retains the follow decision made before an edit;
 explicit nil follows no windows.  Readers outside that list stay untouched."
@@ -774,16 +775,15 @@ explicit nil follows no windows.  Readers outside that list stay untouched."
         ;; Scanning back that many rows puts input below the viewport; the
         ;; next redisplay then scrolls it back, fighting every stream flush.
         ;; Native recentering accounts for pixel heights and the draft point.
-        (let ((target (if (eq window (selected-window))
-                          (max anchor (window-point window))
-                        anchor)))
+        (let ((target (max anchor (window-point window))))
           (with-selected-window window
             (save-excursion
               (goto-char target)
-              (recenter -1))))
-        (unless (or (eq window (selected-window))
-                    (= (window-point window) anchor))
-          (set-window-point window anchor))))))
+              (recenter -1)))
+          ;; Insertion at the prompt can leave its window point behind.
+          (unless (or (eq window (selected-window))
+                      (= (window-point window) target))
+            (set-window-point window target)))))))
 
 (defun dsh-emacs-render--input-insert-point ()
   "Return the start of the editable prompt line, or nil.

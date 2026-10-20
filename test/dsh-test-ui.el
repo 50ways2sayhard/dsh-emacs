@@ -148,6 +148,137 @@
               (should (equal (dsh-emacs--get-input) "draft"))))
           (dsh-emacs-render--flush-stream nil t))))))
 
+(defun dsh-test--stream-draft-windows (kind separate-buffers long-draft)
+  "Check KIND bursts with independent drafts and a history reader.
+SEPARATE-BUFFERS gives the second follower its own chat; LONG-DRAFT puts
+both followers' prompts above their viewports."
+  (save-window-excursion
+    (let* ((chat-a (generate-new-buffer " *dsh-draft-a*"))
+           (chat-b (if separate-buffers
+                       (generate-new-buffer " *dsh-draft-b*")
+                     chat-a))
+           (buffers (delete-dups (list chat-a chat-b)))
+           (selected (selected-window))
+           (other (split-window-right))
+           (reader (split-window selected nil 'below))
+           (event '((data . ((turn . 1) (step . 1)))))
+           (start (if (eq kind 'thinking)
+                      #'dsh-emacs-render--start-thinking-stream
+                    #'dsh-emacs-render--start-assistant-stream))
+           (draft (concat (apply #'concat
+                                 (make-list (if long-draft 80 3) "draft row\n"))
+                          "draft tail"))
+           (views (list (cons selected (- (length draft) 3))
+                        (cons other (- (length draft) 17)))))
+      (unwind-protect
+          (progn
+            (dolist (buffer buffers)
+              (with-current-buffer buffer
+                (dsh-emacs-mode)
+                (let ((inhibit-read-only t))
+                  (goto-char (point-min))
+                  (insert (apply #'concat (make-list 100 "history row\n"))))
+                (goto-char dsh-emacs--input-marker)
+                (insert draft)
+                (funcall start event "intro\n")))
+            (set-window-buffer selected chat-a)
+            (set-window-buffer other chat-b)
+            (set-window-buffer reader chat-a)
+            (set-window-start reader 1)
+            (set-window-point reader 10)
+            (dolist (view views)
+              (with-selected-window (car view)
+                (goto-char (+ dsh-emacs--input-marker (cdr view)))
+                (recenter -1)
+                (when long-draft
+                  (should (< (dsh-emacs-render--input-anchor-pos)
+                             (window-start))))))
+            (dolist (buffer buffers)
+              (with-current-buffer buffer
+                (let ((expected (if separate-buffers
+                                    (list (if (eq buffer chat-a) selected other))
+                                  (list selected other)))
+                      (followers (dsh-emacs-render--following-windows)))
+                  (should (= (length followers) (length expected)))
+                  (dolist (window expected)
+                    (should (memq window followers))))))
+            (dotimes (_ 2)
+              (let ((starts (mapcar (lambda (view)
+                                     (window-start (car view)))
+                                   views)))
+                (dolist (buffer buffers)
+                  (with-current-buffer buffer
+                    (funcall start event
+                             (apply #'concat (make-list 100 "burst row\n")))
+                    (dsh-emacs-render--flush-stream)))
+                (should (eq (selected-window) selected))
+                (should (= (window-start reader) 1))
+                (should (= (window-point reader) 10))
+                (cl-loop for (window . offset) in views
+                         for old-start in starts
+                         do (with-current-buffer (window-buffer window)
+                              (should (= (- (window-point window)
+                                            dsh-emacs--input-marker)
+                                         offset))
+                              (should (> (window-start window) old-start))
+                              (should (= (window-start window)
+                                         (save-excursion
+                                           (goto-char (window-point window))
+                                           (vertical-motion
+                                            (- (1- (window-text-height window)))
+                                            window)
+                                           (point))))
+                              (should (equal (dsh-emacs--get-input) draft)))))))
+        (dolist (buffer buffers)
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (dsh-emacs-render--flush-stream nil t))
+            (kill-buffer buffer)))))))
+
+(ert-deftest dsh-emacs-test-ui-stream-preserves-every-window-draft-point ()
+  :tags '(dsh-unit)
+  (dolist (kind '(assistant thinking))
+    (dolist (separate-buffers '(nil t))
+      (ert-info ((format "%s separate-buffers=%s" kind separate-buffers))
+        (dsh-test--stream-draft-windows kind separate-buffers nil)))))
+
+(ert-deftest dsh-emacs-test-ui-stream-follows-drafts-below-hidden-prompt ()
+  :tags '(dsh-unit)
+  (dolist (kind '(assistant thinking))
+    (dolist (separate-buffers '(nil t))
+      (ert-info ((format "%s separate-buffers=%s" kind separate-buffers))
+        (dsh-test--stream-draft-windows kind separate-buffers t)))))
+
+(ert-deftest dsh-emacs-test-ui-stream-keeps-unselected-empty-input-following ()
+  :tags '(dsh-unit)
+  (dolist (kind '(assistant thinking))
+    (dolist (at-prompt '(t nil))
+      (ert-info ((format "%s at-prompt=%s" kind at-prompt))
+        (save-window-excursion
+          (with-temp-buffer
+            (dsh-emacs-mode)
+            (let* ((selected (selected-window))
+                   (other (split-window-right))
+                   (event '((data . ((turn . 1) (step . 1)))))
+                   (start (if (eq kind 'thinking)
+                              #'dsh-emacs-render--start-thinking-stream
+                            #'dsh-emacs-render--start-assistant-stream))
+                   (offset (if at-prompt -2 0)))
+              (set-window-buffer selected (current-buffer))
+              (set-window-buffer other (current-buffer))
+              (goto-char dsh-emacs--input-marker)
+              (set-window-point other (+ dsh-emacs--input-marker offset))
+              (dotimes (_ 2)
+                (funcall start event
+                         (apply #'concat (make-list 100 "burst row\n")))
+                (dsh-emacs-render--flush-stream)
+                (should (eq (selected-window) selected))
+                (should (= (window-point selected) dsh-emacs--input-marker))
+                (should (= (- (window-point other) dsh-emacs--input-marker)
+                           offset))
+                (should (= (length (dsh-emacs-render--following-windows)) 2)))
+              (dsh-emacs-render--flush-stream nil t))))))))
+
 ;; A user scroll while a timer is pending wins over the queued output.
 (ert-deftest dsh-emacs-test-ui-stream-case-flush-respects-new-scroll ()
   :tags '(dsh-unit)

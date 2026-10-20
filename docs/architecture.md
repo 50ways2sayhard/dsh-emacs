@@ -1151,13 +1151,16 @@ Stream insertion, timer flushes and corrected final replies capture the
 following window list immediately before editing, then pin that list after
 formatting. This avoids mistaking a large insertion for a manual scroll;
 there is no saved follow state between callbacks. Per-event calls still skip
-pending batches. The selected draft point and excluded reading windows remain
+pending batches. Every window's draft point and excluded reading windows remain
 untouched. Hidden buffers skip prompt lookup for following altogether.
-The selected reading window is excluded before any screen-row measurement.
-Pinning uses `recenter -1` in the destination window, targeting the selected
-draft point or the inactive window's input anchor. Counting backwards by
-`window-text-height` overestimates capacity with extra line spacing or larger
-faces; the resulting offscreen cursor made Emacs scroll back on every redraw.
+Reading windows are excluded before any screen-row measurement. The bottom
+check uses each eligible window's draft point, so a long draft still follows
+when its prompt has scrolled above the viewport. Pinning uses `recenter -1`
+in the destination window at its own draft point, without selecting another
+chat permanently or resetting an inactive window to the input anchor.
+Counting backwards by `window-text-height` overestimates capacity with extra
+line spacing or larger faces; the resulting offscreen cursor made Emacs scroll
+back on every redraw.
 The transcript's after-change hook uses `restore-buffer-modified-p` so text
 and property edits do not repeatedly invalidate the mode line. The animation
 advances during pending text batches without forcing a separate redraw.

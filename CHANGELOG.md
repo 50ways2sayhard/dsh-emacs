@@ -29,6 +29,10 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep each chat window's draft cursor while following output**: background
+  windows no longer jump to the start of input during streaming. Each window
+  follows at its own draft position, including long multiline drafts whose
+  prompt has scrolled out of view; history-reading windows remain untouched.
 - **Restore the native DSH mode label**: native mode lines always show plain
   `DSH` instead of a static whale in the major-mode name. The separate active
   whale-tail animation, caption and elapsed time stay together; without Motion
