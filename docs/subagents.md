@@ -88,7 +88,16 @@ the existing muted `dsh-emacs-modeline-face`, with the total alone beside it.
 Without SVG support, it falls back to `nerd-icons`' `nf-md-source_branch`,
 then `Sub`. `Sub3` means
 three direct children; the running count is in the tooltip and activity is
-shown in completion annotations.
+shown in completion annotations.  While the connection is live and at least
+one direct child is running, the icon and the child count pulse together
+between the muted tint and the running orange, roughly once a second, instead
+of adding a separate spinner.  The pulse is a motion-line clip in the
+`dsh-subagents` slot (about 1.2s per cycle), so motion-line must be installed;
+without it the icon and count keep their static tint.  It stops when the last
+child settles or the connection drops; a stale running flag on a disconnected
+connection never animates.  Only an SVG-capable display repaints the icon (the
+`nerd-icons` and `Sub` fallbacks stay static), and the slot is buffer-local,
+so a child conversation's own indicator animates independently.
 Empty catalogs have no count
 indicator. A child chat also displays its direct parent, label and mode.
 

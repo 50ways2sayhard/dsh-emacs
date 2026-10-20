@@ -36,7 +36,8 @@
 ;; (all by default).
 
 ;;; Code:
-(declare-function dsh-emacs-subagent-indicator "dsh-emacs-subagent" ())
+(declare-function dsh-emacs-subagent-indicator "dsh-emacs-subagent" (&optional phase))
+(defvar dsh-emacs-subagent--animation-slot)
 
 (require 'cl-lib)
 (require 'color)
@@ -1432,6 +1433,15 @@ width-filling renderer.  BASE is the pre-existing mode-line-format list."
       ;; Unknown format shape: lead with our segments.
       segments))))
 
+(defun dsh-emacs-modeline--subagent-text ()
+  "Return the subagent segment, animated through motion-line while playing.
+`motion-line-string' already escapes percent signs for mode-line expansion;
+the static indicator still needs `dsh-emacs-modeline--escape-percent'."
+  (if (and (featurep 'motion-line)
+           (motion-line-playing-p dsh-emacs-subagent--animation-slot))
+      (motion-line-string dsh-emacs-subagent--animation-slot)
+    (dsh-emacs-modeline--escape-percent (dsh-emacs-subagent-indicator))))
+
 (defun dsh-emacs-modeline--doom-segment ()
   "Compose dsh status for both Doom and the native mode-line splice.
 Nonempty pieces have one separating space.  Outer padding separates the
@@ -1440,7 +1450,7 @@ mode name and protects the final column on right-aligned mode lines."
       ""
     (let ((text (dsh-emacs-modeline--join
                  (dsh-emacs-modeline--ml-indicator)
-                 (dsh-emacs-modeline--escape-percent (dsh-emacs-subagent-indicator))
+                 (dsh-emacs-modeline--subagent-text)
                  (dsh-emacs-modeline--modeinline))))
       (if (string-empty-p text) "" (concat " " text " ")))))
 

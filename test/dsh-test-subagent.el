@@ -854,6 +854,7 @@
   (let ((dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
         (dsh-emacs--buffer-session "indicator-parent")
         (dsh-emacs--buffer-subagent nil)
+        (dsh-emacs--subagent-host-live nil)
         (dsh-emacs--sessions
          (list (dsh-protocol-session--from-alist '((sessionId . "a") (running . t))))))
     (puthash "indicator-parent"
@@ -871,6 +872,135 @@
                          "3 subagents, 1 running; mouse-1 to choose"))
           (should (eq (get-text-property 1 'face indicator) 'dsh-emacs-modeline-face))
           (should (eq (get-text-property 1 'local-map indicator) dsh-emacs-subagent-map)))))))
+
+;; A live host, an SVG display and a running direct child pulse the child-count
+;; icon between the muted and running tints; settling stops it.  `--changed' is
+;; the wiring point every summary/projection update uses, so the test drives
+;; that instead of the timer helper directly.
+(defun dsh-test-subagent-indicator-icon (indicator)
+  "Return INDICATOR's icon SVG string, or nil."
+  (let ((position 0) icon)
+    (while (and (< position (length indicator)) (null icon))
+      (let ((display (get-text-property position 'display indicator)))
+        (when (stringp display) (setq icon display)))
+      (setq position (1+ position)))
+    icon))
+
+(defun dsh-test-subagent-indicator-count-tint (indicator)
+  "Return INDICATOR's child-count foreground tint, or nil."
+  (let ((face (get-text-property (1- (length indicator)) 'face indicator)))
+    (and (listp face) (plist-get face :foreground))))
+
+(ert-deftest dsh-emacs-test-subagent-subagent-indicator-pulses-icon-while-child-runs ()
+  :tags '(dsh-unit)
+  (let ((dsh-emacs--subagent-catalogs (make-hash-table :test #'equal))
+        (dsh-emacs-subagent--icon-frames nil)
+        (dsh-emacs--buffer-session "anim-parent")
+        (dsh-emacs--buffer-subagent nil)
+        (dsh-emacs--subagent-host-live t)
+        (dsh-emacs-sessions-buffer " *dsh-test-no-sessions*")
+        (dsh-emacs--chat-buffers (make-hash-table :test #'equal))
+        (dsh-emacs--sessions
+         (list (dsh-protocol-session--from-alist '((sessionId . "a") (running . t)))
+               (dsh-protocol-session--from-alist '((sessionId . "b") (running . :json-false)))))
+        (playing nil)
+        (plays 0)
+        (stops 0)
+        (played-slot nil)
+        (renderer nil))
+    (puthash "anim-parent"
+             (list :cells (list (cons 'subagentCatalog
+                                      (dsh-protocol-subagent-cell--from-alist
+                                       '((key . "subagentCatalog") (seq . 1)
+                                         (value . [((id . "a")) ((id . "b"))]))))))
+             dsh-emacs--subagent-catalogs)
+    (with-temp-buffer
+      (puthash "anim-parent" (current-buffer) dsh-emacs--chat-buffers)
+      (cl-letf (((symbol-function 'dsh-emacs-subagent--animation-available-p)
+                 (lambda () t))
+                ((symbol-function 'motion-line-playing-p)
+                 (lambda (_slot) playing))
+                ((symbol-function 'motion-line-play)
+                 (lambda (slot clip)
+                   (cl-incf plays)
+                   (setq played-slot slot playing t)
+                   (setq renderer (plist-get clip :render))
+                   clip))
+                ((symbol-function 'motion-line-clip)
+                 (lambda (duration render)
+                   (setq renderer render)
+                   (list :duration duration :render render)))
+                ((symbol-function 'motion-line-stop)
+                 (lambda (_slot) (cl-incf stops) (setq playing nil)))
+                ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                ((symbol-function 'image-type-available-p) (lambda (_type) t))
+                ((symbol-function 'create-image)
+                 (lambda (data &rest _) data))
+                ((symbol-function 'color-values)
+                 (lambda (color &optional _frame)
+                   (pcase color
+                     ("red" '(65535 0 0))
+                     ("blue" '(0 0 65535))
+                     (_ '(65535 65535 65535)))))
+                ((symbol-function 'color-name-to-rgb)
+                 (lambda (color &optional _frame)
+                   (let ((hex (substring color 1)))
+                     (cl-loop for index below 3
+                              for width = (/ (length hex) 3)
+                              collect
+                              (/ (string-to-number
+                                  (substring hex (* index width)
+                                             (* (1+ index) width))
+                                  16)
+                                 255.0)))))
+                ((symbol-function 'face-foreground)
+                 (lambda (face &optional _frame _inherit)
+                   (pcase face
+                     ('dsh-emacs-status-running-face "blue")
+                     (_ "red")))))
+        (dsh-emacs-subagent--changed)
+        (ert-info ((format "%s" "subagent-icon-pulse-plays-motion-line-clip"))
+          (should (= plays 1))
+          (should (= stops 0))
+          (should (eq played-slot dsh-emacs-subagent--animation-slot))
+          (should (eq played-slot 'dsh-subagents))
+          (should playing)
+          (should (equal (substring-no-properties (dsh-emacs-subagent-indicator))
+                         "   2")))
+        (ert-info ((format "%s" "subagent-icon-clip-renders-the-pulse"))
+          (should (string-match-p "stroke=\"#ff0000\""
+                                  (dsh-test-subagent-indicator-icon
+                                   (funcall renderer 0.0))))
+          (should (string-match-p "stroke=\"#0000ff\""
+                                  (dsh-test-subagent-indicator-icon
+                                   (funcall renderer 0.6)))))
+        (ert-info ((format "%s" "subagent-count-tints-with-the-icon"))
+          (should (equal (dsh-test-subagent-indicator-count-tint
+                          (funcall renderer 0.0))
+                         "#ff0000"))
+          (should (equal (dsh-test-subagent-indicator-count-tint
+                          (funcall renderer 0.3))
+                         (dsh-emacs-subagent--pulse-tint "#ff0000" "#0000ff" 0.25)))
+          (should (equal (dsh-test-subagent-indicator-count-tint
+                          (funcall renderer 0.6))
+                         "#0000ff")))
+        ;; A second update while the child still runs must not restart the
+        ;; clip (that would pin the pulse at its first frame).
+        (dsh-emacs-subagent--changed)
+        (ert-info ((format "%s" "subagent-icon-pulse-keeps-its-phase"))
+          (should (= plays 1)))
+        ;; The running child settles: the next change stops the slot and the
+        ;; static indicator shows the idle tint again.
+        (setf (dsh-protocol-session-running (car dsh-emacs--sessions)) nil)
+        (dsh-emacs-subagent--changed)
+        (ert-info ((format "%s" "subagent-icon-pulse-stops-when-children-settle"))
+          (should (= stops 1))
+          (should-not playing)
+          (should (equal (substring-no-properties (dsh-emacs-subagent-indicator))
+                         "   2"))
+          (should (string-match-p "stroke=\"#ff0000\""
+                                  (dsh-test-subagent-indicator-icon
+                                   (dsh-emacs-subagent-indicator)))))))))
 
 (provide 'dsh-test-subagent)
 ;;; dsh-test-subagent.el ends here

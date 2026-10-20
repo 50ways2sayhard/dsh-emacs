@@ -346,6 +346,15 @@ Flycheck's mode-line counts, while keeping the muted status-text color.
 shown; the tooltip includes the running count. Mouse-1 opens
 `dsh-emacs-list-subagents` in the
 minibuffer.
+While the connection is live and at least one direct child is running, the
+icon and the child count pulse together between the muted mode-line color and
+the running orange, roughly once a second, with no separate spinner or layout
+shift.  The pulse is a motion-line clip (`dsh-subagents` slot, about 1.2s per
+cycle), so it needs motion-line installed; without it the icon and count keep
+their static tint.  It stops when the last child settles; a stale running flag
+on a disconnected connection never animates.  Only an SVG-capable display
+repaints the icon, and the `nerd-icons` and `Sub` fallbacks stay static.  The
+motion-line slot is buffer-local, so one chat's pulse cannot drive another's.
 Child chats show their direct parent, label and mode. A child that has
 descendants can also have its own child-count indicator.
 The completion annotations' cumulative token projection includes uncached

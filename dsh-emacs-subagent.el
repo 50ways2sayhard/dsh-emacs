@@ -12,10 +12,18 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'color)
 (require 'xref)
 (require 'dsh-emacs-protocol)
 (require 'dsh-emacs-server)
 (require 'dsh-emacs-tokens)
+;; Animation is optional, like the mode line's running whale: without
+;; motion-line the icon keeps its static tint.
+(require 'motion-line nil t)
+(declare-function motion-line-playing-p "motion-line" (slot))
+(declare-function motion-line-play "motion-line" (slot clip &rest options))
+(declare-function motion-line-clip "motion-line" (duration renderer))
+(declare-function motion-line-stop "motion-line" (slot))
 
 (defvar dsh-emacs--sessions)
 (defvar dsh-emacs--chat-buffers)
@@ -38,6 +46,21 @@
 (defvar dsh-emacs--subagent-generation 0)
 (defvar dsh-emacs--subagent-host-live nil)
 (defvar dsh-emacs--subagent-summary-request nil)
+
+(defconst dsh-emacs-subagent--icon-frame-count 12
+  "Frames in one running-subagent icon pulse.")
+
+(defconst dsh-emacs-subagent--pulse-duration 1.2
+  "Seconds of one running-subagent icon pulse cycle.")
+
+(defconst dsh-emacs-subagent--animation-slot 'dsh-subagents
+  "motion-line slot that drives the subagent icon pulse.
+The mode line renders `motion-line-string' for this slot while it plays and
+the plain indicator otherwise, so playback state never leaks into the text.")
+
+(defvar dsh-emacs-subagent--icon-frames nil
+  "Last (BASE . ACCENT) color pair and the icon pulse frames built for it.
+Rebuilt when a theme changes either face's foreground.")
 
 (defun dsh-emacs-subagent--cell (id key)
   "Return ID's decoded cell for KEY."
@@ -234,6 +257,7 @@ STATUS-ONLY means only the running flag changed, not Agent availability."
      (lambda (_id buffer)
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
+           (dsh-emacs-subagent--sync-animation)
            (when (bound-and-true-p dsh-emacs--buffer-subagent)
              (let ((identity (dsh-emacs-subagent--value
                               dsh-emacs--buffer-session 'subagent)))
@@ -262,6 +286,120 @@ STATUS-ONLY means only the running flag changed, not Agent availability."
           ((and timing (dsh-protocol-subagent-timing-completed timing)) "completed")
           (session "idle")
           (t "unknown"))))
+
+(defun dsh-emacs-subagent--running-count ()
+  "Return how many of this buffer's direct children are running."
+  (let* ((id (bound-and-true-p dsh-emacs--buffer-session))
+         (catalog (and id (dsh-emacs-subagent--value id 'subagentCatalog))))
+    (cl-count-if (lambda (entry)
+                   (equal (dsh-emacs-subagent--activity
+                           (dsh-protocol-subagent-entry-id entry))
+                          "running"))
+                 catalog)))
+
+;;; ---------------------------------------------------------------------------
+;;; Running-icon pulse
+;;; ---------------------------------------------------------------------------
+;; The child-count icon is the animation surface: one SVG retinted per frame
+;; between the muted mode-line color and the running orange, so nothing moves
+;; and no separate spinner widens the segment.  Text and nerd-icons fallbacks
+;; stay static; only a display with SVG support can repaint the icon.
+
+(defun dsh-emacs-subagent--icon-svg (color)
+  "Return the subagent icon SVG stroked with COLOR."
+  (concat
+   "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" "
+   "viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"" color "\" "
+   "stroke-width=\"1\" stroke-linecap=\"round\" stroke-linejoin=\"round\">"
+   "<g transform=\"rotate(90 8 8)\">"
+   "<path d=\"M8 3C8 .8 4.7 .7 4.2 2.8C2 2.3 .9 4.4 2.1 6C.2 7 .2 9 2.1 10C.9 11.6 2 13.7 4.2 13.2C4.7 15.3 8 15.2 8 13Z\"/>"
+   "<path d=\"M2.1 6C3.4 5.5 4.5 6.1 4.5 7.3M8 5.5h2l1.5-2h1.4M8 8h4.9M8 10.5h2l1.5 2h1.4\"/>"
+   "<circle cx=\"14\" cy=\"3.5\" r=\"1.1\"/>"
+   "<circle cx=\"14\" cy=\"8\" r=\"1.1\"/>"
+   "<circle cx=\"14\" cy=\"12.5\" r=\"1.1\"/></g></svg>"))
+
+(defun dsh-emacs-subagent--icon-image (color)
+  "Return the subagent icon stroked with COLOR as a display string."
+  (propertize " " 'display
+              (create-image (dsh-emacs-subagent--icon-svg color) 'svg t
+                            :ascent 'center :height 1.0)))
+
+(defun dsh-emacs-subagent--face-color (face)
+  "Return FACE's foreground as #rrggbb, or nil when it has none."
+  (let ((rgb (color-values (or (face-foreground face nil t)
+                               (face-foreground 'default nil t)))))
+    (and rgb (apply #'format "#%02x%02x%02x"
+                    (mapcar (lambda (value) (/ value 256)) rgb)))))
+
+(defun dsh-emacs-subagent--mix-color (from to strength)
+  "Return FROM blended toward TO by STRENGTH (0..1); both are #rrggbb."
+  (let ((low (color-name-to-rgb from))
+        (high (color-name-to-rgb to)))
+    (and low high
+         (apply #'color-rgb-to-hex
+                (append (cl-mapcar (lambda (a b) (+ a (* strength (- b a))))
+                                   low high)
+                        '(2))))))
+
+(defun dsh-emacs-subagent--pulse-tint (base accent phase)
+  "Return the color of BASE blended toward ACCENT at PHASE (0..1).
+One cycle fades out to ACCENT and back, so phase 0 and 1 are BASE."
+  (dsh-emacs-subagent--mix-color
+   base accent
+   (/ (- 1 (cos (* 2 float-pi phase))) 2.0)))
+
+(defun dsh-emacs-subagent--icon-images (base accent)
+  "Return the pulse frames between BASE and ACCENT, building them once.
+One cycle fades out to ACCENT and back, so the first and last frames
+match the icon's idle tint.  The child count reuses `--pulse-tint' at the
+same phase, so icon and number always agree."
+  (unless (equal (cons base accent)
+                 (car-safe dsh-emacs-subagent--icon-frames))
+    (setq dsh-emacs-subagent--icon-frames
+          (cons (cons base accent)
+                (vconcat
+                 (cl-loop for index below dsh-emacs-subagent--icon-frame-count
+                          collect
+                          (dsh-emacs-subagent--icon-image
+                           (dsh-emacs-subagent--pulse-tint
+                            base accent
+                            (/ (float index)
+                               dsh-emacs-subagent--icon-frame-count))))))))
+  (cdr dsh-emacs-subagent--icon-frames))
+
+(defun dsh-emacs-subagent--icon-animation-p ()
+  "Whether this display can animate the SVG subagent icon."
+  (and (display-graphic-p) (image-type-available-p 'svg)))
+
+(defun dsh-emacs-subagent--animation-available-p ()
+  "Whether motion-line is installed in this Emacs."
+  (featurep 'motion-line))
+
+(defun dsh-emacs-subagent--stop-animation ()
+  "Stop this buffer's motion-line icon pulse."
+  (when (and (dsh-emacs-subagent--animation-available-p)
+             (motion-line-playing-p dsh-emacs-subagent--animation-slot))
+    (motion-line-stop dsh-emacs-subagent--animation-slot)))
+
+(defun dsh-emacs-subagent--sync-animation ()
+  "Start or stop this buffer's motion-line icon pulse.
+Playback runs only when motion-line is installed, the host is live, the
+display can repaint SVG and at least one direct child is running, so a stale
+running flag on a disconnected connection stays still.  While it plays the
+clip re-renders the indicator, so count and title changes need no restart."
+  (if (not (and (dsh-emacs-subagent--animation-available-p)
+                dsh-emacs--subagent-host-live
+                (dsh-emacs-subagent--icon-animation-p)
+                (> (dsh-emacs-subagent--running-count) 0)))
+      (dsh-emacs-subagent--stop-animation)
+    (unless (motion-line-playing-p dsh-emacs-subagent--animation-slot)
+      (motion-line-play
+       dsh-emacs-subagent--animation-slot
+       (motion-line-clip
+        dsh-emacs-subagent--pulse-duration
+        (lambda (elapsed)
+          (dsh-emacs-subagent-indicator
+           (/ elapsed dsh-emacs-subagent--pulse-duration))))))))
 
 (defun dsh-emacs-subagent--annotation (parent entry)
   "Describe ENTRY under PARENT for minibuffer completion."
@@ -392,15 +530,15 @@ Run this command in a child conversation to choose from its own children."
     (define-key map [mode-line mouse-1] #'dsh-emacs-list-subagents)
     map))
 
-(defun dsh-emacs-subagent-indicator ()
-  "Mode-line child count and lineage for the current chat."
+(defun dsh-emacs-subagent-indicator (&optional phase)
+  "Mode-line child count and lineage for the current chat.
+PHASE (0..1) selects the running pulse frame when the host is live and at
+least one direct child is running; nil renders the idle tint.  motion-line
+supplies PHASE from the elapsed clip time."
   (let* ((id (bound-and-true-p dsh-emacs--buffer-session))
          (catalog (and id (dsh-emacs-subagent--value id 'subagentCatalog)))
          (address (bound-and-true-p dsh-emacs--buffer-subagent))
-         (running (cl-count-if
-                   (lambda (entry)
-                     (equal (dsh-emacs-subagent--activity
-                             (dsh-protocol-subagent-entry-id entry)) "running")) catalog)))
+         (running (dsh-emacs-subagent--running-count)))
     (concat
      (when address
        (format " [%s › %s]"
@@ -409,41 +547,45 @@ Run this command in a child conversation to choose from its own children."
                (format "%s · %s" (dsh-emacs-subagent-label address)
                        (dsh-protocol-subagent-address-mode address))))
      (when catalog
-       (let ((label
-              (or
-               (when (and (display-graphic-p) (image-type-available-p 'svg))
-                 (let* ((rgb (color-values (or (face-foreground 'dsh-emacs-modeline-face nil t)
-                                               (face-foreground 'default nil t))))
-                        (color (and rgb (apply #'format "#%02x%02x%02x"
-                                               (mapcar (lambda (v) (/ v 256)) rgb)))))
-                   (when color
-                     (propertize
-                      " " 'display
-                      (create-image
-                       (concat
-                        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\""
-                        color "\" stroke-width=\"1\" stroke-linecap=\"round\" stroke-linejoin=\"round\">"
-                        "<g transform=\"rotate(90 8 8)\">"
-                        "<path d=\"M8 3C8 .8 4.7 .7 4.2 2.8C2 2.3 .9 4.4 2.1 6C.2 7 .2 9 2.1 10C.9 11.6 2 13.7 4.2 13.2C4.7 15.3 8 15.2 8 13Z\"/>"
-                        "<path d=\"M2.1 6C3.4 5.5 4.5 6.1 4.5 7.3M8 5.5h2l1.5-2h1.4M8 8h4.9M8 10.5h2l1.5 2h1.4\"/>"
-                        "<circle cx=\"14\" cy=\"3.5\" r=\"1.1\"/>"
-                        "<circle cx=\"14\" cy=\"8\" r=\"1.1\"/>"
-                        "<circle cx=\"14\" cy=\"12.5\" r=\"1.1\"/></g></svg>")
-                       'svg t :ascent 'center :height 1.0)))))
-               (when (and (or (featurep 'nerd-icons) (require 'nerd-icons nil t))
-                          (if (display-graphic-p)
-                              (find-font (font-spec :family nerd-icons-font-family))
-                            (char-displayable-p #xf062c)))
-                 (nerd-icons-mdicon "nf-md-source_branch" :height 1.0 :v-adjust 0
-                                    :face 'dsh-emacs-modeline-face))
-               "Sub")))
+       (let* ((svg (dsh-emacs-subagent--icon-animation-p))
+              (base (and svg (dsh-emacs-subagent--face-color
+                              'dsh-emacs-modeline-face)))
+              (accent (and base (dsh-emacs-subagent--face-color
+                                 'dsh-emacs-status-running-face)))
+              (pulse (and accent phase dsh-emacs--subagent-host-live
+                          (> running 0)))
+              (frame (and pulse
+                          (% (floor (* phase dsh-emacs-subagent--icon-frame-count))
+                             dsh-emacs-subagent--icon-frame-count)))
+              (tint (and frame
+                         (dsh-emacs-subagent--pulse-tint
+                          base accent
+                          (/ (float frame)
+                             dsh-emacs-subagent--icon-frame-count))))
+              (label
+               (or
+                (when base
+                  (if frame
+                      (aref (dsh-emacs-subagent--icon-images base accent)
+                            frame)
+                    (dsh-emacs-subagent--icon-image base)))
+                (when (and (or (featurep 'nerd-icons) (require 'nerd-icons nil t))
+                           (if (display-graphic-p)
+                               (find-font (font-spec :family nerd-icons-font-family))
+                             (char-displayable-p #xf062c)))
+                  (nerd-icons-mdicon "nf-md-source_branch" :height 1.0 :v-adjust 0
+                                     :face 'dsh-emacs-modeline-face))
+                "Sub")))
          (propertize (concat
                       (propertize (concat " " label)
                                   'face 'dsh-emacs-modeline-face)
                       (propertize " " 'display '(space :relative-width 0.5))
                       (propertize (number-to-string (length catalog))
-                                  'face '(:inherit dsh-emacs-modeline-face
-                                          :weight bold)))
+                                  'face (if tint
+                                            (list :inherit 'dsh-emacs-modeline-face
+                                                  :foreground tint :weight 'bold)
+                                          '(:inherit dsh-emacs-modeline-face
+                                            :weight bold))))
                      'local-map dsh-emacs-subagent-map 'mouse-face 'mode-line-highlight
                      'help-echo (format "%d subagents, %d running; mouse-1 to choose"
                                         (length catalog) running)))))))

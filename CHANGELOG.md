@@ -27,6 +27,16 @@ minor) and stay undated until the release is cut.
   and assistant bodies retain their existing spacing. Remove these settings
   from personal configuration. (rationale: postmortem/122)
 
+### Added
+
+- **Pulsing running-subagent icon and count**: while the connection is live
+  and at least one direct child is running, the mode-line subagent icon and
+  child count pulse together between their muted tint and the running orange
+  instead of adding a separate spinner. The pulse is a motion-line clip in the
+  `dsh-subagents` slot; without motion-line or SVG they keep their static
+  tint. It stops when the last child settles or the connection drops. The
+  tooltip and mouse-1 picker are unchanged.
+
 ### Changed
 
 - **Next Message above the Goal Row**: the queued-message preview now leads the
