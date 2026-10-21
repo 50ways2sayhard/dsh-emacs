@@ -45,6 +45,10 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Match header separator colors**: minimal-card separator dots use the
+  adjacent right label's face, matching the goal notice timestamp.
+- **Separate the goal trigger icon from its label**: the collapsed
+  `Continuing goal` notice now has a visible gap after the SVG dartboard.
 - **Keep each chat window's draft cursor while following output**: background
   windows no longer jump to the start of input during streaming. Each window
   follows at its own draft position, including long multiline drafts whose

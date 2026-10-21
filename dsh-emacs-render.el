@@ -1924,6 +1924,7 @@ inspected.  An empty body leaves the row unfoldable."
       :block-id (format "goal-%s" (dsh-emacs-render--make-block-id event))
       :label-left (concat
                    (dsh-emacs-render--goal-trigger-icon)
+                   " "
                    (propertize dsh-emacs-render--goal-trigger-label
                                'face 'dsh-emacs-meta-face))
       :label-right (and time

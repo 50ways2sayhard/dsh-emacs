@@ -204,7 +204,13 @@ Minimal headers use WIDTH columns without framing."
          (chars (dsh-emacs-ui--border-chars style))
          (left (truncate-string-to-width (or label-left "") width nil nil "…"))
          (gap (if (string-empty-p left) ""
-                (if minimal (concat " " dsh-emacs-ui-label-separator " ") "  ")))
+                (if minimal
+                    (propertize (concat " " dsh-emacs-ui-label-separator " ")
+                                'face (and label-right
+                                           (> (length label-right) 0)
+                                           (get-text-property
+                                            0 'face label-right)))
+                  "  ")))
          (remaining (- width (string-width left) (string-width gap)))
          (right (if (> remaining 0)
                     (truncate-string-to-width (or label-right "")
