@@ -4,6 +4,72 @@
 
 (require 'dsh-test-support)
 
+;; Async insertion at the prompt's beginning stretches hl-line over the new
+;; transcript until the next command.  Exercise real overlays, not text faces.
+(ert-deftest dsh-emacs-test-stream-output-keeps-input-highlight-on-input ()
+  :tags '(dsh-unit)
+  (dolist (highlight '(local global both none))
+    (dolist (background '(nil t))
+      (let ((global-hl-line-mode nil)
+            (global-hl-line-overlays nil)
+            (global-hl-line-sticky-flag nil)
+            (hl-line-sticky-flag nil)
+            (hl-line-overlay-buffer nil))
+        (save-window-excursion
+          (with-temp-buffer
+            ;; Global hl-line excludes internal buffers on newer Emacs.
+            (rename-buffer "*dsh-stream-highlight-test*" t)
+            (switch-to-buffer (current-buffer))
+            (dsh-emacs-mode)
+            (dsh-emacs-modeline-setup)
+            (goto-char dsh-emacs--input-marker)
+            (insert "KEEP DRAFT")
+            (when (memq highlight '(local both))
+              (hl-line-mode 1))
+            (when (memq highlight '(global both))
+              (setq-local global-hl-line-mode t)
+              (global-hl-line-highlight))
+            (let ((overlays (delq nil (list hl-line-overlay
+                                            global-hl-line-overlay)))
+                  (window (selected-window))
+                  (event '((data . ((turn . 1) (step . 1))))))
+              (should (= (length overlays)
+                         (pcase highlight ('both 2) ('none 0) (_ 1))))
+              (when background
+                (set-window-buffer window (get-buffer-create "*scratch*")))
+              ;; No post-command hook between these writes: first paint,
+              ;; batched reasoning, folding/tool insertion, and text streaming.
+              (dolist (phase '(thinking thinking-batch tool text text-batch))
+                (pcase phase
+                  ('thinking
+                   (dsh-emacs-render--start-thinking-stream event "reasoning"))
+                  ('thinking-batch
+                   (dsh-emacs-render--start-thinking-stream event " more")
+                   (dsh-emacs-render--flush-thinking))
+                  ('tool
+                   (dsh-emacs-events--dispatch-event
+                    (current-buffer)
+                    (dsh-emacs-test--tool-call-event
+                     1 "highlight-tool" "read_file" "{\"path\":\"README.md\"}")))
+                  ('text
+                   (dsh-emacs-render--start-assistant-stream event "answer"))
+                  ('text-batch
+                   (dsh-emacs-render--start-assistant-stream event " more")
+                   (dsh-emacs-render--flush-stream)))
+                (ert-info ((format "%s, background=%s, phase=%s"
+                                   highlight background phase))
+                  (should (equal (dsh-emacs--get-input) "KEEP DRAFT"))
+                  (should (= (point) (+ dsh-emacs--input-marker 10)))
+                  (should (equal (delq nil (list hl-line-overlay
+                                                 global-hl-line-overlay))
+                                 overlays))
+                  (dolist (overlay overlays)
+                    (should (eq (overlay-get overlay 'window) window))
+                    (should (= (overlay-start overlay)
+                               (line-beginning-position)))
+                    (should (= (overlay-end overlay)
+                               (line-beginning-position 2)))))))))))))
+
 ;; Streaming tables stay raw until their boundary; open fences only scan
 ;; newly arrived lines.  Finalization must still produce the complete body.
 (ert-deftest dsh-emacs-test-stream-stream-table-defers-reflow ()

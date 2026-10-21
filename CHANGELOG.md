@@ -45,6 +45,9 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep streaming output clear of the input highlight**: with local or global
+  `hl-line-mode`, new thinking, tool and answer rows no longer acquire the
+  input line's background while waiting for the next keyboard command.
 - **Match header separator colors**: minimal-card separator dots use the
   adjacent right label's face, matching the goal notice timestamp.
 - **Separate the goal trigger icon from its label**: the collapsed

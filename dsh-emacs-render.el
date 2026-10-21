@@ -25,6 +25,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'button)
+(require 'hl-line)
 (require 'dsh-emacs-protocol)
 (require 'dsh-emacs-server)
 (require 'dsh-emacs-ui)
@@ -762,10 +763,18 @@ wrong text above the repaired one.  The caller binds `inhibit-read-only'."
                 (unless (or (plist-get dsh-emacs--streaming-assistant :timer)
                             (plist-get dsh-emacs--streaming-thinking :timer))
                   (dsh-emacs-render--following-windows))))
-  "Pin WINDOWS to input, keeping each window's own draft point visible.
+  "Realign line highlights and keep WINDOWS' own draft points visible.
 When omitted, select current following windows unless a stream batch is
 pending.  A supplied list retains the follow decision made before an edit;
 explicit nil follows no windows.  Readers outside that list stay untouched."
+  ;; Inserting at the prompt stretches hl-line's overlay over new output.
+  ;; Async writes have no post-command hook to restore its range.  Move only
+  ;; live overlays, preserving their window scope even in background chats.
+  (dolist (overlay (list (and hl-line-mode hl-line-overlay)
+                        (and global-hl-line-mode global-hl-line-overlay)))
+    (when (and (overlayp overlay)
+               (eq (overlay-buffer overlay) (current-buffer)))
+      (hl-line-move overlay)))
   ;; Without the prompt, point-max would pin the phantom line below input.
   (when-let* ((anchor (and windows (dsh-emacs-render--input-anchor-pos))))
     (dolist (window windows)
