@@ -1,5 +1,8 @@
 # 110 — Load complete rounds, with visible boundaries
 
+Opening-history policy superseded by [148](148-open-complete-rounds.md):
+fresh chats now use the same complete-round target and bounded loader.
+
 Display refinement: round headings were subsequently removed at the user’s
 request; round numbers remain only in the completion message.
 

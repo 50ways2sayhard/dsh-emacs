@@ -59,9 +59,10 @@ Other windows keep their reading positions; the draft is left untouched."
   (recenter -1))
 
 (defcustom dsh-emacs-history-rounds 3
-  "Number of complete earlier rounds fetched by `dsh-emacs-load-older-history'.
-A partially visible oldest round counts as the first round to complete.
-A prefix argument overrides this value for one load."
+  "Number of complete rounds loaded on opening or by older-history commands.
+Opening a fresh chat loads this many latest rounds without moving point.
+For `dsh-emacs-load-older-history', a partially visible oldest round counts
+as the first round to complete; a prefix overrides this value for one load."
   :type 'natnum
   :group 'dsh-emacs)
 
@@ -271,21 +272,26 @@ moved during the request; other windows retain their reading positions."
    ((null dsh-emacs--history-cursor)
     (message "This session has no history cursor yet"))
    (t
-    (let ((count (or rounds dsh-emacs-history-rounds)))
-      (unless (and (integerp count) (> count 0))
-        (user-error "Round count must be a positive integer"))
-      (unless (and (integerp dsh-emacs-history-window) (> dsh-emacs-history-window 0))
-        (user-error "History batch size must be a positive integer"))
-      (setq dsh-emacs--history-loading
-            (list :token (list 'dsh-emacs-history-load)
-                  :target count :before dsh-emacs--history-earliest-seq
-                  :frontier dsh-emacs--history-earliest-seq
-                  :through dsh-emacs--history-cursor :session dsh-emacs--buffer-session
-                  :address dsh-emacs--buffer-subagent :limit dsh-emacs-history-window
-                  :point (copy-marker (point) t)
-                  :window (get-buffer-window (current-buffer) t)
-                  :records nil :rounds nil))
-      (dsh-emacs-history--fetch-rounds (current-buffer) dsh-emacs--history-loading)))))
+    (dsh-emacs-history--start-load (or rounds dsh-emacs-history-rounds) t))))
+
+(defun dsh-emacs-history--start-load (count &optional visit)
+  "Fetch COUNT complete rounds before this buffer's history frontier.
+When VISIT is non-nil, visit the new range if the initiating window has not
+moved.  Automatic opening loads leave all reading and draft positions alone."
+  (unless (and (integerp count) (> count 0))
+    (user-error "Round count must be a positive integer"))
+  (unless (and (integerp dsh-emacs-history-window) (> dsh-emacs-history-window 0))
+    (user-error "History batch size must be a positive integer"))
+  (setq dsh-emacs--history-loading
+        (list :token (list 'dsh-emacs-history-load)
+              :target count :before dsh-emacs--history-earliest-seq
+              :frontier dsh-emacs--history-earliest-seq
+              :through dsh-emacs--history-cursor :session dsh-emacs--buffer-session
+              :address dsh-emacs--buffer-subagent :limit dsh-emacs-history-window
+              :point (copy-marker (point) t)
+              :window (and visit (get-buffer-window (current-buffer) t))
+              :records nil :rounds nil))
+  (dsh-emacs-history--fetch-rounds (current-buffer) dsh-emacs--history-loading))
 
 (provide 'dsh-emacs-history)
 ;;; dsh-emacs-history.el ends here

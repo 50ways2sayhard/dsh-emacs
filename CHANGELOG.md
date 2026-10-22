@@ -29,6 +29,12 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Open sessions with complete rounds**: fresh chat buffers load the latest
+  `dsh-emacs-history-rounds` rounds (3 by default), just like `C-c C-o` loads
+  earlier rounds. Long rounds continue across bounded pages without moving
+  the draft cursor or delaying live output; `C-c C-o` cancels the pending
+  history load. Switching back to an already-open chat remains unchanged.
+  (rationale: postmortem/148)
 - **Fold completed task work details**: successful tasks collapse thinking,
   tool calls and intermediate replies behind a muted **Completed in …**
   summary with a matching SVG chevron directly above the final answer.

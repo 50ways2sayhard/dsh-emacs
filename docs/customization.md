@@ -92,8 +92,8 @@ The most commonly used options, straight in your config:
 ```elisp
 (setq dsh-emacs-base-url "http://127.0.0.1:3080")  ; dsh service URL; a `?token=...` query (the URL dsh prints) is read for auth and stripped before paths are appended
 (setq dsh-emacs-server-auth-token nil)         ; launch token for dsh web 0.1.2-rc.1+; nil = auto-captured from a server dsh-emacs starts itself.  Set it for a server YOU run externally (a fresh random value every server restart).  When pointing at an external auth-requiring server with no token set, dsh-emacs asks you for it; a token that successfully authenticates is remembered here automatically (saved), so the next session reuses it — only a stale token (validation fails after a server restart) re-prompts, pre-filled for editing.  Successful authentication also caches the cookie instead of showing a Basic username/password prompt
-(setq dsh-emacs-history-window 30)                  ; messages fetched when opening a session, and the per-request batch size while loading older rounds
-(setq dsh-emacs-history-rounds 3)                  ; complete earlier rounds per C-c C-o; prefix argument overrides
+(setq dsh-emacs-history-window 30)                  ; maximum messages per opening or older-history network batch
+(setq dsh-emacs-history-rounds 3)                  ; complete rounds on opening and per C-c C-o; prefix overrides the latter
 (setq dsh-emacs-show-reasoning t)                  ; show reasoning content (on by default; nil = hide, unlike dsh web)
 (setq dsh-emacs-show-tool-calls t)                 ; show tool calls
 (setq dsh-emacs-stream-markdown-limit 8192)        ; pending characters before idle formatting; nil = synchronous
@@ -144,25 +144,34 @@ The most commonly used options, straight in your config:
 Imenu frontend; the chat buffer installs its user-message index and rescans it
 automatically.
 
-`dsh-emacs-history-rounds` defaults to 3. A round is a server `turn/start`
-boundary and all its following events up to the next round; a partially
-visible oldest round is completed first and counts toward the requested
-number. Automatic goal continuations count too. Rounds refer to the original
-server numbers, not a count of visible user questions.
+`dsh-emacs-history-rounds` defaults to 3 and controls both fresh chat opening
+and `C-c C-o`. Opening requests the latest rounds; the initial snapshot appears
+immediately, then additional pages complete any missing rounds without moving
+your draft cursor or interrupting live output. Switching to an already-open
+chat reuses its existing transcript. Reconnects do not restart a canceled load.
+The active round counts too: completeness means including its start and all
+available events, not waiting for the assistant to finish.
 
-`dsh-emacs-history-window` still limits messages per network batch (and the
-opening snapshot). Long rounds may take multiple requests: the smaller the
-batch, the more requests, though the count is bounded by the session length and
-a press of `C-c C-o` cancels between responses (the default 30 usually covers a
-round in one). Progress reports how many rounds are ready; the transcript and
-pagination cursor change only after the range is fetched. Failed or canceled
-fetches leave the old view intact, so retrying cannot skip a staged partial
-round. If fewer rounds remain, all remaining history is loaded and the
-completion message reports the actual count and “beginning of history”.
+A round is a server `turn/start` boundary and all its following events up to
+the next round; a partially visible oldest round is completed first and counts
+toward the requested number. Automatic goal continuations count too. Rounds
+refer to the original server numbers, not a count of visible user questions.
+
+`dsh-emacs-history-window` limits messages per network batch, including the
+opening snapshot. Long rounds may take multiple requests: the smaller the
+batch, the more requests, though the count is bounded by the session length.
+`C-c C-o` cancels a pending load, including automatic opening completion.
+Progress reports how many additional rounds are ready; staged pages and the
+pagination cursor are published only after that range is fetched. Failed or
+canceled fetches leave the initial tail and live output intact, so a later
+`C-c C-o` can retry without skipping a staged partial round. If fewer rounds
+remain, all remaining history is loaded and the completion message reports
+the actual count and “beginning of history”.
 
 Round numbers appear only in the completion message, for example
-“Loaded rounds 7–9 (3 rounds)”; no labels are added to the transcript. The initiating
-window visits its start. The old position is saved in the mark ring
+“Loaded rounds 7–9 (3 rounds)”; no labels are added to the transcript. For a
+manual `C-c C-o` load, the initiating window visits its start. The old position
+is saved in the mark ring
 (`C-u C-SPC` returns there). If you move point or switch windows while waiting,
 the loader preserves your current view. Other windows always retain their
 reading positions. Navigation leaves the draft untouched; `M-p` / `M-n`

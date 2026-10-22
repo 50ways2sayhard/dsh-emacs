@@ -1593,6 +1593,16 @@ private.  Missing or invalid counts remain nil; an empty wire array is zero."
                                 raw-records))
                               (has-more (dsh-protocol--boolean
                                          (dsh-protocol--field 'hasMore value)))
+                              (round-count
+                               (cl-count-if
+                                (lambda (record)
+                                  (let ((event (dsh-protocol--field 'event record)))
+                                    (and (equal (dsh-protocol--field 'type event)
+                                                "turn/start")
+                                         (natnump (dsh-protocol--field
+                                                   'turn (dsh-protocol--field
+                                                          'data event))))))
+                                records))
                               (execution
                                (delq nil
                                      (mapcar
@@ -1609,10 +1619,11 @@ private.  Missing or invalid counts remain nil; an empty wire array is zero."
   "A follow stream's opening transcript and presentation baseline.
 RECORDS retain raw durable event records in wire order for the renderer;
 unlike a backward history page, this view imposes no sequence validation.
+ROUND-COUNT counts valid turn starts in RECORDS, including an active round.
 EXECUTION covers the whole window, including events below the render anchor.
 PLAN is applied before history can yield; PROJECTIONS stay raw until their
 late decoding boundary.  An absent ASSISTANT is an empty baseline."
-  cursor records has-more execution plan assistant projections)
+  cursor records has-more round-count execution plan assistant projections)
 
 (cl-defstruct (dsh-protocol-follow-item
                (:constructor dsh-protocol-follow-item--from-alist
@@ -2032,12 +2043,13 @@ Only the receipt ID travels; display metadata and local paths do not."
   "Encode a fetch of ATTACHMENT bytes from SESSION."
   `((request . ((sessionId . ,session) (attachmentId . ,attachment)))))
 
-(defun dsh-protocol-session-follow-request (session address max-messages)
-  "Encode a follow of SESSION or ADDRESS, bounded by MAX-MESSAGES.
+(defun dsh-protocol-session-follow-request (session address max-messages rounds)
+  "Encode a follow of SESSION or ADDRESS for ROUNDS, bounded by MAX-MESSAGES.
 Always request assistant stream frames; omit a nil message bound."
   `((request . ((address . ,(dsh-protocol-session-address-json session address))
                 (assistantStream . t)
-                ,@(when max-messages `((maxMessages . ,max-messages)))))))
+                ,@(when max-messages `((maxMessages . ,max-messages)))
+                (turnWindow . ((minMessages . 1) (minTurns . ,rounds)))))))
 
 (defun dsh-protocol-workspace-archive-session-request (session)
   "Encode archiving or unarchiving SESSION in the workspace registry."

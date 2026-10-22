@@ -53,6 +53,10 @@ before connecting. A `use-package` example is in
 `c` to create one, and `TAB` to fold a workspace or expand available subagents.
 From a local project, the command locates its existing workspace; from a chat,
 it locates that session. New sessions open an editable draft while connecting.
+Opening an existing session in a fresh chat buffer loads the latest 3 complete
+rounds (`dsh-emacs-history-rounds`), fetching extra pages for long rounds without
+moving your draft cursor. `C-c C-o` cancels an in-progress history load; once
+finished, it loads earlier rounds. Switching back to a live chat preserves it.
 
 The PTC mode preset ID is now `ptc`. If your configuration sets
 `dsh-emacs-default-preset` to `"code"`, change it to `"ptc"`.

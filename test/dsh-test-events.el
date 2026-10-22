@@ -2405,5 +2405,30 @@
                            (string-match-p "\"sess-open\"" sent))))))
       (when (process-live-p proc) (delete-process proc)))))
 
+(ert-deftest dsh-emacs-test-events-follow-open-requests-configured-rounds ()
+  :tags '(dsh-unit)
+  (let ((dsh-emacs-history-rounds 5)
+        (dsh-emacs-history-window 7)
+        sent)
+    (cl-letf (((symbol-function 'process-get)
+               (lambda (_process key)
+                 (pcase key
+                   ('dsh-emacs-follow-session "opening")
+                   ('dsh-emacs-follow-stream-id "follow"))))
+              ((symbol-function 'process-live-p) (lambda (_) t))
+              ((symbol-function 'process-send-string)
+               (lambda (_process text) (setq sent text)))
+              ((symbol-function 'dsh-emacs-events--frame)
+               (lambda (_opcode text) text)))
+      (dsh-emacs-events--follow-open 'test-process))
+    (let* ((frame (dsh-protocol-read-json sent))
+           (request (alist-get 'request
+                               (alist-get 'args (alist-get 'payload frame)))))
+      (should (equal (alist-get 'endpoint frame) "session/follow"))
+      (should (equal (alist-get 'turnWindow request)
+                     '((minMessages . 1) (minTurns . 5))))
+      (should (= (alist-get 'maxMessages request) 7))
+      (should (eq (alist-get 'assistantStream request) t)))))
+
 (provide 'dsh-test-events)
 ;;; dsh-test-events.el ends here

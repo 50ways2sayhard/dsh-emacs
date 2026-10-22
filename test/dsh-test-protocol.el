@@ -1025,17 +1025,19 @@
                                '((kind . "subagent") (parentSessionId . "parent")
                                  (childSessionId . "child") (mode . "continuable"))
                              '((kind . "session") (sessionId . "s"))))
-             (args (dsh-protocol-session-follow-request "s" address limit))
+             (args (dsh-protocol-session-follow-request "s" address limit 3))
              (expected `((request . ((address . ,wire-address)
                                     (assistantStream . t)
-                                    ,@(when limit `((maxMessages . ,limit)))))))
+                                    ,@(when limit `((maxMessages . ,limit)))
+                                    (turnWindow . ((minMessages . 1) (minTurns . 3)))))))
              (json (concat
                     "{\"request\":{\"address\":"
                     (if subagent
                         "{\"kind\":\"subagent\",\"parentSessionId\":\"parent\",\"childSessionId\":\"child\",\"mode\":\"continuable\"}"
                       "{\"kind\":\"session\",\"sessionId\":\"s\"}")
                     ",\"assistantStream\":true"
-                    (if limit (format ",\"maxMessages\":%d" limit) "") "}}")))
+                    (if limit (format ",\"maxMessages\":%d" limit) "")
+                    ",\"turnWindow\":{\"minMessages\":1,\"minTurns\":3}}}")))
         (ert-info ((format "subagent=%S limit=%S" subagent limit))
           (should (equal args expected))
           (should (equal (dsh-protocol-write-json args) json)))))))

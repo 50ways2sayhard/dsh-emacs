@@ -137,17 +137,11 @@ snappier keys."
   :group 'dsh-emacs)
 
 (defcustom dsh-emacs-history-window 30
-  "Size of the history window fetched when opening a session (`maxMessages'
-semantics, counted in messages).
-A larger window shows more of the conversation, but the raw events returned
-by the server grow proportionally (in this package each message in a session
-is ~hundreds of incremental events, so parse and GC costs rise linearly:
-with the default no-argument window of ~30k raw events, the main thread needs
-0.7s+ to parse them).  The default of 30 messages ≈ the latest 1~2 turns,
-bringing the open cost down to 0.2~0.4s; increase it (e.g. 100) when a fuller
-history is needed, at the cost of a slower open.  This also bounds each
-network batch used by `dsh-emacs-load-older-history'; a long round may need
-several batches.  `dsh-emacs-history-rounds' controls rounds per invocation."
+  "Maximum messages per history request, including the opening snapshot.
+`dsh-emacs-history-rounds' controls how many complete rounds to load when
+opening a fresh chat or invoking `dsh-emacs-load-older-history'.  Long rounds
+are completed with additional bounded requests.  A smaller batch reduces
+per-response parsing work but requires more network round trips."
   :type 'integer
   :group 'dsh-emacs)
 

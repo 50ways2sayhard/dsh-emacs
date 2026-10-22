@@ -1317,11 +1317,12 @@ or an alternate parser. See [036](../postmortem/036-bounded-stream-markdown.md).
   `snapshot` seeds the transcript; switching back to an already-open chat
   reuses its live buffer and stream (see
   [147](../postmortem/147-open-session-buffer-reuse.md)).  The snapshot carries
-  a `cursor` plus message-aligned `records` (a bounded tail — the client
-  requests up to `dsh-emacs-history-window` messages via `maxMessages`).
-  Rendering parses only the snapshot records and live `event` frames, never
-  the whole session history, so opening is cheap even for very large
-  sessions.
+  a `cursor` plus message-aligned `records`: `turnWindow` requests
+  `dsh-emacs-history-rounds` starts, bounded by `dsh-emacs-history-window`
+  messages per response. The protocol decoder counts starts in the snapshot;
+  on first open, Events asks the history controller to fetch any missing
+  rounds after applying the snapshot and projections. The live follow stream
+  stays gapless. Reconnects do not start another automatic history load.
 - **Reconnect is self-healing**: the reconnect socket pins `no-conversion` — on
   a reused events buffer the re-inferred process coding system folds the 101
   response's `\r\n\r\n` to `\n\n`, so the handshake never matched and the
@@ -1360,12 +1361,11 @@ or an alternate parser. See [036](../postmortem/036-bounded-stream-markdown.md).
   responsive connection. Reconnect snapshots remain anchor-gated catch-up;
   there is no history-probe RPC. This tests transport responsiveness, not
   whether the server's logical follow stream is making progress.
-- **The open window is bounded**: the snapshot is requested with
-  `dsh-emacs-history-window` (default 30 messages), and the GC threshold is
-  raised dynamically (cpu-profiler measurements showed Automatic GC consuming
-  ~46% of the whole open duration when parsing large windows). Measured on a
-  560k-event session: opening dropped from ~1.8s / two ~0.9s freezes to ~0.55s /
-  two ~0.35s small blocks, independent of session size.
+- **Each history response is bounded**: the snapshot and continuation pages
+  request `dsh-emacs-history-window` (default 30 messages). Completing long
+  rounds can require multiple requests and substantial staging memory. The
+  GC threshold remains dynamically raised during rendering; bounded network
+  batches do not bound the total cost of the requested round range.
 - **Core connection (list side)**: the session list keeps a separate
   `/api/remote.mux` connection that opens `session/control` + `workspace/follow`
   + `$events`.  `session/control` delivers whole-host projection baselines and
@@ -1390,7 +1390,10 @@ oldest/newest sequence numbers, `hasMore`, and `(ROUND SEQ RECORD)` boundaries.
 `session/page` receives `turnWindow` with `minMessages: 1` and the remaining
 round count. `maxMessages` stays bounded by `dsh-emacs-history-window`.
 A partial oldest round counts as the first round to complete. This uses
-original server round numbers, including autonomous continuations.
+original server round numbers, including autonomous continuations. Opening
+uses the same request builder and loop for the missing round count, with no
+initiating window to visit; manual loads retain their jump behavior. See
+[148](../postmortem/148-open-complete-rounds.md).
 
 One buffer-local request plist stages records across bounded RPCs. Before
 publishing, the loader checks request identity, session/address, the original
