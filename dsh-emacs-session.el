@@ -1073,7 +1073,6 @@ STATUS is `running' or `idle' (see `dsh-emacs-session--compute-status')."
      (child
       (dsh-emacs-open-subagent (car child) (cdr child)))
      (session-id
-      (dsh-emacs-server-ensure)
       (dsh-emacs-open-session session-id)
       (message "Opened session %s" session-id))
      (group-id

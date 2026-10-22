@@ -228,6 +228,40 @@
             (kill-buffer b)))
         (remhash "sess-open" dsh-emacs--chat-buffers)))))
 
+(ert-deftest dsh-emacs-test-lifecycle-open-session-replaces-killed-buffer ()
+  :tags '(dsh-unit)
+  (let* ((dsh-emacs--chat-buffers (make-hash-table :test #'equal))
+         (dsh-emacs--current-session nil)
+         (dsh-emacs--current-buffer nil)
+         (dsh-emacs--sessions nil)
+         (dead (generate-new-buffer " *dsh-killed-chat*"))
+         (ready-count 0)
+         activated
+         pop-args)
+    (kill-buffer dead)
+    (puthash "sess-killed" dead dsh-emacs--chat-buffers)
+    (unwind-protect
+        (cl-letf (((symbol-function 'dsh-emacs-server-ensure)
+                   (lambda () (cl-incf ready-count)))
+                  ((symbol-function 'dsh-emacs--activate-chat-buffer)
+                   (lambda (sid buf address)
+                     (setq activated (list sid buf address))))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &optional action)
+                     (setq pop-args (list buffer action)))))
+          (dsh-emacs-open-session "sess-killed" nil t)
+          (should (buffer-live-p dsh-emacs--current-buffer))
+          (should-not (eq dsh-emacs--current-buffer dead))
+          (should (equal activated
+                         (list "sess-killed" dsh-emacs--current-buffer nil)))
+          (should (equal dsh-emacs--current-session "sess-killed"))
+          (should (= ready-count 1))
+          (should (equal pop-args
+                         (list dsh-emacs--current-buffer
+                               '(display-buffer-pop-up-window)))))
+      (when (buffer-live-p dsh-emacs--current-buffer)
+        (kill-buffer dsh-emacs--current-buffer)))))
+
 ;; --- Test 43b: opening a new session no longer drops other sessions' streams
 ;; (multi-session realtime) ---
 ;; Regression: open-session used to unconditionally tear down the mux of the
@@ -279,8 +313,7 @@
             (ert-info ((format "%s" "open-second-session-keeps-previous-stream"))
               (should (not (cl-some (lambda (d) (eq (nth 1 d) buf-a))
                                     disconnects)))))
-          ;; Reopening the same session: still its own connection (connect drops its own
-          ;; old stream internally)
+          ;; Reopening the same session only selects its live buffer.
           (setq disconnects nil connects nil)
           (cl-letf (((symbol-function 'dsh-emacs-command-catalog-prefetch) #'ignore)
                     ((symbol-function 'dsh-emacs-skill-prefetch) #'ignore)
@@ -295,9 +328,9 @@
                     ((symbol-function 'pop-to-buffer)
                      (lambda (&rest _) nil)))
             (dsh-emacs-open-session "sess-kb"))
-          (ert-info ((format "%s" "reopen-same-session-reconnects-itself"))
-            (should (and connects
-                         (eq (nth 1 (car connects)) dsh-emacs--current-buffer)))))
+          (ert-info ("reopen-same-session-keeps-existing-stream")
+            (should-not connects)
+            (should-not disconnects)))
       (setq dsh-emacs--sessions old-sessions
             dsh-emacs--current-buffer old-current-buffer
             dsh-emacs--current-session old-current-session)

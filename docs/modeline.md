@@ -62,11 +62,13 @@ details instead.
 The clock starts at `0s` when this buffer enters the running state. It measures
 local observed running time, including tools and waits; it is independent of
 the three-second animation loop and does not reset on repeated running
-snapshots. Turn completion and disconnect clear it. A reconnect or reopening
-a session starts a new local observation interval, rather than claiming an
-exact server turn duration. For completed turns with folded work, the
-Completed summary above the answer shows the server-based duration; add
-`duration` to `dsh-emacs-reply-footer-items` to show it in the footer too.
+snapshots. Turn completion and disconnect clear it. A reconnect — or opening
+the session again after its buffer was killed — starts a new local
+observation interval; switching back to an already-open chat keeps its
+running clock. Neither claims an exact server turn duration. For completed
+turns with folded work, the Completed summary above the answer shows the
+server-based duration; add `duration` to `dsh-emacs-reply-footer-items` to
+show it in the footer too.
 See [095](../postmortem/095-running-status.md).
 
 Customize `dsh-emacs-modeline-running-face` for the caption/clock foreground
@@ -214,10 +216,11 @@ step shows right after the running whale tail:
   is off or the running animation is hidden: a finished turn's last step is
   not a status.
 - The elapsed time (`· 3s`, then `· 1m05s`) is measured in local wall-clock
-  time, not from the event timestamps: a reconnect or session reopen replays a
-  still-open turn's `step/start` from history, and the wire timestamp would
-  then claim hours.  It appears once the step passes one second, advances with
-  the animation's redraws (no timer of its own) and freezes at `step/end`.
+  time, not from the event timestamps: a reconnect (or opening the session
+  again after killing its buffer) replays a still-open turn's `step/start`
+  from history, and the wire timestamp would then claim hours.  It appears
+  once the step passes one second, advances with the animation's redraws (no
+  timer of its own) and freezes at `step/end`.
 - The tooltip carries the full `dsh turn N · step N`, which the badgeless
   compact form elides.
 - A `step/end` only closes the step it names, so a replayed or out-of-order

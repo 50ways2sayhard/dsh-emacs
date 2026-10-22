@@ -134,11 +134,12 @@ instead of falling back silently. `/plan off` still changes the mode directly.
 
 ## Catalog prefetch
 
-The catalog is **pre-fetched**: opening a session starts a short timer-based
-fetch of `commands.list`, so the first `/` or `TAB` is served from cache instead
-of blocking on a synchronous round trip (disable with
+The catalog is **pre-fetched**: the first open of a session starts a short
+timer-based fetch of `commands.list`, so the first `/` or `TAB` is served from
+cache instead of blocking on a synchronous round trip (disable with
 `dsh-emacs-command-prefetch`; tune the delay with
-`dsh-emacs-command-prefetch-delay`). If the host registers new commands while a
+`dsh-emacs-command-prefetch-delay`). Switching back to an already-open chat
+reuses its stream and cache. If the host registers new commands while a
 session stays open, run `M-x dsh-emacs-command-catalog-refresh` to re-fetch and
 re-cache the catalog on demand.
 

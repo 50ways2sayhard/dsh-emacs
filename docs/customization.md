@@ -115,12 +115,12 @@ The most commonly used options, straight in your config:
 (setq dsh-emacs-workspaces-collapsed-by-default nil) ; workspace and Ungrouped groups start expanded (t = collapsed); TAB/RET overrides a group in the current list buffer
 (setq dsh-emacs-composer-goal-actions t)             ; show pause/resume/edit/clear buttons on the Goal Row (nil = hide them; C-c C-g keys still work; C-c C-g a / dsh-emacs-goal-actions-toggle toggles the current buffer)
 (setq dsh-emacs-reference-auto-complete t)          ; typing "@" in the input pops the file/directory/session reference menu (TAB and M-x dsh-emacs-reference always work; see docs/reference.md)
-(setq dsh-emacs-reference-prefetch t)               ; open-session async pre-fetch of bare "@" candidates for every frontend, including Corfu
+(setq dsh-emacs-reference-prefetch t)               ; first-open async pre-fetch of bare "@" candidates for every frontend, including Corfu
 (setq dsh-emacs-reference-prefetch-delay 0.5)       ; idle gap before the @ pre-fetch runs
 (setq dsh-emacs-reference-fetch-delay 0.15)         ; idle debounce before a typed @ token re-fetches its candidates
 (setq dsh-emacs-reference-max-files nil)            ; file/directory candidates shown in the "@" popup (nil = all host results)
 (setq dsh-emacs-reference-max-sessions nil)         ; session candidates shown in the "@" popup (nil = all host results)
-(setq dsh-emacs-skill-prefetch t)                   ; open-session pre-fetch of the `skills.list' catalog that shares the "/" menu with slash commands (see docs/skills.md)
+(setq dsh-emacs-skill-prefetch t)                   ; first-open pre-fetch of the `skills.list' catalog that shares the "/" menu with slash commands (see docs/skills.md)
 (setq dsh-emacs-skill-prefetch-delay 0.5)           ; delay before the skill pre-fetch runs
 (setq dsh-emacs-modeline-enabled t)                  ; whether the mode-line stats are enabled
 (setq dsh-emacs-modeline-show-step nil)              ; show the running turn's step badge next to the spinner (nil = hide it)

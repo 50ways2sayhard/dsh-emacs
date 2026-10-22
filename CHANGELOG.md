@@ -66,6 +66,13 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Switch to already-open sessions without rebuilding**: opening a session
+  that is already open — from the session list, `M-x dsh-emacs-switch-session`
+  or an `@` reference — selects its live chat buffer without clearing the
+  transcript, draft or cursor position, or restarting its event stream.
+  Killed chat buffers still initialize normally when opened again, and
+  `C-c C-r` (`dsh-emacs-refresh`) remains the explicit resync. (rationale:
+  postmortem/147)
 - **Keep user-message spacing during streaming**: the first live reply or
   reasoning chunk preserves the blank line below the question, matching
   history rendering; subsequent chunks keep the same gap.

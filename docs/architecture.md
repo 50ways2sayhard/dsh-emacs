@@ -1312,12 +1312,16 @@ or an alternate parser. See [036](../postmortem/036-bounded-stream-markdown.md).
   throws outward, Emacs silently removes the timer, leaving an unrecoverable
   deadlock where the process stays "open" but nothing ever kills it; this is a
   pitfall hit in real testing.
-- **Snapshot-first rendering**: opening a session opens a `session/follow`
-  stream whose `snapshot` seeds the transcript.  The snapshot carries a
-  `cursor` plus message-aligned `records` (a bounded tail — the client requests
-  up to `dsh-emacs-history-window` messages via `maxMessages`).  Rendering
-  parses only the snapshot records and live `event` frames, never the whole
-  session history, so opening is cheap even for very large sessions.
+- **Snapshot-first rendering**: the first open of a session — or reopening
+  one whose buffer was killed — opens a `session/follow` stream whose
+  `snapshot` seeds the transcript; switching back to an already-open chat
+  reuses its live buffer and stream (see
+  [147](../postmortem/147-open-session-buffer-reuse.md)).  The snapshot carries
+  a `cursor` plus message-aligned `records` (a bounded tail — the client
+  requests up to `dsh-emacs-history-window` messages via `maxMessages`).
+  Rendering parses only the snapshot records and live `event` frames, never
+  the whole session history, so opening is cheap even for very large
+  sessions.
 - **Reconnect is self-healing**: the reconnect socket pins `no-conversion` — on
   a reused events buffer the re-inferred process coding system folds the 101
   response's `\r\n\r\n` to `\n\n`, so the handshake never matched and the
@@ -1338,7 +1342,8 @@ or an alternate parser. See [036](../postmortem/036-bounded-stream-markdown.md).
   renders nothing; events generated during the outage carry seq > anchor and
   render once as the catch-up.  Without the gate a reconnect repainted the
   whole transcript a second time (doubled user messages and assistant replies,
-  interleaved layout, only fixed by reopening the session).
+  interleaved layout, only cleared by killing the buffer and opening the
+  session again).
 - **Live assistant continuity**: protocol structs decode the frame, reconnect
   baseline and compact stream records. Events keeps the active attempt id,
   turn/step and next frame index together; duplicate revisions are ignored,

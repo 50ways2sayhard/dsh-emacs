@@ -1240,28 +1240,30 @@ always reached through advice."
 ;;;###autoload
 (defun dsh-emacs-open-session (session-id &optional address other-window)
   "Open SESSION-ID, optionally with subagent ADDRESS in OTHER-WINDOW.
-Connects a per-session mux stream for the chat buffer WITHOUT touching
-other open sessions' streams: with several chats live, each buffer keeps
-its own realtime stream (tearing the previous one down here used to
-leave it stream-less — unable to ever switch back to
-realtime)."
+If its chat buffer is live, just select it: transcript, draft, point and
+realtime stream are preserved, and no other chat is touched.  Otherwise
+initialize a new buffer and connect its per-session mux stream.  ADDRESS
+applies only to that initialization; a live buffer was addressed when it
+was created.  Reopening never reconnects a live buffer; use
+\\[dsh-emacs-refresh] to force a resync."
   (interactive)
   (when (and address
              (equal (dsh-protocol-subagent-address-mode address) "external"))
     (user-error "External subagents have no local conversation"))
-  (dsh-emacs-server-ensure)
-  (setq dsh-emacs--current-session session-id)
   (let* ((existing (gethash session-id dsh-emacs--chat-buffers))
-         (buf (if (and existing (buffer-live-p existing))
+         (live (buffer-live-p existing))
+         (buf (if live
                   existing
-                ;; First open, or the buffer was killed: name it
-                ;; `dsh: <list title>', appending an <N> suffix when taken
-                ;; so it stays unique (same-titled sessions can coexist).
+                (dsh-emacs-server-ensure)
+                ;; First open, or the buffer was killed: use the list title,
+                ;; with an <N> suffix so same-titled sessions can coexist.
                 (get-buffer-create
                  (generate-new-buffer-name
                   (dsh-emacs--chat-buffer-name session-id))))))
-    (setq dsh-emacs--current-buffer buf)
-    (dsh-emacs--activate-chat-buffer session-id buf address)
+    (setq dsh-emacs--current-session session-id
+          dsh-emacs--current-buffer buf)
+    (unless live
+      (dsh-emacs--activate-chat-buffer session-id buf address))
     (pop-to-buffer buf
                    (when other-window '(display-buffer-pop-up-window)))))
 
@@ -1301,12 +1303,8 @@ The caller owns server readiness and window selection."
     ;; list cache; fetch session/list once when it is missing.
     (unless dsh-emacs--buffer-subagent
       (dsh-emacs--link-session-preset session-id))
-    ;; Reopening an already-live chat buffer resumes its realtime stream
-    ;; without re-rendering what is on screen: the follow snapshot is the
-    ;; catch-up (its records carry original seqs, so the
-    ;; `dsh-emacs--anchor-seq' gate drops everything already rendered);
-    ;; fresh buffers start at anchor 0 and the snapshot seeds the whole
-    ;; window.  No separate history fetch precedes the connect.
+    ;; Fresh buffers start at anchor 0; the follow snapshot seeds the
+    ;; transcript, so no separate history fetch precedes the connect.
     (unless dsh-emacs--buffer-subagent
       (dsh-emacs-command-catalog-prefetch session-id))
     ;; Pre-warm the skill catalog (`skills/list') too: the same "/" popup
@@ -3069,8 +3067,7 @@ input and staged attachments are empty (a newer draft is left alone)."
                                         ;; with no process at all, this session's
                                         ;; mux dropped and nobody reconnected
                                         ;; (opening a new session used to tear
-                                        ;; down the previous one's stream — see
-                                        ;; `dsh-emacs-open-session') — so
+                                        ;; down the previous one's stream) — so
                                         ;; reconnect first, letting the "switches
                                         ;; back to realtime" promise hold; a
                                         ;; process mid-handshake is covered by
