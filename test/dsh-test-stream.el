@@ -4,6 +4,39 @@
 
 (require 'dsh-test-support)
 
+(ert-deftest dsh-emacs-test-stream-preserves-user-message-spacing ()
+  :tags '(dsh-unit)
+  (dolist (role '(user assistant))
+    (dolist (kind '("text-delta" "reasoning-delta"))
+      (with-temp-buffer
+        (dsh-emacs-mode)
+        (goto-char dsh-emacs--input-marker)
+        (insert "KEEP DRAFT")
+        (if (eq role 'user)
+            (dsh-emacs--render-user-message-optimistic "Question" nil)
+          (dsh-emacs-render--insert-chat-message
+           "Question" 'dsh-emacs-assistant-body-face nil "preceding" 'assistant))
+        (goto-char (point-min))
+        (search-forward "Question")
+        (let ((end (point))
+              (seq 0))
+          (dolist (delta '("partial" " more"))
+            (dsh-emacs-render-event
+             `((type . "assistant/chunk") (seq . ,(cl-incf seq))
+               (data . ((turn . 1) (step . 1)
+                        (chunk . ((type . ,kind) (index . 0) (text . ,delta)))))))
+            (if (equal kind "text-delta")
+                (dsh-emacs-render--flush-stream)
+              (dsh-emacs-render--flush-thinking))
+            (let ((state (if (equal kind "text-delta")
+                             dsh-emacs--streaming-assistant
+                           dsh-emacs--streaming-thinking)))
+              (ert-info ((format "%s after %s: %s" kind role delta))
+                (should (equal (buffer-substring-no-properties
+                                end (plist-get state :start))
+                               (if (eq role 'user) "\n\n" "\n")))
+                (should (equal (dsh-emacs--get-input) "KEEP DRAFT"))))))))))
+
 ;; Async insertion at the prompt's beginning stretches hl-line over the new
 ;; transcript until the next command.  Exercise real overlays, not text faces.
 (ert-deftest dsh-emacs-test-stream-output-keeps-input-highlight-on-input ()

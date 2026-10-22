@@ -66,6 +66,9 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep user-message spacing during streaming**: the first live reply or
+  reasoning chunk preserves the blank line below the question, matching
+  history rendering; subsequent chunks keep the same gap.
 - **Copy user-message text cleanly**: copy-line and region copies no longer
   include a hidden prompt; yanking them also drops transcript styling and
   identity properties. Authored `❯` characters remain intact, including in

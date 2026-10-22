@@ -1409,9 +1409,10 @@ would rewrite that block's text and the final repair would delete it."
                 (if-let* ((anchor (dsh-emacs-render--input-anchor-pos)))
                     (progn (goto-char anchor) (beginning-of-line))
                   (goto-char (point-max))))
-              ;; Flush against the preceding content so a live stream never
-              ;; leaves a blank gap above it (tools stack the same way).
-              (dsh-emacs-ui--consume-blanks-above)
+              ;; Match settled messages: preserve the preceding content's
+              ;; requested spacing, including the gap below a user message.
+              (dsh-emacs-ui--consume-blanks-above
+               (dsh-emacs-ui--blank-above-preserve))
               (setq start (point))
               (insert (propertize text
                                   'read-only t
@@ -1591,7 +1592,8 @@ text arrives."
                 (if-let* ((anchor (dsh-emacs-render--input-anchor-pos)))
                     (progn (goto-char anchor) (beginning-of-line))
                   (goto-char (point-max))))
-              (dsh-emacs-ui--consume-blanks-above)
+              (dsh-emacs-ui--consume-blanks-above
+               (dsh-emacs-ui--blank-above-preserve))
               (setq start (point))
               (dsh-emacs-render--insert-read-only
                (concat (dsh-emacs-render--think-icon) " Think\n")
