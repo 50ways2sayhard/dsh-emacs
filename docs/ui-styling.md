@@ -262,6 +262,9 @@ application, which can still fail afterward. Raw model output and the
 checkpoint body stay hidden. Manual `/compact` retains its command card,
 and running compaction keeps its existing mode-line presentation. No new icon,
 face or option is added; see [record 116](../postmortem/116-compaction-tool-row.md).
+Within a settled turn, the summary joins adjacent thinking/tool cards in one
+activity group rather than splitting them. Expand the activity first to see
+its compaction row; compaction itself contributes no tool category count.
 
 Standalone model and automatic compaction errors use the same compact spacing
 as attempt cards, with a red status dot and no extra blank padding. Their
@@ -336,9 +339,16 @@ and points up when expanded, down when collapsed. Terminal/non-SVG displays
 retain a character fallback. The button hides or reveals the
 original work region, not a copied card body; final answers remain outside it.
 The summary row keeps the displaying window's truncation instead of widening
-a narrow row.
-`dsh-emacs-fold-work-details` controls this task-level behavior. There is no
-separate consecutive-tool activity-group header.
+a narrow row. Failed rounds use **Failed**, while canceled and interrupted
+rounds use **Stopped**, matching Web's process titles without elapsed time.
+Those status rows have no chevron and cannot hide the whole turn. The same
+applies when input arrives mid-turn. Instead, thinking/tool cards between
+visible replies fold into independent summaries such as **Read files and ran
+commands**. Each summary has its own chevron; replies and user spacing remain
+outside it. Successful turns without mid-turn input can additionally fold the
+whole process, even when no final answer exists. Terminal errors stay visible.
+`dsh-emacs-fold-work-details` controls both levels. See
+[Web folding rules](web-folding.md) for the audited defaults and scope.
 
 ## Mode-line stats
 

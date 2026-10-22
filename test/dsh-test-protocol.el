@@ -92,6 +92,26 @@
     (should-not (dsh-protocol-tool-call-call-id call))
     (should-not (dsh-protocol-tool-call-arguments call))))
 
+(ert-deftest dsh-emacs-test-protocol-reply-event-tool-identity ()
+  :tags '(dsh-unit)
+  (dolist (keys '((type data name callId) ("type" "data" "name" "callId")))
+    (pcase-let ((`(,type-key ,data-key ,name-key ,id-key) keys))
+      (dolist (type '("tool/call" "turn/start" "turn/end" "step/start"
+                      "assistant/message" "assistant/attempt"))
+        (let ((event
+               (dsh-protocol-reply-event--from-alist
+                (list (cons type-key type)
+                      (cons data-key (list (cons name-key "grep")
+                                           (cons id-key "call-23")))))))
+          (should (equal (and (equal type "tool/call") "grep")
+                         (dsh-protocol-reply-event-tool-name event)))
+          (should (equal (and (equal type "tool/call") "call-23")
+                         (dsh-protocol-reply-event-call-id event)))))))
+  (let ((event (dsh-protocol-reply-event--from-alist
+                '((type . "tool/call")))))
+    (should-not (dsh-protocol-reply-event-tool-name event))
+    (should-not (dsh-protocol-reply-event-call-id event))))
+
 (ert-deftest dsh-emacs-test-protocol-reply-event-folding-facts ()
   :tags '(dsh-unit)
   (dolist (string-keys '(nil t))

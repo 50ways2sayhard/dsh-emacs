@@ -1645,7 +1645,7 @@ stays raw for its event-specific consumers.  Unknown types have no payload."
 ;; Turn footer facts are independent of the cumulative session projections.
 (cl-defstruct (dsh-protocol-reply-event
                (:constructor dsh-protocol--make-reply-event))
-  type seq turn time text usage reason answer-p)
+  type seq turn time text usage reason answer-p tool-name call-id)
 
 (defun dsh-protocol-reply-event--from-alist (event)
   "Decode turn, step, tool-call or assistant facts from wire EVENT.
@@ -1674,6 +1674,10 @@ Synthetic fork endings have no usable elapsed-time endpoint."
         (dsh-protocol--make-reply-event
          :type type :seq (dsh-protocol--field 'seq event)
          :turn (dsh-protocol--field 'turn data)
+         :tool-name (and (equal type "tool/call")
+                         (dsh-protocol--field 'name data))
+         :call-id (and (equal type "tool/call")
+                       (dsh-protocol--field 'callId data))
          :reason (and (equal type "turn/end") reason)
          :time (unless (equal reason "forked")
                  (dsh-protocol--field 'time event))

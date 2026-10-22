@@ -232,13 +232,35 @@ assistant usage accounting is unchanged. The Copy/Fork target remains the
 latest nonempty reply, a different contract from a final answer that has no
 later work. Facts are collected when either footers or task folding are enabled.
 
-After a successful `turn/end`, the renderer folds the loaded work before the
-final answer. Its earliest loaded event supplies a pre-render boundary even
-when the default history window omits `turn/start`; the actual turn start is
-still required for elapsed-time accounting. Earlier same-turn pages move the
-header and extend the overlay, retaining the reader's choice. Opening user
-messages and goal notices stay outside the fold. Active, failed, interrupted
-and interleaved-input tasks remain visible.
+After `turn/end`, the renderer partitions visible thinking and tool fragments
+around replies, input and process-external rows. Each activity has an independent
+overlay and a deterministic summary, using decoded call IDs and names from the
+same turn facts. Counts are deduplicated by call ID and stably ranked by category.
+Replies never become activity members. Group headers retain their identity when
+older history extends their members; temporary markers protect ranges while
+headers are inserted or updated.
+
+Successful turns without interleaved input additionally fold the whole process
+before their final answer, or through the pre-`turn/end` boundary if there is no
+answer. Failed/stopped turns and turns with interleaved input instead have a
+non-foldable status header. Terminal diagnostics, deliverables and reply actions
+remain outside. Missing `turn/start` does not prevent folding a loaded tail, but
+elapsed-time accounting still requires the actual start timestamp. Active and
+unknown-ending turns get no whole-turn fold.
+
+The UI owns one contiguous overlay per disclosure, not disjoint spans around
+human input. The renderer owns both levels' lifetime; trim/reset releases all
+activity overlays and the outer overlay or disabled header. See
+[149](../postmortem/149-web-activity-folding.md) and
+[the audited Web rules](web-folding.md).
+
+History batches bind `inhibit-redisplay` through final footer/fold
+reconciliation and viewport following. Timer/process-input yields remain, but
+the unfinished, expanded intermediate work is not painted at those yields.
+The binding unwinds on errors too. This applies only while a snapshot or
+older page renders, not across network requests or normal live event delivery;
+it avoids extra intermediate paints without reducing the work to render a
+large batch.
 
 `dsh-emacs-ui-fold-region` adds a stock-button header and an invisibility
 overlay over the original region. It does not copy or replace child cards,

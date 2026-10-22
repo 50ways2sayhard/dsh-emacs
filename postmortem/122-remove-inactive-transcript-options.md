@@ -1,5 +1,8 @@
 # 122 — Remove inactive transcript options and group bookkeeping
 
+Later active grouping is documented in [149](<149-web-activity-folding.md>);
+the removed options and inactive bookkeeping are not restored.
+
 Synthetic-event limitation superseded by [123](123-decoded-stream-and-tool-results.md).
 
 ## Background

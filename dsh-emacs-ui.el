@@ -667,8 +667,8 @@ Silent no-op when no fragment exists at or after point."
   ;; A hidden first character's image display can otherwise remain visible.
   (overlay-put overlay 'display (unless expanded ""))
   (when-let* ((block (dsh-emacs-ui-find-block
-                     (overlay-get overlay 'namespace)
-                     (overlay-get overlay 'block-id)))
+                      (overlay-get overlay 'namespace)
+                      (overlay-get overlay 'block-id)))
               (pos (text-property-not-all (car block) (cdr block) 'button nil))
               (button (button-at pos)))
     (let* ((inhibit-read-only t)
@@ -714,12 +714,13 @@ Silent no-op when no fragment exists at or after point."
   "Reveal work details in OVERLAY when search finds hidden content."
   (dsh-emacs-ui--set-work-details-expanded overlay t))
 
-(defun dsh-emacs-ui-fold-region (namespace block-id start end &optional overlay label)
-  "Fold START..END behind a work-details control named NAMESPACE and BLOCK-ID.
-Keep the original text and child fragments in place.  Reuse OVERLAY when
-provided, preserving the reader's choice, even when older work is prepended.
-LABEL is the completion summary; without timing facts it defaults to Completed.
-A changed LABEL re-renders the header so later timing facts replace the text."
+(defun dsh-emacs-ui-fold-region (namespace block-id start end
+                                           &optional overlay label status)
+  "Fold START..END behind a control named NAMESPACE and BLOCK-ID.
+Keep original text and child fragments in place.  Reuse OVERLAY when supplied,
+preserving manual expansion as older history extends the region.  LABEL
+is the summary, defaulting to Completed.  STATUS distinguishes a task's
+work-details header from an activity-details header."
   (let* ((live (and overlay (overlay-buffer overlay)))
          (header (and live (dsh-emacs-ui-find-block namespace block-id)))
          (expanded (and live (not (overlay-get overlay 'invisible))))
@@ -728,9 +729,7 @@ A changed LABEL re-renders the header so later timing facts replace the text."
     (when live (overlay-put overlay 'dsh-emacs-work-label caption))
     (if (and header (<= (car header) start) (<= start (cdr header))
              (equal previous caption))
-        (progn
-          (move-overlay overlay (cdr header) end)
-          (dsh-emacs-ui--set-work-details-expanded overlay expanded))
+        (move-overlay overlay (cdr header) end)
       (unless live
         (setq overlay (make-overlay start end nil nil nil))
         (overlay-put overlay 'dsh-emacs-work-label caption)
@@ -743,8 +742,7 @@ A changed LABEL re-renders the header so later timing facts replace the text."
             (start-marker (copy-marker start nil)))
         (unwind-protect
             (progn
-              (when header
-                (dsh-emacs-ui-delete-fragment namespace block-id))
+              (when header (dsh-emacs-ui-delete-fragment namespace block-id))
               (setq header
                     (dsh-emacs-ui-update-fragment
                      (dsh-emacs-ui-make-fragment
@@ -753,16 +751,23 @@ A changed LABEL re-renders the header so later timing facts replace the text."
                       (make-text-button
                        (concat caption " ▾") nil 'follow-link t
                        'face 'dsh-emacs-reply-meta-face
-                       'help-echo "Show or hide this task's work details"
+                       'help-echo "Show or hide details"
                        'action #'dsh-emacs-ui--toggle-work-details
                        'dsh-emacs-work-details overlay)
-                      :style 'minimal :status 'work-details :non-foldable t)
+                      :style 'minimal :status (or status 'work-details)
+                      :non-foldable t)
                      :insert-before start-marker))
-              (move-overlay overlay (cdr header) end-marker)
-              (dsh-emacs-ui--set-work-details-expanded overlay expanded))
+              (move-overlay overlay (cdr header) end-marker))
           (set-marker start-marker nil)
-          (set-marker end-marker nil)))))
-  overlay)
+          (set-marker end-marker nil))))
+    (dsh-emacs-ui--set-work-details-expanded overlay expanded)
+    overlay))
+
+(defun dsh-emacs-ui-delete-work-details (overlay)
+  "Release OVERLAY and its disclosure header."
+  (dsh-emacs-ui-delete-fragment (overlay-get overlay 'namespace)
+                                (overlay-get overlay 'block-id))
+  (delete-overlay overlay))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Delete fragment

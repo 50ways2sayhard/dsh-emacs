@@ -204,12 +204,14 @@ browsing.  Set to nil to disable trimming."
   :group 'dsh-emacs-render)
 
 (defcustom dsh-emacs-fold-work-details t
-  "Whether completed tasks collapse their work details automatically.
-Thinking, tool calls and intermediate replies before the final answer fold
-behind a Completed summary.  RET or click reveals them without changing
-individual card folds.  A completed task can fold its loaded tail even when
-the history window omits its start.  Active, failed and interrupted tasks
-stay open.  Set to nil and reopen the chat buffer to disable task folding."
+  "Whether to use Web-style task and activity disclosures.
+When a turn ends, thinking and tool cards between visible messages fold
+into activity summaries.  Successful turns without mid-turn input also
+fold their whole process, leaving any final answer visible.  Failed and
+stopped turns keep their replies visible and their status row non-foldable.
+Active turns stay open.  RET or click toggles a disclosure independently
+of individual cards.  Set to nil and reopen the chat buffer for a flat
+transcript without task or activity disclosures."
   :type 'boolean
   :group 'dsh-emacs-render)
 
@@ -3539,76 +3541,221 @@ unfold preserve the styling."
                       (buffer-undo-list t))
                   (delete-region (cdr range) (1+ (cdr range))))))))))))
 
+(defun dsh-emacs-render--activity-summary (calls)
+  "Summarize CALLS, an ordered list of (ID . NAME), as in Web's processTitle.
+Count each call once, rank categories by count with stable ties, and display
+at most three categories.  Reasoning-only groups have no tool categories."
+  (let (seen counts)
+    (dolist (call calls)
+      (unless (member (car call) seen)
+        (push (car call) seen)
+        (let* ((name (cdr call))
+               (label
+                (cond
+                 ((equal name "read") "Read files")
+                 ((equal name "read_image") "Read images")
+                 ((or (member name '("grep" "glob"))
+                      (string-suffix-p "_inspect" name)) "Searched code")
+                 ((equal name "write") "Wrote files")
+                 ((member name '("edit" "apply_patch")) "Edited files")
+                 ((or (member name '("bash" "pwsh" "exec_command" "write_stdin"))
+                      (string-prefix-p "terminal_" name)) "Ran commands")
+                 ((equal name "run_code") "Ran code")
+                 ((equal name "web_search") "Searched the web")
+                 ((equal name "web_fetch") "Visited web pages")
+                 ((or (equal name "subagent") (string-prefix-p "subagent_" name))
+                  "Coordinated subagents")
+                 ((member name '("todo_write" "create_goal" "update_goal" "get_goal"))
+                  "Updated the plan")
+                 ((member name '("ask_user_question" "request_user_input"))
+                  "Asked questions")
+                 (t "Called tools")))
+               (entry (assoc label counts)))
+          (if entry (cl-incf (cdr entry))
+            (setq counts (append counts (list (cons label 1))))))))
+    (setq counts (cl-stable-sort counts (lambda (a b) (> (cdr a) (cdr b)))))
+    (if (null counts) "Analysis completed"
+      (let ((labels (mapcar #'car (cl-subseq counts 0 (min 3 (length counts))))))
+        (concat (car labels)
+                (mapconcat (lambda (label)
+                             (concat (if (= (length counts) 2) " and " ", ")
+                                     (downcase (substring label 0 1))
+                                     (substring label 1)))
+                           (cdr labels) "")
+                (when (> (length counts) 3) ", etc."))))))
+
+(defun dsh-emacs-render--activity-details (turn state)
+  "Fold contiguous process cards in settled TURN, leaving replies outside.
+STATE owns the overlays and decoded tool identities.  Existing fragment
+boundaries supply the visible order; messages and process-external rows
+split groups.  This is Web's detailed/history policy, not step grouping."
+  (let ((origin (plist-get state :work-start))
+        (end (plist-get state :work-end))
+        (old (plist-get state :activity-overlays))
+        (namespace (dsh-emacs-render--make-namespace))
+        groups kept current existing)
+    (cl-labels
+        ((flush ()
+           (when current
+             (setf (plist-get current :overlay) existing)
+             (push current groups))
+           (setq current nil existing nil)))
+      (when (and dsh-emacs-fold-work-details (plist-get state :end-seq)
+                 (markerp origin) (marker-buffer origin)
+                 (markerp end) (marker-buffer end))
+        (save-excursion
+          (goto-char origin)
+          (while (< (point) end)
+            (let* ((fragment (get-text-property (point) 'dsh-emacs-ui-state))
+                   (status (map-elt fragment :status))
+                   (id (map-elt fragment :block-id))
+                   (call-id (cond
+                             ((equal (map-elt fragment :namespace-id)
+                                     dsh-emacs--todo-namespace) id)
+                             ((and (stringp id) (string-prefix-p "tool-" id))
+                              (substring id 5))))
+                   (next (next-single-property-change
+                          (point) 'dsh-emacs-ui-state nil end)))
+              (cond
+               ((eq status 'activity-details)
+                (unless existing
+                  (setq existing (get-text-property
+                                  0 'dsh-emacs-work-details
+                                  (map-elt fragment :label-left)))))
+               ((eq status 'work-details))
+               ;; Compaction belongs to the process but contributes no tool count.
+               ((or (memq status '(thinking compaction-summary)) call-id)
+                (unless current
+                  (setq current (list :first id :start (copy-marker (point))
+                                      :end (copy-marker next t))))
+                (set-marker (plist-get current :end) next)
+                (when-let* ((name (cdr (assoc call-id (plist-get state :tool-names)))))
+                  (push (cons call-id name) (plist-get current :calls))))
+               ((and (null fragment)
+                     (string-blank-p (buffer-substring-no-properties (point) next))))
+               (t (flush)))
+              (goto-char next))))
+        (flush)))
+    (setq groups (nreverse groups))
+    (unwind-protect
+        (dolist (group groups)
+          (let* ((overlay (plist-get group :overlay))
+                 (id (if overlay (overlay-get overlay 'block-id)
+                       (format "activity-%s-%s" turn (plist-get group :first)))))
+            (push (dsh-emacs-ui-fold-region
+                   namespace id (plist-get group :start) (plist-get group :end)
+                   overlay (dsh-emacs-render--activity-summary
+                            (nreverse (plist-get group :calls)))
+                   'activity-details)
+                  kept)))
+      (dolist (group groups)
+        (set-marker (plist-get group :start) nil)
+        (set-marker (plist-get group :end) nil)))
+    (dolist (overlay old)
+      (unless (memq overlay kept) (dsh-emacs-ui-delete-work-details overlay)))
+    (setf (plist-get state :activity-overlays) (nreverse kept))))
+
 (defun dsh-emacs-render--work-details (turn state)
-  "Fold TURN's completed process from STATE, leaving its final reply visible.
-Only a successfully completed turn with a final prose answer is eligible.
-An interleaved human message keeps the process open, as in the web client."
+  "Reconcile TURN's two disclosure levels from STATE.
+As in Web's detailed mode, settled activity groups leave every reply outside.
+Only successful turns without interleaved input may also hide the whole
+process.  Their final answer, if any, remains outside that outer fold."
+  (dsh-emacs-render--activity-details turn state)
   (let* ((overlay (plist-get state :work-overlay))
          (namespace (dsh-emacs-render--make-namespace))
          (id (format "work-details-%s" turn))
          (origin (plist-get state :work-start))
-         (answer (and dsh-emacs-fold-work-details
-                      (equal (plist-get state :end-reason) "completed")
-                      (markerp origin) (marker-buffer origin)
-                      (plist-get state :answer-seq)
-                      (text-property-any origin (point-max)
-                                         'dsh-emacs-message-seq
-                                         (plist-get state :answer-seq))))
-         start)
-    (when answer
+         (end (plist-get state :work-end))
+         (reason (plist-get state :end-reason))
+         (settled (and dsh-emacs-fold-work-details
+                       (member reason '("completed" "error" "aborted" "interrupted"))
+                       (markerp origin) (marker-buffer origin)
+                       (markerp end) (marker-buffer end))))
+    ;; A disabled summary owns no overlay; move it as older history arrives.
+    (when (and (plist-get state :work-header) (not overlay))
+      (dsh-emacs-ui-delete-fragment namespace id))
+    (if (not settled)
+        (progn
+          (when overlay (dsh-emacs-ui-delete-work-details overlay))
+          (setf (plist-get state :work-overlay) nil
+                (plist-get state :work-header) nil))
       (save-excursion
         (goto-char origin)
-        ;; Inputs and trigger notices lead the work, never belong inside it.
         (while (progn
-                 (skip-chars-forward " \t\n" answer)
-                 (and (< (point) answer)
+                 (skip-chars-forward " \t\n" end)
+                 (and (< (point) end)
                       (cond
                        ((get-text-property (point) 'dsh-emacs-user-message)
                         (goto-char (next-single-property-change
-                                    (point) 'dsh-emacs-user-message nil answer)))
+                                    (point) 'dsh-emacs-user-message nil end)))
                        ((memq (map-elt (get-text-property
                                         (point) 'dsh-emacs-ui-state) :status)
                               '(goal-trigger reply-footer work-details))
                         (goto-char (next-single-property-change
-                                    (point) 'dsh-emacs-ui-state nil answer)))))))
-        (when (and (< (point) answer)
-                   (not (text-property-any
-                         (point) (or (plist-get state :work-end) answer)
-                         'dsh-emacs-user-message t)))
-          (setq start (line-beginning-position)))))
-    (if start
-        (setf (plist-get state :work-overlay)
-              (dsh-emacs-ui-fold-region
-               namespace id start answer overlay
-               (let ((begin (plist-get state :start-time))
-                     (finish (plist-get state :end-time)))
-                 (if (and (numberp begin) (numberp finish) (>= finish begin))
-                     (let ((seconds (floor (/ (- finish begin) 1000.0))))
-                       (concat "Completed in "
-                               (cond
-                                ((>= seconds 3600)
-                                 (format "%dh %dm %ds" (/ seconds 3600)
-                                         (% (/ seconds 60) 60) (% seconds 60)))
-                                ((>= seconds 60)
-                                 (format "%dm %ds" (/ seconds 60) (% seconds 60)))
-                                (t (format "%ds" seconds)))))
-                   "Completed"))))
-      (when overlay
-        (delete-overlay overlay)
-        (dsh-emacs-ui-delete-fragment namespace id)
-        (setf (plist-get state :work-overlay) nil)))))
+                                    (point) 'dsh-emacs-ui-state nil end)))))))
+        (let* ((start (copy-marker (line-beginning-position)))
+               (answer (and (plist-get state :answer-seq)
+                            (text-property-any start end 'dsh-emacs-message-seq
+                                               (plist-get state :answer-seq))))
+               (boundary (or answer end))
+               (interleaved (text-property-any start end 'dsh-emacs-user-message t))
+               (caption
+                (cond
+                 ((equal reason "error") "Failed")
+                 ((member reason '("aborted" "interrupted")) "Stopped")
+                 (t
+                  (let ((begin (plist-get state :start-time))
+                        (finish (plist-get state :end-time)))
+                    (if (and (numberp begin) (numberp finish) (>= finish begin))
+                        (let ((seconds (max 1 (floor (/ (- finish begin) 1000.0)))))
+                          (concat "Completed in "
+                                  (cond
+                                   ((>= seconds 3600)
+                                    (format "%dh %dm %ds" (/ seconds 3600)
+                                            (% (/ seconds 60) 60) (% seconds 60)))
+                                   ((>= seconds 60)
+                                    (format "%dm %ds" (/ seconds 60) (% seconds 60)))
+                                   (t (format "%ds" seconds)))))
+                      "Completed"))))))
+          ;; Mid-turn automatic input has a visible trigger rather than a bubble.
+          (while (and (not interleaved) (< (point) end))
+            (when (eq (map-elt (get-text-property (point) 'dsh-emacs-ui-state)
+                               :status) 'goal-trigger)
+              (setq interleaved t))
+            (goto-char (next-single-property-change
+                        (point) 'dsh-emacs-ui-state nil end)))
+          (unwind-protect
+              (if (and (equal reason "completed") (not interleaved)
+                       (< start boundary))
+                  (setf (plist-get state :work-overlay)
+                        (dsh-emacs-ui-fold-region
+                         namespace id start boundary overlay caption))
+                (when overlay
+                  (dsh-emacs-ui-delete-work-details overlay)
+                  (setf (plist-get state :work-overlay) nil))
+                (dsh-emacs-ui-update-fragment
+                 (dsh-emacs-ui-make-fragment
+                  :namespace-id namespace :block-id id
+                  :label-left (propertize caption 'face 'dsh-emacs-reply-meta-face)
+                  :style 'minimal :status 'work-details :non-foldable t)
+                 :insert-before start))
+            (set-marker start nil))
+          (setf (plist-get state :work-header) (cons namespace id)))))))
 
 (defun dsh-emacs-render--release-work-details (state)
-  "Release STATE's work-detail display and boundary marker."
-  (when-let* ((overlay (plist-get state :work-overlay)))
-    (delete-overlay overlay)
-    (dsh-emacs-ui-delete-fragment (overlay-get overlay 'namespace)
-                                 (overlay-get overlay 'block-id)))
+  "Release STATE's task header, activity groups and boundary markers."
+  (dolist (overlay (cons (plist-get state :work-overlay)
+                         (plist-get state :activity-overlays)))
+    (when overlay (dsh-emacs-ui-delete-work-details overlay)))
+  (when-let* ((header (plist-get state :work-header)))
+    (dsh-emacs-ui-delete-fragment (car header) (cdr header)))
   (dolist (key '(:work-start :work-end))
     (when-let* ((marker (plist-get state key)))
       (set-marker marker nil)
       (setf (plist-get state key) nil)))
-  (setf (plist-get state :work-overlay) nil))
+  (setf (plist-get state :work-overlay) nil
+        (plist-get state :work-header) nil
+        (plist-get state :activity-overlays) nil))
 
 (defun dsh-emacs-render--note-reply-event (event &optional start)
   "Merge decoded reply EVENT, with START preceding its rendered content.
@@ -3623,7 +3770,8 @@ The earliest loaded event bounds visible work even without `turn/start'."
            (state (or (gethash turn dsh-emacs-render--reply-turns)
                       (list :start-seq nil :start-time nil :end-seq nil
                             :end-time nil :reply-seq nil :text nil :messages nil
-                            :work-overlay nil))))
+                            :work-overlay nil :work-header nil
+                            :activity-overlays nil :tool-names nil))))
       (when (and start (not (equal type "turn/end"))
                  (< seq (or (plist-get state :work-start-seq)
                             most-positive-fixnum)))
@@ -3632,13 +3780,18 @@ The earliest loaded event bounds visible work even without `turn/start'."
         (setf (plist-get state :work-start) (copy-marker start nil)
               (plist-get state :work-start-seq) seq))
       (pcase type
+        ("tool/call"
+         (when-let* ((id (dsh-protocol-reply-event-call-id event))
+                     (name (dsh-protocol-reply-event-tool-name event)))
+           (setf (alist-get id (plist-get state :tool-names) nil nil #'equal) name)))
         ("turn/start"
          (setf (plist-get state :start-seq) seq
                (plist-get state :start-time) (dsh-protocol-reply-event-time event)))
         ("turn/end"
          (unless (plist-get state :work-end)
+           ;; Stop before turn-end diagnostics and deliverables are inserted.
            (setf (plist-get state :work-end)
-                 (copy-marker (or (dsh-emacs-render--input-insert-point)
+                 (copy-marker (or start (dsh-emacs-render--input-insert-point)
                                   (point-max)) nil)))
          (setf (plist-get state :end-seq) seq
                (plist-get state :end-reason) (dsh-protocol-reply-event-reason event)
@@ -3670,7 +3823,7 @@ The earliest loaded event bounds visible work even without `turn/start'."
       ;; Unlike the Copy target, a final answer cannot precede more work.
       ;; Sequence ordering also protects it from older history page facts.
       (when (and (member type '("step/start" "tool/call" "assistant/message"
-                               "assistant/attempt"))
+                                "assistant/attempt"))
                  (> seq (or (plist-get state :answer-event-seq) -1)))
         (setf (plist-get state :answer-event-seq) seq
               (plist-get state :answer-seq)
@@ -4688,6 +4841,7 @@ draft.  The size limit is soft in all three cases."
                          ((<= start (point-min))))
                (dsh-emacs-render--release-work-details state))
              (when (and (plist-get state :end-seq)
+                        (null (plist-get state :work-start))
                         (or (null (plist-get state :reply-seq))
                             (not (text-property-any
                                   (point-min) (point-max) 'dsh-emacs-message-seq
@@ -4760,13 +4914,17 @@ recall context.  Before rendering, the batch is scanned once to key each
 citing message's seq to those references, so the message's `@label' renders
 as a real session chip.
 Every batch this renderer receives is settled and bounded (an older-history
-page or the opening follow snapshot), so it runs to completion; it yields to
-the input queue between groups to keep redisplay moving, but never abandons
-the batch.  Dropping records was the root cause of a wedged mode-line
+page or the opening follow snapshot), so it runs to completion; it yields
+between groups for timers and process input but defers redisplay until final
+footers and work-detail folds are reconciled.  The batch is never abandoned.
+Dropping records was the root cause of a wedged mode-line
 spinner: the snapshot caller advances `dsh-emacs--anchor-seq' to the snapshot
 cursor once the render returns, so a dropped trailing `turn/end' was never
 re-delivered and the running animation had no later event to stop it."
-  (let* ((entries (if (vectorp events) (append events nil) events))
+  (let* (;; History reconciles its final folds below.  Yields may process
+         ;; timers and socket input, but must not paint the unfolded batch.
+         (inhibit-redisplay t)
+         (entries (if (vectorp events) (append events nil) events))
          (dsh-emacs-render--footer-batch t)
          (dsh-emacs-render--footer-dirty nil)
          (refs-map (and (null stream)
@@ -4852,8 +5010,8 @@ re-delivered and the running animation had no later event to stop it."
                 (set-marker-insertion-type marker nil))))
         (dolist (entry entries)
           (consume-entry entry)
-          ;; Yield to the input queue between groups so a long seed still
-          ;; redisplays; unlike `while-no-input', the batch is not abandoned.
+          ;; Let timers and process input run between groups.  Redisplay is
+          ;; deferred until this batch's footer and fold reconciliation ends.
           (cl-incf counter)
           (when (>= counter 5)
             (setq counter 0)

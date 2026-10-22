@@ -1366,6 +1366,39 @@ both followers' prompts above their viewports."
                      "Completed in 4s")))
         (should-not (overlay-get overlay 'invisible))))))
 
+(ert-deftest dsh-emacs-test-ui-work-details-nested-activity ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "tool output\n")
+    (let ((answer (copy-marker (point))))
+      (insert "final answer\n")
+      (let* ((activity (dsh-emacs-ui-fold-region
+                        "nested" "activity" (point-min) answer
+                        nil "Read files" 'activity-details))
+             (outer (dsh-emacs-ui-fold-region
+                     "nested" "task" (point-min) answer nil "Completed")))
+        (should (invisible-p (overlay-start activity)))
+        (should-not (invisible-p answer))
+        (dsh-emacs-ui--set-work-details-expanded outer t)
+        (let ((header (dsh-emacs-ui-find-block "nested" "activity")))
+          (should-not (invisible-p (car header)))
+          (should (eq 'activity-details
+                      (map-elt (get-text-property (car header) 'dsh-emacs-ui-state)
+                               :status))))
+        (should (invisible-p (overlay-start activity)))
+        (dsh-emacs-ui--set-work-details-expanded activity t)
+        (should-not (invisible-p (overlay-start activity)))
+        (should (eq activity (dsh-emacs-ui-fold-region
+                              "nested" "activity" (overlay-start activity) answer
+                              activity "Read files and ran commands" 'activity-details)))
+        (should-not (overlay-get activity 'invisible))
+        (dsh-emacs-ui-delete-work-details outer)
+        (should (overlay-buffer activity))
+        (dsh-emacs-ui-delete-work-details activity)
+        (should-not (overlay-buffer activity))
+        (should (equal (buffer-string) "tool output\nfinal answer\n")))
+      (set-marker answer nil))))
+
 (ert-deftest dsh-emacs-test-ui-work-details-narrow-header-keeps-truncation ()
   :tags '(dsh-unit)
   (dolist (width '(1 2 12 30))

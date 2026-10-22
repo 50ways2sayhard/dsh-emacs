@@ -94,13 +94,16 @@ Ordinary Emacs undo applies only to the input, leaving the transcript intact.
 Copying a user-message line yields its authored text; pasting does not carry
 the conversation rail or spacing into the destination.
 `M-x imenu` navigates the conversation's questions. Click a folded tool or
-thinking header, or press `RET` on it, to expand it. Completed tasks also fold
-their thinking, tool calls and intermediate replies behind **Completed…**,
-leaving the final answer visible. Click that row or press `RET` to reveal the
-work; individual card folds are preserved. Completed tasks fold their loaded
-work even when the history window omits the task start. Active, failed and
-interrupted tasks stay open. Set `dsh-emacs-fold-work-details` to `nil` and
-reopen the chat buffer to disable task folding.
+thinking header, or press `RET` on it, to expand it. Once a turn ends,
+continuous thinking and tool cards between replies fold into activity summaries
+such as **Read files and ran commands**. Replies stay outside these groups.
+Successful turns without mid-turn input additionally fold their whole process
+under **Completed…**, leaving any final answer visible. **Failed** and **Stopped**
+are non-foldable status rows, as are completion rows for turns with mid-turn input;
+their internal activities still fold independently. Running turns stay open.
+Earlier history extends disclosures without resetting manual expansion.
+Set `dsh-emacs-fold-work-details` to `nil` and reopen the chat for a flat transcript.
+See [Web folding rules and remaining differences](docs/web-folding.md).
 Visible chat windows follow new output independently while their cursors and
 views stay near the draft, preserving each editing position. Windows reading
 older messages stay put; `C-c >` returns that window to the draft and following.

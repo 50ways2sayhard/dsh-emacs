@@ -35,16 +35,14 @@ minor) and stay undated until the release is cut.
   the draft cursor or delaying live output; `C-c C-o` cancels the pending
   history load. Switching back to an already-open chat remains unchanged.
   (rationale: postmortem/148)
-- **Fold completed task work details**: successful tasks collapse thinking,
-  tool calls and intermediate replies behind a muted **Completed in …**
-  summary with a matching SVG chevron directly above the final answer.
-  Without full timing data it shows **Completed**.
-  `RET` toggles the row while preserving
-  individual card folds. Completed tasks fold their loaded work even when the
-  history window omits the task start; active, failed and interrupted tasks
-  stay open. The summary keeps the window's truncation instead of widening a
-  narrow row. Set `dsh-emacs-fold-work-details` to `nil` and reopen the chat
-  buffer for the flat transcript. (rationale: postmortem/142)
+- **Web-style task and activity disclosures**: settled thinking and tool
+  cards fold into independent summaries between visible replies. Successful
+  turns without mid-turn input also fold their whole process under a muted
+  **Completed in …** row, leaving any final answer visible. Missing timestamps
+  yield **Completed**; a loaded tail can fold without the task start. `RET`
+  toggles each disclosure independently, and narrow rows remain truncated.
+  Set `dsh-emacs-fold-work-details` to `nil` and reopen the chat for a flat
+  transcript. (rationale: postmortem/142, postmortem/149)
 - **Pulsing running-subagent icon and count**: while the connection is live
   and at least one direct child is running, the mode-line subagent icon and
   child count pulse together between their muted tint and the running orange
@@ -89,6 +87,23 @@ minor) and stay undated until the release is cut.
 - **Keep C-a on the user-message line**: navigating to the first line's
   beginning reaches its first authored character instead of jumping to the
   preceding blank line.
+- **Keep automatic compaction inside activity groups**: a compaction summary
+  no longer splits adjacent tools into separate disclosures. It folds with the
+  activity and remains inspectable after expansion, but contributes no tool
+  category count. Summaries now rank the combined calls on both sides, matching
+  Web. Live compaction and standalone failure rows are unchanged.
+  (rationale: postmortem/149)
+- **Match Web's stopped and interleaved turns**: **Failed** and **Stopped**
+  status rows no longer hide the whole process. Mid-turn input also keeps the
+  outer turn open. Replies remain visible while internal activities still
+  fold independently, with Web's category-ranked summaries. Successful turns
+  can fold without a final answer; empty processes show a non-foldable status
+  row. This supersedes the earlier stopped-turn and disjoint-span approaches.
+  (rationale: postmortem/149)
+- **Avoid flashing expanded work while opening history**: history snapshots
+  and older pages redraw only after their reply footers and task folds are
+  reconciled. Completed work first appears collapsed; live replies retain
+  their incremental rendering.
 - **Prevent duplicate replies during history replay**: reentrant WebSocket
   reads queue behind the active snapshot consumer instead of parsing the
   same snapshot again. Thinking, tools and final answers no longer appear

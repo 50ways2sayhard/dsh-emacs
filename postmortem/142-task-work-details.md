@@ -1,5 +1,9 @@
 # 142 — Fold completed task work details
 
+Current folding policy: [149](<149-web-activity-folding.md>) separates outer
+turn disclosure from local activity groups. Failed, stopped and interleaved-input
+turns keep their outer process open while local activities can fold.
+
 ## Background
 
 At `1dcdb5d`, individual tool and thinking cards could fold, but a completed

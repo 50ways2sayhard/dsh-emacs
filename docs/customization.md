@@ -42,8 +42,8 @@ remain controlled by `dsh-emacs-show-tool-calls` and
 ## Task folding
 
 `dsh-emacs-fold-work-details` defaults to `t`. Once a task completes
-successfully, its thinking, tool calls and intermediate replies before the
-final answer collapse into a muted **Completed in 4m 10s** summary with an
+successfully without mid-turn input, its process before any final answer
+collapses into a muted **Completed in 4m 10s** summary with an
 SVG chevron directly above the answer, without a separator. The duration uses
 server turn timestamps;
 without both timestamps the label is **Completed**. The question, final answer,
@@ -54,11 +54,20 @@ This applies to live completion and loaded history, independently of
 `dsh-emacs-reply-footer-items`. Reconnects and older-page loads preserve manual
 expansion. Completed tasks also fold a partially loaded tail: the loaded work
 bounds the disclosure, and older pages extend it without resetting your choice.
-Active, failed, interrupted and interleaved-input tasks stay open. Tasks
-without a final prose answer or without preceding work have no disclosure.
-Search can reveal hidden work, and the UI expand/collapse-all commands include
-the task disclosures as well as individual cards. Folding happens at completion;
-there is no separate next-input timing setting.
+Failed and stopped turns show non-foldable **Failed** / **Stopped** status
+rows without elapsed time. Mid-turn input also prevents whole-turn folding.
+In these cases all replies remain visible, while contiguous thinking/tool cards
+between replies still fold into separate activity summaries. Even one card can
+form a group. Summaries count distinct calls by category, not files or steps;
+reasoning-only groups say **Analysis completed**.
+Successful turns can fold their process even without a final answer. A turn
+with no process content has only a non-foldable completion row. Active and
+unknown-ending tasks do not receive a whole-turn disclosure.
+Search reveals its matching activity; expand/collapse-all includes both layers.
+This follows ordinary Web's default **detailed + completion** policy: running
+activities stay flat, and grouping begins when the turn ends. There is no
+mode matrix or next-input timing setting in Emacs. See
+[the audited Web rules and remaining differences](web-folding.md).
 
 To retain the flat transcript, set the option to `nil`, preserve any draft,
 then close the chat buffer and reopen the same session from the session list.
