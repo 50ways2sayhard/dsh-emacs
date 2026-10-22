@@ -191,10 +191,53 @@ host.
 ## Assistant Markdown file links
 
 Assistant replies can contain explicit Markdown links to local files, with
-any label (including a function name). RET or mouse-1 opens the file relative
-to the chat buffer's working directory. Absolute paths and `file:` / `file://`
-prefixes also work. Destinations such as `source.el#L10`,
-`source.el#L10-L20`, `source.el#L10-20`, `source.el:10` and `source.el:10-20`
-jump to the first referenced line; a range does not select text. A function
-name in the label is display text, not a symbol lookup. Web links still open
-in the browser.
+any label (including a function name). RET or mouse-1 opens the target using
+the chat working directory captured when the link was rendered, even if a
+later click is dispatched from another buffer. A function name in the label
+is display text, not a symbol lookup.
+
+- Prefer `[label](<path with spaces (draft).el#L10>)` for paths with spaces.
+  Bare destinations accept balanced parentheses (up to 32 levels) and ASCII
+  punctuation escapes such as `\(`. An optional quoted or parenthesized title
+  is parsed, not appended to the file name; titles are not displayed.
+- `#L10`, `#L10-L20`, `#L10-20`, `:10` and `:10-20` navigate to the start
+  line, without selecting a range. `#L10C3` and `:10:3` additionally position
+  at the one-based character column. Zero, leading-zero and reversed ranges
+  are rejected. Valid positions beyond the file/line end are clamped;
+  a narrowed destination buffer is widened for an explicit position.
+- URI escapes are decoded exactly once, after splitting the position suffix:
+  `%20` is a space, `%2520` is a literal `%20`, `%23` is a literal `#`, and
+  `%3F` is a literal `?`. Invalid escapes, controls and unencoded queries are
+  rejected. Use percent encoding for reserved characters in actual names.
+- Native `file:` URLs remain supported, including an empty authority or
+  `localhost`. Other authorities, explicit credentials/ports and TRAMP/UNC
+  destinations are not local links. These native file URLs and colon/column
+  positions are Emacs extensions: the audited Web client does not accept
+  `file:` links and supports only `#L10` / `#L10-L20` line positions.
+- Only HTTP, HTTPS and mailto links go to `browse-url`. Missing local files,
+  invalid positions and unsupported schemes report a local error; they do not
+  fall through to the browser or silently create a new file buffer.
+
+Images use the same local path decoding and chat working directory, including
+ordinary relative destinations such as `![preview](images/plot.png)`. The file
+must be readable, regular and image-supported, and Emacs must have a graphical
+display. Missing files, remote HTTP(S) images and non-graphical displays keep
+image syntax rather than fetching content. A standalone image with a simple
+absolute, `./` or `../` path containing spaces retains the limited legacy/Web
+compatibility; use angle brackets when the name also contains parentheses,
+quotes or other Markdown delimiters.
+
+Explicit bare path lines are literal filesystem paths, not percent-encoded
+Markdown URLs; bare `file://` lines still use URI semantics. Literal paths
+do not consume backticks or deletion markers in filenames;
+a bare image waits for a newline or final message before acquiring display
+and click properties. `@` references and deliverables likewise keep literal
+paths and their existing session-cwd navigation; they do not gain Markdown
+URI decoding or line-suffix parsing.
+
+This is a single-line inline-resource renderer, not a complete CommonMark AST.
+Multiline labels/destinations, reference-style links and HTML entity references
+in destinations are not resolved as file links. Entity-bearing resources stay
+literal rather than guessing a target. Inline code delimiters must close with
+a backtick run of the same length on the same line; fenced code and unfinished
+inline code keep their protection. See the [resource boundary decision](../postmortem/150-markdown-resource-boundaries.md).

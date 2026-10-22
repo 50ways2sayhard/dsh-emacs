@@ -441,37 +441,103 @@ all stream markers.  Return the (START . END) formatted range."
                   (let* ((source-ranges (dsh-emacs-markdown--sort-ranges
                                          (dsh-emacs-markdown--make-markers
                                           (dsh-emacs-markdown--source-block-ranges))))
-                         (rendered-ranges (dsh-emacs-markdown--make-markers
-                                           (dsh-emacs-markdown--frozen-ranges)))
+                         (rendered-ranges
+                          (let ((frozen (dsh-emacs-markdown--make-markers
+                                         (dsh-emacs-markdown--frozen-ranges))))
+                            (when render-images
+                              (dsh-emacs-markdown--replace-image-file-paths
+                               :avoid-ranges (dsh-emacs-markdown--sort-ranges
+                                              source-ranges frozen)
+                               :final (or final (not stream-state))))
+                            (dsh-emacs-markdown--make-markers
+                             (dsh-emacs-markdown--frozen-ranges))))
+                         ;; Headers reinsert whole lines; collect resource
+                         ;; markers only after that structural pass.
+                         (resources
+                          (progn
+                            (dsh-emacs-markdown--replace-headers
+                             :avoid-ranges (dsh-emacs-markdown--sort-ranges
+                                            source-ranges rendered-ranges))
+                            (dsh-emacs-markdown--inline-resources
+                             :avoid-ranges (dsh-emacs-markdown--sort-ranges
+                                            source-ranges rendered-ranges))))
+                         ;; Strip resolved resources while their markers are
+                         ;; intact; emphasis may delete and reinsert labels.
+                         (raw-resources
+                          (let ((remaining resources))
+                            (when render-images
+                              (setq remaining
+                                    (cl-set-difference
+                                     remaining
+                                     (dsh-emacs-markdown--replace-images
+                                      :resources remaining :defer-freeze t)
+                                     :test #'eq)))
+                            (cl-set-difference
+                             remaining
+                             (dsh-emacs-markdown--replace-links
+                              :resources remaining :defer-freeze t)
+                             :test #'eq)))
+                         (destination-ranges
+                          (mapcar (lambda (resource)
+                                    (cons (if (nth 4 resource)
+                                              (nth 2 resource)
+                                            (car resource))
+                                          (nth 3 resource)))
+                                  raw-resources))
+                         (code-avoid-ranges
+                          (dsh-emacs-markdown--sort-ranges
+                           source-ranges rendered-ranges destination-ranges))
                          (inline-ranges (dsh-emacs-markdown--make-markers
                                          (dsh-emacs-markdown--inline-code-ranges
-                                          :avoid-ranges (dsh-emacs-markdown--sort-ranges
-                                                         source-ranges rendered-ranges))))
+                                          :avoid-ranges code-avoid-ranges)))
                          (avoid-ranges (dsh-emacs-markdown--sort-ranges
-                                        source-ranges rendered-ranges inline-ranges)))
-                    (when (save-excursion
-                            (goto-char (point-min))
-                            (re-search-forward "[*_~]" nil t))
-                      (save-restriction
-                        ;; No opener precedes the first delimiter.  Retain
-                        ;; its previous character for whitespace/BOL rules.
-                        (narrow-to-region (max (point-min)
-                                               (1- (match-beginning 0)))
-                                          (point-max))
-                        (while (let ((italic-changed (dsh-emacs-markdown--replace-italics
-                                                      :avoid-ranges avoid-ranges))
-                                     (bold-changed (dsh-emacs-markdown--replace-bolds
-                                                    :avoid-ranges avoid-ranges))
-                                     (strike-changed (dsh-emacs-markdown--replace-strikethroughs
-                                                      :avoid-ranges avoid-ranges)))
-                                 (or italic-changed bold-changed strike-changed)))))
-                    (dsh-emacs-markdown--replace-headers :avoid-ranges avoid-ranges)
-                    (dsh-emacs-markdown--style-inline-code :avoid-ranges source-ranges)
-                    (dsh-emacs-markdown--replace-links :avoid-ranges avoid-ranges)
+                                        code-avoid-ranges inline-ranges)))
+                    ;; Containment-only avoid checks cannot stop a delimiter
+                    ;; pair crossing a URL boundary.  Style each prose gap.
+                    (let ((cursor (copy-marker (point-min))))
+                      (seq-doseq
+                          (range (vconcat
+                                  (dsh-emacs-markdown--sort-ranges destination-ranges)
+                                  (vector (cons (point-max-marker)
+                                                (point-max-marker)))))
+                        (when (< cursor (car range))
+                          (save-restriction
+                            (narrow-to-region cursor (car range))
+                            (when (save-excursion
+                                    (goto-char (point-min))
+                                    (re-search-forward "[*_~]" nil t))
+                              (save-restriction
+                                ;; No opener precedes the first delimiter.  Retain
+                                ;; its previous character for whitespace/BOL rules.
+                                (narrow-to-region (max (point-min)
+                                                       (1- (match-beginning 0)))
+                                                  (point-max))
+                                (while (let ((italic-changed (dsh-emacs-markdown--replace-italics
+                                                              :avoid-ranges avoid-ranges))
+                                             (bold-changed (dsh-emacs-markdown--replace-bolds
+                                                            :avoid-ranges avoid-ranges))
+                                             (strike-changed (dsh-emacs-markdown--replace-strikethroughs
+                                                              :avoid-ranges avoid-ranges)))
+                                         (or italic-changed bold-changed strike-changed)))))
+                            (dsh-emacs-markdown--style-inline-code
+                             :avoid-ranges code-avoid-ranges)))
+                        (set-marker cursor (max cursor (cdr range)))))
+                    ;; Text properties survive emphasis's delete/reinsert;
+                    ;; resource markers do not.  Freeze only the styled labels.
+                    (let ((pos (point-min)))
+                      (while (< pos (point-max))
+                        (let ((end (next-single-property-change
+                                    pos 'dsh-emacs-markdown-resource nil
+                                    (point-max))))
+                          (when (get-text-property pos 'dsh-emacs-markdown-resource)
+                            (put-text-property pos end 'dsh-emacs-markdown-frozen t)
+                            (remove-text-properties
+                             pos end '(dsh-emacs-markdown-resource nil)))
+                          (setq pos end))))
                     (when render-images
-                      (dsh-emacs-markdown--replace-images :avoid-ranges avoid-ranges)
                       (dsh-emacs-markdown--replace-image-file-paths
-                       :avoid-ranges avoid-ranges))
+                       :avoid-ranges avoid-ranges
+                       :final (or final (not stream-state))))
                     (dsh-emacs-markdown--style-dividers :avoid-ranges avoid-ranges)
                     (dsh-emacs-markdown--style-blockquotes :avoid-ranges avoid-ranges)
                     (dsh-emacs-markdown--style-source-blocks
@@ -671,137 +737,268 @@ with face `dsh-emacs-markdown-header-2' on \"My title\"."
                                                     (min (max level 1) 6))))))))))
 
 (cl-defun dsh-emacs-markdown--style-inline-code (&key avoid-ranges)
-  "Strip backticks from complete inline `X` spans and face the body.
+  "Strip matching backtick runs from complete single-line code spans.
 
-The body of each well-formed `` `X` `` is left in place with
-face `dsh-emacs-markdown-inline-code' and tagged with the text
-property `dsh-emacs-markdown-frozen t' so it is never re-processed
-on subsequent calls (the body can legitimately contain
-markdown-looking chars like `**' once the surrounding backticks
-are gone).  Spans inside any of AVOID-RANGES (typically fenced
-code blocks) are left untouched.
+The body is left in place with face `dsh-emacs-markdown-inline-code'
+and tagged `dsh-emacs-markdown-frozen' so literal backticks and other
+Markdown characters are never re-processed on subsequent calls.
+Spans inside AVOID-RANGES (typically fenced blocks) are left untouched.
 
 For example, the buffer \"a `code` b\" becomes \"a code b\" with
 face `dsh-emacs-markdown-inline-code' on \"code\"."
-  (let ((case-fold-search nil))
-    (goto-char (point-min))
-    (while (re-search-forward "`\\([^`\n]+\\)`" nil t)
-      (let* ((markup-start (match-beginning 0))
-             (markup-end (match-end 0))
-             (avoid (dsh-emacs-markdown--in-avoid-range-p
-                     markup-start markup-end avoid-ranges)))
-        (if avoid
-            (goto-char (cdr avoid))
-          (let ((text (buffer-substring (match-beginning 1) (match-end 1))))
-            (delete-region markup-start markup-end)
-            (goto-char markup-start)
-            (insert text)
-            (let ((end (+ markup-start (length text))))
-              (add-face-text-property markup-start end 'dsh-emacs-markdown-inline-code)
-              (add-text-properties markup-start end
-                                   '(dsh-emacs-markdown-frozen t
-                                     rear-nonsticky (dsh-emacs-markdown-frozen))))))))))
+  (let ((ranges (dsh-emacs-markdown--inline-code-ranges
+                 :complete-only t
+                 :avoid-ranges (dsh-emacs-markdown--sort-ranges
+                                avoid-ranges
+                                (dsh-emacs-markdown--frozen-ranges)))))
+    ;; Edit right-to-left so earlier integer ranges keep their positions.
+    (dolist (range (nreverse ranges))
+      (let* ((body-start (car range))
+             (body-end (cdr range))
+             (width (progn
+                      (goto-char body-start)
+                      (- (skip-chars-backward "`"))))
+             (start (- body-start width))
+             (end (- body-end width)))
+        ;; Delete only delimiters: downstream passes retain body markers.
+        (delete-region body-end (+ body-end width))
+        (delete-region start body-start)
+        (add-face-text-property start end 'dsh-emacs-markdown-inline-code)
+        (add-text-properties start end
+                             '(dsh-emacs-markdown-frozen t
+                                                         rear-nonsticky (dsh-emacs-markdown-frozen)))))))
 
-(cl-defun dsh-emacs-markdown--replace-links (&key avoid-ranges)
-  "Replace `[title](url)' markup with title faced as link.
+(defun dsh-emacs-markdown--resource-at-point (limit)
+  "Parse one single-line resource at point, bounded by LIMIT.
+Return (START LABEL-START LABEL-END END URL IMAGE), or nil.  Positions
+are integers.  URL is nil for incomplete/invalid destinations or entity references,
+so callers preserve the raw text, including a still-streaming URL."
+  (save-excursion
+    (let (incomplete)
+      (or (catch 'invalid
+            (let* ((start (point))
+                   (image (eq (char-after) ?!))
+                   (depth 1) label-start label-end url-start url-end)
+              (when image (forward-char))
+              (unless (eq (char-after) ?\[) (throw 'invalid nil))
+              (forward-char)
+              (setq label-start (point))
+              (while (> depth 0)
+                (when (>= (point) limit) (throw 'invalid nil))
+                (pcase (char-after)
+                  (?\\ (forward-char) (when (< (point) limit) (forward-char)))
+                  (?\[ (setq depth (1+ depth))
+                       (when (> depth 32) (throw 'invalid nil)) (forward-char))
+                  (?\] (setq depth (1- depth)) (forward-char))
+                  (_ (forward-char))))
+              (setq label-end (1- (point)))
+              (unless (eq (char-after) ?\() (throw 'invalid nil))
+              (forward-char)
+              (setq incomplete (list start label-start label-end limit nil image))
+              (skip-chars-forward " \t" limit)
+              (if (eq (char-after) ?<)
+                  (progn
+                    (forward-char)
+                    (setq url-start (point))
+                    (while (not (eq (char-after) ?>))
+                      (when (or (>= (point) limit) (eq (char-after) ?<))
+                        (throw 'invalid nil))
+                      (if (and (eq (char-after) ?\\)
+                               (< (1+ (point)) limit)
+                               (string-match-p "[!-/:-@[-`{-~]"
+                                               (char-to-string (char-after (1+ (point))))))
+                          (forward-char 2)
+                        (forward-char)))
+                    (setq url-end (point))
+                    (forward-char))
+                (setq url-start (point) depth 0)
+                (while (and (< (point) limit)
+                            (not (memq (char-after) '(?\s ?\t)))
+                            (not (and (= depth 0) (eq (char-after) ?\)))))
+                  (let ((char (char-after)))
+                    (cond
+                     ((and (eq char ?\\) (< (1+ (point)) limit)
+                           (string-match-p "[!-/:-@[-`{-~]"
+                                           (char-to-string (char-after (1+ (point))))))
+                      (forward-char 2))
+                     ((eq char ?\() (setq depth (1+ depth))
+                      (when (> depth 32) (throw 'invalid nil)) (forward-char))
+                     ((eq char ?\)) (setq depth (1- depth)) (forward-char))
+                     ((or (< char 32) (eq char 127) (eq char ?<))
+                      (throw 'invalid nil))
+                     (t (forward-char)))))
+                (unless (= depth 0) (throw 'invalid nil))
+                (setq url-end (point)))
+              (let ((separator (point)))
+                (skip-chars-forward " \t" limit)
+                (when (and (> (point) separator)
+                           (memq (char-after) '(?\" ?' ?\()))
+                  (let* ((opener (char-after))
+                         (closer (if (eq opener ?\() ?\) opener)))
+                    (forward-char)
+                    (while (not (eq (char-after) closer))
+                      (when (or (>= (point) limit)
+                                (and (eq opener 40) (eq (char-after) 40)))
+                        (throw 'invalid nil))
+                      (if (and (eq (char-after) ?\\) (< (1+ (point)) limit)
+                               (string-match-p "[!-/:-@[-`{-~]"
+                                               (char-to-string (char-after (1+ (point))))))
+                          (forward-char 2)
+                        (forward-char)))
+                    (forward-char)
+                    (skip-chars-forward " \t" limit))))
+              (unless (and (< (point) limit) (eq (char-after) ?\)))
+                (throw 'invalid nil))
+              (forward-char)
+              (let* ((raw (buffer-substring-no-properties url-start url-end))
+                     ;; Decode only CommonMark's ASCII punctuation escapes.
+                     ;; Entity references require an HTML table we do not own.
+                     (url (unless (string-match-p "&\\(?:#[xX]?[[:xdigit:]]+\\|[[:alpha:]][[:alnum:]]*\\);" raw)
+                            (replace-regexp-in-string
+                             "\\\\\\([!-/:-@[-`{-~]\\)" (lambda (s) (substring s 1)) raw t t))))
+                (list start label-start label-end (point) url image))))
+          (progn
+            ;; Legacy/Web compatibility is deliberately image-only: one
+            ;; standalone local path, with spaces but no nested syntax.
+            (when (and incomplete (nth 5 incomplete)
+                       (= (car incomplete) (line-beginning-position))
+                       (= limit (line-end-position))
+                       (eq (char-before limit) ?\)))
+              (let ((raw (buffer-substring-no-properties
+                          (+ 2 (nth 2 incomplete)) (1- limit)))
+                    (case-fold-search t))
+                (when (and (string-match-p "\\`\\(?:\\.\\.?/\\|/\\)" raw)
+                           (string-match-p "[ \t]" raw)
+                           (not (string-match-p "[][()<>\"'&\\\\]" raw))
+                           (string-match-p
+                            (concat "\\." (regexp-opt image-file-name-extensions)
+                                    "\\'") raw))
+                  (setf (nth 4 incomplete) raw))))
+            incomplete)))))
 
-The bracket/parenthesis markup is stripped; the title is left
-with face `dsh-emacs-markdown-link' and a keymap text property that
-opens the URL on RET or mouse-1.  Matches preceded by `!' (the
-image syntax) are skipped, as are links inside any of
-AVOID-RANGES.
+(cl-defun dsh-emacs-markdown--inline-resources (&key avoid-ranges)
+  "Scan single-line links and images outside AVOID-RANGES.
+Return resource records with marker positions.  Scan left to right so
+backticks in destinations cannot open code spans in following prose.
+Only images are recognized inside link labels; labels are never reparsed
+as links after their outer resource has been rendered."
+  (let (resources)
+    (save-excursion
+      (cl-labels
+          ((scan (limit images-only)
+             (while (< (point) limit)
+               (let ((avoid (dsh-emacs-markdown--in-avoid-range-p
+                             (point) (1+ (point)) avoid-ranges)))
+                 (cond
+                  (avoid (goto-char (min limit (cdr avoid))))
+                  ((get-text-property (point) 'dsh-emacs-markdown-frozen)
+                   (goto-char (next-single-property-change
+                               (point) 'dsh-emacs-markdown-frozen nil limit)))
+                  ((and (bolp)
+                        (looking-at
+                         "[ \t]*\\(?:file://\\|/\\|~[^/ \t\n]*/\\|\\.\\.?/\\)[^ \t\n]*[ \t]*$"))
+                   (let ((start (point)) (finish (match-end 0)))
+                     (push (list (copy-marker start) (copy-marker start)
+                                 (copy-marker finish t) (copy-marker finish t)
+                                 nil nil)
+                           resources)
+                     (goto-char finish)))
+                  ((eq (char-after) ?\\)
+                   (forward-char (min 2 (- limit (point)))))
+                  ((eq (char-after) ?`)
+                   (let ((ranges (save-restriction
+                                   (narrow-to-region (point) (min limit (line-end-position)))
+                                   (dsh-emacs-markdown--inline-code-ranges))))
+                     (if ranges
+                         (progn (goto-char (cdar ranges))
+                                (skip-chars-forward "`" limit))
+                       (skip-chars-forward "`" limit))))
+                  ((or (and (eq (char-after) ?!) (eq (char-after (1+ (point))) ?\[))
+                       (and (not images-only) (eq (char-after) ?\[)))
+                   (let ((resource (dsh-emacs-markdown--resource-at-point
+                                    (min limit (line-end-position)))))
+                     (if (not resource)
+                         (forward-char)
+                       (pcase-let ((`(,start ,beg ,end ,finish ,url ,image) resource))
+                         (push (list (copy-marker start) (copy-marker beg)
+                                     (copy-marker end t) (copy-marker finish t)
+                                     url image)
+                               resources)
+                         (when (and url (not image))
+                           (goto-char beg)
+                           (scan end t))
+                         (goto-char finish)))))
+                  (t (forward-char)))))))
+        (goto-char (point-min))
+        (scan (point-max) nil)))
+    (nreverse resources)))
 
-For example, the buffer \"see [docs](https://example.com)\"
-becomes \"see docs\" with face `dsh-emacs-markdown-link' on \"docs\"
-and a keymap that opens the URL."
-  (let ((case-fold-search nil))
-    (goto-char (point-min))
-    (while (re-search-forward
-            (rx "["
-                (group (one-or-more (not (any "]"))))
-                "]"
-                "("
-                (or (seq "<" (group (zero-or-more (not (any ">\n")))) ">")
-                    (group (one-or-more (not (any ")")))))
-                ")")
-            nil t)
-      (let* ((markup-start (match-beginning 0))
-             (markup-end (match-end 0))
-             (is-image (eq (char-before markup-start) ?!))
-             (avoid (unless is-image
-                      (dsh-emacs-markdown--in-avoid-range-p
-                       markup-start markup-end avoid-ranges))))
-        (cond
-         (avoid (goto-char (cdr avoid)))
-         (is-image nil)
-         (t
-          (let ((title (buffer-substring (match-beginning 1) (match-end 1)))
-                (url (or (match-string-no-properties 2)
-                         (match-string-no-properties 3))))
-            (delete-region markup-start markup-end)
-            (goto-char markup-start)
-            (insert title)
-            (let ((end (+ markup-start (length title))))
-              (add-face-text-property markup-start end 'dsh-emacs-markdown-link)
-              (put-text-property markup-start end 'keymap
-                                 (dsh-emacs-markdown--make-ret-binding-map
-                                  (lambda () (interactive)
-                                    (dsh-emacs-markdown--open-link url))))
-              (put-text-property markup-start end 'mouse-face 'highlight)))))))))
+(cl-defun dsh-emacs-markdown--replace-links
+    (&key avoid-ranges (resources nil resources-supplied-p) defer-freeze)
+  "Render links in RESOURCES, or scan outside AVOID-RANGES.
+Return the rendered records.  With DEFER-FREEZE, mark labels for freezing
+only after prose styling.  Capture the rendering buffer's directory for
+clicks made after switching buffers."
+  (let (rendered)
+    (dolist (resource (if resources-supplied-p resources
+                        (dsh-emacs-markdown--inline-resources
+                         :avoid-ranges avoid-ranges)))
+      (pcase-let ((`(,start ,beg ,end ,finish ,url ,image) resource))
+        (when (and url (not image))
+          (let ((directory default-directory))
+            (delete-region end finish)
+            (delete-region start beg)
+            (add-face-text-property start end 'dsh-emacs-markdown-link)
+            (add-text-properties
+             start end
+             (list 'keymap (dsh-emacs-markdown--make-ret-binding-map
+                            (lambda () (interactive)
+                              (let ((default-directory directory))
+                                (dsh-emacs-markdown--open-link url))))
+                   'mouse-face 'highlight
+                   (if defer-freeze 'dsh-emacs-markdown-resource
+                     'dsh-emacs-markdown-frozen) t
+                   'rear-nonsticky '(dsh-emacs-markdown-frozen
+                                     dsh-emacs-markdown-resource)))
+            (push resource rendered)))))
+    (nreverse rendered)))
 
-(cl-defun dsh-emacs-markdown--replace-images (&key avoid-ranges)
-  "Replace `![alt](url)' image markup with displayed images.
-
-If URL resolves to an existing local file that is image-supported
-and a graphical display is available, the full markup is replaced
-by the alt text (or a single space if alt is empty) carrying a
-`display' property with the image and a keymap that opens the
-file on RET or mouse-1.  Otherwise the markup is left untouched.
-Images inside any of AVOID-RANGES are left alone.
-
-For example, the buffer \"see ![logo](logo.png)\" becomes
-\"see logo\" with the image shown in place of \"logo\"."
-  (let ((case-fold-search nil))
-    (goto-char (point-min))
-    (while (re-search-forward
-            (rx "!"
-                "["
-                (group (zero-or-more (not (any "]"))))
-                "]"
-                "("
-                (group (one-or-more (not (any ")"))))
-                ")")
-            nil t)
-      (let* ((markup-start (match-beginning 0))
-             (markup-end (match-end 0))
-             (avoid (dsh-emacs-markdown--in-avoid-range-p
-                     markup-start markup-end avoid-ranges)))
-        (cond
-         (avoid (goto-char (cdr avoid)))
-         (t
-          (let* ((alt (buffer-substring-no-properties
-                       (match-beginning 1) (match-end 1)))
-                 (url (buffer-substring-no-properties
-                       (match-beginning 2) (match-end 2)))
-                 (path (dsh-emacs-markdown--resolve-image-url url)))
-            (when (and path
-                       (image-supported-file-p path)
-                       (display-graphic-p))
+(cl-defun dsh-emacs-markdown--replace-images
+    (&key avoid-ranges (resources nil resources-supplied-p) defer-freeze)
+  "Render local images in RESOURCES, or scan outside AVOID-RANGES.
+Return rendered records, leaving unresolvable images raw.  DEFER-FREEZE
+keeps labels styleable until the caller freezes their resource properties.
+Preserve positions so an enclosing link can supply its own click target."
+  (let (rendered)
+    (dolist (resource (reverse
+                       (if resources-supplied-p resources
+                         (dsh-emacs-markdown--inline-resources
+                          :avoid-ranges avoid-ranges))))
+      (pcase-let ((`(,start ,beg ,end ,finish ,url ,imagep) resource))
+        (when (and url imagep)
+          (when-let* ((path (dsh-emacs-markdown--resolve-image-url url)))
+            (when (and (image-supported-file-p path) (display-graphic-p))
               (let ((image (create-image
                             path nil nil
-                            :max-width (dsh-emacs-markdown--image-max-width)))
-                    (placeholder (if (string-empty-p alt) " " alt)))
+                            :max-width (dsh-emacs-markdown--image-max-width))))
                 (image-flush image)
-                (delete-region markup-start markup-end)
-                (goto-char markup-start)
-                (insert placeholder)
-                (let ((end (+ markup-start (length placeholder))))
-                  (put-text-property markup-start end 'display image)
-                  (put-text-property markup-start end 'keymap
-                                     (dsh-emacs-markdown--make-ret-binding-map
-                                      (lambda () (interactive)
-                                        (find-file path))))
-                  (put-text-property markup-start end 'mouse-face 'highlight)))))))))))
+                (delete-region end finish)
+                (delete-region start beg)
+                (when (= start end)
+                  (goto-char start)
+                  (insert " "))
+                (add-text-properties
+                 start end
+                 (list 'display image
+                       'keymap (dsh-emacs-markdown--make-ret-binding-map
+                                (lambda () (interactive) (find-file path)))
+                       'mouse-face 'highlight
+                       (if defer-freeze 'dsh-emacs-markdown-resource
+                         'dsh-emacs-markdown-frozen) t
+                       'rear-nonsticky '(dsh-emacs-markdown-frozen
+                                         dsh-emacs-markdown-resource)))
+                (push resource rendered)))))))
+    (nreverse rendered)))
 
 (defvar dsh-emacs-markdown--image-path-regexp nil
   "Cons of a copy of `image-file-name-extensions' and its line regexp.
@@ -812,8 +1009,8 @@ object the caller may have mutated in place, so an edited list would
 look unchanged and keep serving a regexp built from the old
 extensions.")
 
-(cl-defun dsh-emacs-markdown--replace-image-file-paths (&key avoid-ranges)
-  "Render bare image-path lines as displayed images.
+(cl-defun dsh-emacs-markdown--replace-image-file-paths (&key avoid-ranges final)
+  "Render complete bare image-path lines as displayed images.
 
 A line that is solely a local path or `file://' URI ending in a
 supported image extension is treated like an `![alt](url)' image:
@@ -821,7 +1018,8 @@ when the path resolves to an existing image-supported file and a
 graphical display is available, the line text is left in place
 carrying a `display' property with the image and a keymap that
 opens the file.  Lines inside any of AVOID-RANGES are left
-untouched, as are unresolvable paths.
+untouched, as are unresolvable paths.  FINAL also accepts a last line
+without a newline; a streaming partial line must not freeze early.
 
 For example, a buffer line containing just `/abs/path/img.png'
 renders the image in place of that text."
@@ -844,11 +1042,15 @@ renders the image in place of that text."
                      line-start line-end avoid-ranges)))
         (cond
          (avoid (goto-char (cdr avoid)))
-         (t
+         ((or final (< line-end (point-max)))
           (let* ((path-start (match-beginning 1))
                  (path-end (match-end 1))
                  (raw (buffer-substring-no-properties path-start path-end))
-                 (resolved (dsh-emacs-markdown--resolve-image-url raw)))
+                 (resolved (dsh-emacs-markdown--resolve-image-url
+                            ;; Bare paths are literal; file: entries are URIs.
+                            (if (string-prefix-p "file:" (downcase raw))
+                                raw
+                              (url-hexify-string raw)))))
             (when (and resolved
                        (image-supported-file-p resolved)
                        (display-graphic-p))
@@ -864,7 +1066,7 @@ renders the image in place of that text."
                 (put-text-property path-start path-end 'mouse-face 'highlight)
                 (add-text-properties path-start path-end
                                      '(dsh-emacs-markdown-frozen t
-                                       rear-nonsticky (dsh-emacs-markdown-frozen))))))))))))
+                                                                 rear-nonsticky (dsh-emacs-markdown-frozen))))))))))))
 
 (cl-defun dsh-emacs-markdown--style-dividers (&key avoid-ranges)
   "Render `---' / `***' / `___' horizontal-rule lines as styled rules.
@@ -2411,78 +2613,117 @@ is consulted for aliases before the `-mode' suffix is appended."
     map))
 
 (defun dsh-emacs-markdown--open-link (url)
-  "Open URL.  Use local navigation for file links, `browse-url' otherwise."
-  (unless (dsh-emacs-markdown--open-local-link url)
-    (browse-url url)))
+  "Open a local file or an HTTP, HTTPS or mailto URL.
+A missing local target or unsupported scheme is an error, not a browser URL."
+  (let ((case-fold-search t))
+    (cond
+     ((and (stringp url) (not (string-match-p "[\0-\x1f\x7f]" url))
+           (string-match-p "\\`\\(?:https?://[^/[:space:]]+\\|mailto:[^[:space:]]+\\)" url))
+      (browse-url url))
+     ((dsh-emacs-markdown--open-local-link url))
+     (t (user-error "File not found locally or unsupported link: %s" url)))))
 
 (defun dsh-emacs-markdown--open-local-link (url)
   "Open URL as a local file link if possible.
 Return non-nil if handled, nil otherwise."
   (when-let* ((parsed (dsh-emacs-markdown--parse-local-link url)))
-    (find-file (car parsed))
-    (when (cdr parsed)
-      (goto-char (point-min))
-      (forward-line (1- (cdr parsed))))
+    (pcase-let ((`(,file ,line ,column) parsed))
+      (find-file file)
+      (when line
+        (widen)
+        (goto-char (point-min))
+        (forward-line (1- line))
+        (when column
+          (forward-char (min (1- column) (- (line-end-position) (point)))))))
     t))
 
+(defun dsh-emacs-markdown--local-path (url)
+  "Decode URL once and resolve a local path, without accessing it.
+URL has no fragment.  File URIs accept only an empty host or localhost;
+other schemes, remote paths, queries and malformed escapes are rejected."
+  (let ((case-fold-search t))
+    (when (and (stringp url) (not (string-empty-p url))
+               (not (string-match-p "[?#\0-\x1f\x7f]" url)))
+      (let* ((file-uri (string-prefix-p "file:" (downcase url)))
+             (parsed (and file-uri (url-generic-parse-url url)))
+             (raw (if file-uri (url-filename parsed) url)))
+        (when (and (or (not file-uri)
+                       (and (member (downcase (or (url-host parsed) ""))
+                                    '("" "localhost"))
+                            (null (url-user parsed)) (null (url-portspec parsed))))
+                   (not (string-empty-p raw))
+                   (not (string-match-p
+                         "%" (replace-regexp-in-string "%[[:xdigit:]][[:xdigit:]]" "" raw))))
+          (let ((path (if (string-match-p "%" raw)
+                          (decode-coding-string (url-unhex-string raw) 'utf-8)
+                        raw)))
+            (when (and (seq-every-p (lambda (char) (<= char #x10ffff)) path)
+                       (not (string-match-p "[\0-\x1f\x7f]" path))
+                       (not (string-match-p "\\`[/\\\\][/\\\\]" path))
+                       (not (file-remote-p path))
+                       (not (and (string-match-p "\\`[a-z][a-z0-9+.-]*:" path)
+                                 (not (and (eq system-type 'windows-nt)
+                                           (file-name-absolute-p path))))))
+              (let ((expanded (expand-file-name path)))
+                (unless (file-remote-p expanded) expanded)))))))))
+
 (defun dsh-emacs-markdown--parse-local-link (url)
-  "Parse URL as a local file link.
-Return a (FILE . LINE) cons when URL points to an existing local
-file (LINE may be nil), or nil otherwise.  Line ranges navigate to
-their first line.
-
-For example:
-
-  \"foo.el#L10\"             => (\"/abs/foo.el\" . 10)
-  \"foo.el#L10-L20\"         => (\"/abs/foo.el\" . 10)
-  \"foo.el:10-20\"           => (\"/abs/foo.el\" . 10)
-  \"foo.el\"                 => (\"/abs/foo.el\" . nil)
-  \"file:src/bar.el:5\"      => (\"/abs/src/bar.el\" . 5)
-  \"file:///tmp/baz.el#L20\" => (\"/tmp/baz.el\" . 20)
-  \"https://example.com\"    => nil"
-  (let* ((path (cond
-                ((string-prefix-p "file://" url) (substring url 7))
-                ((string-prefix-p "file:" url) (substring url 5))
-                (t url)))
-         (match
-          (cond
-           ((string-match
-             (rx bos
-                 (group (one-or-more anything))
-                 (or (seq "#L" (group (one-or-more digit))
-                          (optional "-" (optional "L") (one-or-more digit)))
-                     (seq ":" (group (one-or-more digit))
-                          (optional "-" (one-or-more digit))))
-                 eos)
-             path)
-            (cons (match-string 1 path)
-                  (or (match-string 2 path) (match-string 3 path))))
-           ((not (string-empty-p path)) (cons path nil)))))
-    (when-let* ((match)
-                (filepath (expand-file-name (car match)))
-                ((file-exists-p filepath)))
-      (cons filepath
-            (when (cdr match)
-              (string-to-number (cdr match)))))))
+  "Return (FILE LINE COLUMN) for an existing local URL, or nil.
+Positions are one-based.  Accept #L2, #L2-L4, #L2C3, :2 and :2:3;
+ranges navigate to their start.  Decode the path after separating positions,
+so an encoded # or colon remains part of the file name."
+  (when (stringp url)
+    (let ((path url) line column last-line last-column (valid t))
+      (if-let* ((hash (string-match "#" url)))
+          (let ((position (substring url (1+ hash))))
+            (setq path (substring url 0 hash))
+            (if (string-match
+                 (rx bos "L" (group (+ digit))
+                     (optional "C" (group (+ digit)))
+                     (optional "-" (optional "L") (group (+ digit))
+                               (optional "C" (group (+ digit)))) eos)
+                 position)
+                (setq line (match-string 1 position)
+                      column (match-string 2 position)
+                      last-line (match-string 3 position)
+                      last-column (match-string 4 position))
+              (setq valid nil)))
+        (when (string-match
+               (rx bos (group (minimal-match (one-or-more anything))) ":"
+                   (group (+ digit)) (optional ":" (group (+ digit)))
+                   (optional "-" (group (+ digit))) eos)
+               url)
+          (setq path (match-string 1 url)
+                line (match-string 2 url)
+                column (match-string 3 url)
+                last-line (match-string 4 url))))
+      (when (and valid
+                 (cl-every (lambda (value)
+                             (or (null value)
+                                 (and (string-match-p "\\`[1-9][0-9]*\\'" value)
+                                      (<= (string-to-number value) most-positive-fixnum))))
+                           (list line column last-line last-column))
+                 (or (null last-line)
+                     (> (string-to-number last-line) (string-to-number line))
+                     (and (= (string-to-number last-line) (string-to-number line))
+                          (or (null last-column)
+                              (>= (string-to-number last-column)
+                                  (if column (string-to-number column) 1))))))
+        (when-let* ((file (dsh-emacs-markdown--local-path path))
+                    ((file-exists-p file))
+                    ((or (null line) (file-regular-p file))))
+          (list file (and line (string-to-number line))
+                (and column (string-to-number column))))))))
 
 (defun dsh-emacs-markdown--resolve-image-url (url)
-  "Resolve image URL to an absolute local file path, or nil.
-Handles file:// URIs, absolute paths, and paths starting with
-`~/', `./', or `../'."
-  (when-let* ((path (cond
-                     ((string-prefix-p "file://" url)
-                      (url-unhex-string
-                       (url-filename (url-generic-parse-url url))))
-                     ((string-prefix-p "file:" url)
-                      (substring url (length "file:")))
-                     ((or (file-name-absolute-p url)
-                          (string-prefix-p "~" url)
-                          (string-prefix-p "./" url)
-                          (string-prefix-p "../" url))
-                      url)))
-              (expanded (expand-file-name path))
-              ((file-exists-p expanded)))
-    expanded))
+  "Resolve a local image URL to a readable regular file, or nil.
+Relative destinations use `default-directory'.  URI escapes are decoded
+once; a URL fragment is not part of the file name."
+  (when-let* (((stringp url))
+              (path (dsh-emacs-markdown--local-path (car (split-string url "#"))))
+              ((file-regular-p path))
+              ((file-readable-p path)))
+    path))
 
 (defun dsh-emacs-markdown--image-max-width ()
   "Return the maximum image width in pixels.
@@ -2755,14 +2996,14 @@ invoked many times as content grows."
                       limit))))
     (nreverse ranges)))
 
-(cl-defun dsh-emacs-markdown--inline-code-ranges (&key avoid-ranges)
-  "Return list of (start . end) ranges covering inline `X` bodies.
+(cl-defun dsh-emacs-markdown--inline-code-ranges (&key avoid-ranges complete-only)
+  "Return list of (start . end) ranges covering inline code bodies.
 
-Each range covers the text between backticks (the backticks
-themselves are not included).  Backticks inside any of
-AVOID-RANGES are ignored.  A line with an odd number of backticks
-has its trailing unmatched backtick treated as still-streaming:
-the range extends from that backtick to end-of-line.
+Delimiters are maximal backtick runs of equal length; different-length
+runs inside a body are literal text.  The delimiters are not included
+in the returned ranges.  Backticks inside AVOID-RANGES are ignored.
+An unmatched opener protects its body to end-of-line while streaming,
+unless COMPLETE-ONLY is non-nil.  Multiline code spans are not supported.
 
 For example, given the buffer \"a `code` b\" returns a list with
 one range covering the body \"code\"."
@@ -2772,17 +3013,21 @@ one range covering the body \"code\"."
       (goto-char (point-min))
       (while (not (eobp))
         (let ((line-end (line-end-position))
-              (open nil))
-          (while (re-search-forward "`" line-end t)
-            (let ((pos (match-beginning 0)))
-              (unless (dsh-emacs-markdown--in-avoid-range-p pos pos avoid-ranges)
-                (if open
-                    (progn
-                      (push (cons (1+ open) pos) ranges)
-                      (setq open nil))
-                  (setq open pos)))))
-          (when open
-            (push (cons (1+ open) line-end) ranges)))
+              open-end open-width)
+          (while (re-search-forward "`+" line-end t)
+            (let* ((start (match-beginning 0))
+                   (end (match-end 0))
+                   (width (- end start)))
+              (unless (dsh-emacs-markdown--in-avoid-range-p
+                       start end avoid-ranges)
+                (cond
+                 ((not open-end)
+                  (setq open-end end open-width width))
+                 ((= width open-width)
+                  (push (cons open-end start) ranges)
+                  (setq open-end nil open-width nil))))))
+          (when (and open-end (not complete-only))
+            (push (cons open-end line-end) ranges)))
         (forward-line 1)))
     (nreverse ranges)))
 

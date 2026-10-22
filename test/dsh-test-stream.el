@@ -877,6 +877,38 @@
                        (should (null (plist-get state :pending)))
                        (should (null (plist-get state :watermark)))))))))))
 
+(ert-deftest dsh-emacs-test-stream-bare-image-waits-for-line-boundary ()
+  :tags '(dsh-unit)
+  (let ((file (make-temp-file "dsh-stream-`draft`-~~image~~-" nil ".png")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                  ((symbol-function 'image-supported-file-p) (lambda (_) t))
+                  ((symbol-function 'create-image)
+                   (lambda (path &rest _) (list 'image :file path)))
+                  ((symbol-function 'image-flush) #'ignore))
+          (dolist (suffix '(".more\n" "\n" ""))
+            (with-temp-buffer
+              (dsh-emacs-mode)
+              (let* ((event '((data . ((turn . 1) (step . 1)))))
+                     (state (dsh-emacs-render--start-assistant-stream event file))
+                     (start (plist-get state :start)))
+                (ert-info ((format "suffix=%S" suffix))
+                  (should-not (get-text-property start 'display))
+                  (should-not (get-text-property start 'keymap))
+                  (dsh-emacs-render--start-assistant-stream event suffix)
+                  (dsh-emacs-render--flush-stream nil t)
+                  (should (equal (buffer-substring-no-properties
+                                  start (plist-get state :end))
+                                 (concat file suffix)))
+                  (if (string-prefix-p ".more" suffix)
+                      (progn
+                        (should-not (get-text-property start 'display))
+                        (should-not (get-text-property start 'keymap)))
+                    (should (equal (get-text-property start 'display)
+                                   (list 'image :file file)))
+                    (should (keymapp (get-text-property start 'keymap)))))))))
+      (delete-file file))))
+
 ;; Teardown finalizes deferred markup even after the formatting timer fired.
 (ert-deftest dsh-emacs-test-stream-stream-table-finalizes-on-case ()
   :tags '(dsh-unit)

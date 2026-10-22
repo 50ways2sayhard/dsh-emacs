@@ -70,6 +70,26 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep Markdown file destinations intact**: emphasis and inline code no
+  longer rewrite characters in link/image targets, including incomplete
+  streamed destinations. Balanced or escaped parentheses and optional titles
+  resolve correctly; rendered labels cannot become a second link target.
+  Linked images open the enclosing link. (rationale: postmortem/150)
+- **Resolve local Markdown paths consistently**: links and images decode URI
+  escapes once, support workspace-relative targets and retain the rendering
+  directory for later clicks. File links accept one-based line/column
+  positions. Invalid or missing local targets no longer launch a browser;
+  remote file authorities and unsafe schemes are rejected.
+- **Wait for complete bare image paths**: a partial streamed filename does
+  not acquire a stale image or click target before its newline/final boundary.
+  Literal path characters are kept distinct from Markdown URL escapes.
+- **Keep multi-backtick inline code literal**: matching backtick runs protect
+  embedded image/link syntax and literal backticks instead of rendering them.
+  Unmatched openers retain line-local streaming protection.
+- **Render bracketed local image destinations**: `![alt](<path>)` displays
+  supported local images instead of leaving raw Markdown, including paths
+  containing spaces or parentheses. Images inside inline or fenced code remain
+  literal; missing files and non-graphical displays retain their markup.
 - **Switch to already-open sessions without rebuilding**: opening a session
   that is already open — from the session list, `M-x dsh-emacs-switch-session`
   or an `@` reference — selects its live chat buffer without clearing the

@@ -1318,6 +1318,27 @@ this idle callback boundary are reported while leaving the raw reply visible. Th
 the main Emacs thread and standard idle/input machinery, not a worker thread
 or an alternate parser. See [036](../postmortem/036-bounded-stream-markdown.md).
 
+## Markdown resources and file navigation
+
+`dsh-emacs-markdown.el` owns inline link/image syntax, independently of
+filesystem resolution. Resource scanning captures destinations before prose
+styling can consume their punctuation. Rendered resources retain their click
+identity instead of reparsing label text. Single-line and code-span boundaries
+apply equally to full and streamed rendering; a bare image cannot freeze on
+an unfinished path fragment.
+
+The shared local-path decoder rejects remote authorities and unsafe input,
+then links validate existing targets and optional one-based line/column
+positions. Images additionally require readable regular files and a graphical
+image backend. Click closures capture the rendering working directory. The
+reference module still opens literal `@` and deliverable paths against the
+session cwd; Markdown percent decoding and position suffixes do not belong to
+that path. Web's authenticated server-file endpoint is not used by Emacs.
+
+See [the user-facing file/image contract](reference.md#assistant-markdown-file-links)
+and [decision 150](../postmortem/150-markdown-resource-boundaries.md), including
+the intentionally bounded syntax and differences from the Web renderer.
+
 ## Event-stream reliability
 
 - **No native compile**: `dsh-emacs-events.el` declares a file-level
