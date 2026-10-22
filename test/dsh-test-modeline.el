@@ -506,7 +506,7 @@
            (buf (get-buffer-create " *t5f3-chat*"))
            (item (dsh-protocol-session--from-alist
                   '((sessionId . "sess-presetproj")
-                    (projections . ((values . ((agentPreset . "code")))))))))
+                    (projections . ((values . ((agentPreset . "ptc")))))))))
       (unwind-protect
           (progn
             (setq dsh-emacs--sessions (list item))
@@ -515,7 +515,7 @@
               (setq dsh-emacs--modeline-preset nil)
               (dsh-emacs--link-session-preset "sess-presetproj")
               (ert-info ((format "%s" "link-session-preset-reads-agentpreset-projection"))
-                (should (equal "code" dsh-emacs--modeline-preset)))))
+                (should (equal "ptc" dsh-emacs--modeline-preset)))))
         (setq dsh-emacs--sessions old-sessions)
         (when (buffer-live-p buf) (kill-buffer buf))))))
 
@@ -544,7 +544,7 @@
            (buf (get-buffer-create " *t5f4-chat*"))
            (item (dsh-protocol-session--from-alist
                   '((sessionId . "sess-presetsync")
-                    (projections . ((values . ((agentPreset . "code")))))))))
+                    (projections . ((values . ((agentPreset . "ptc")))))))))
       (unwind-protect
           (progn
             (setq dsh-emacs--sessions (list item))
@@ -554,7 +554,7 @@
             (dsh-emacs--chat-buffer-preset-sync "sess-presetsync" buf)
             (with-current-buffer buf
               (ert-info ((format "%s" "chat-buffer-preset-sync-lands-from-projection"))
-                (should (equal "code" dsh-emacs--modeline-preset)))))
+                (should (equal "ptc" dsh-emacs--modeline-preset)))))
         (setq dsh-emacs--sessions old-sessions)
         (when (buffer-live-p buf) (kill-buffer buf))))))
 
@@ -567,7 +567,7 @@
            (buf (get-buffer-create " *t5f5-chat*"))
            (item (dsh-protocol-session--from-alist
                   '((sessionId . "sess-presetsync")
-                    (projections . ((values . ((agentPreset . "code")))))))))
+                    (projections . ((values . ((agentPreset . "ptc")))))))))
       (unwind-protect
           (progn
             (setq dsh-emacs--sessions (list item))

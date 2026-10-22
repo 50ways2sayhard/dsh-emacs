@@ -29,7 +29,7 @@
 ;;   (dsh-emacs-modeline-set-model "claude-opus-4-5") ;; set the model name
 ;;   (dsh-emacs-modeline-set-provider "deepseek")     ;; set the model's provider
 ;;   (dsh-emacs-modeline-set-effort "max")   ;; set the reasoning effort
-;;   (dsh-emacs-modeline-set-preset "code")  ;; set the agent preset
+;;   (dsh-emacs-modeline-set-preset "ptc")  ;; set the agent preset
 ;;   (dsh-emacs-modeline-set-permission "workspace-write") ;; set the permission preset
 ;;
 ;; `dsh-emacs-modeline-format-spec' lets users choose which segments are shown
@@ -94,13 +94,13 @@ shows the work, and the step number is diagnostic rather than actionable."
     :segments (model effort preset permission ctx))
   "Plist describing the mode-line segments to render and the separator.
 The compact status line sits right next to the DSH mode name in the mode
-line, e.g.  DSH (deepseek-v4-flash max code [shield] 95.0%).  Each
+line, e.g.  DSH (deepseek-v4-flash max ptc [shield] 95.0%).  Each
 segment is one of:
   provider   — provider id serving the model (e.g. deepseek; opt-in — the
                provider also rides the model segment's tooltip)
   model      — model id (e.g. deepseek-v4-flash)
   effort     — reasoning effort (effortId, e.g. off/max)
-  preset     — agent preset (agentPreset: standard/minimal/code/cordis)
+  preset     — agent preset (agentPreset: standard/minimal/ptc/cordis)
   permission — permission preset (the `permissions' projection), drawn as
                a shield icon (see `dsh-emacs-modeline-permission-style')
   cwd        — short cwd (~/foo)
@@ -172,7 +172,7 @@ owning provider alongside the id — shown in the tooltip, never guessing.")
   "Reasoning effort (effortId, e.g. \"off\"/\"max\") shown in the mode-line.")
 
 (defvar-local dsh-emacs--modeline-preset nil
-  "Agent preset (agentPreset id, e.g. \"standard\"/\"code\") shown in the mode-line.")
+  "Agent preset (agentPreset id, e.g. \"standard\"/\"ptc\") shown in the mode-line.")
 
 (defvar-local dsh-emacs--modeline-permission nil
   "Permission preset (the `permissions' projection's currentValue) shown here.
@@ -328,7 +328,7 @@ set (e.g. a session that predates request events)."
      (format "Reasoning effort: %s" dsh-emacs--modeline-effort))))
 
 (defun dsh-emacs-modeline--segment-preset ()
-  "Render the agent-preset segment (agentPreset, e.g. \"code\")."
+  "Render the agent-preset segment (agentPreset, e.g. \"ptc\")."
   (when (and dsh-emacs--modeline-preset
              (not (string-empty-p dsh-emacs--modeline-preset)))
     (dsh-emacs-modeline--annotate

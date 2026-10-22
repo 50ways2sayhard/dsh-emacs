@@ -45,6 +45,9 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Use the renamed PTC preset**: the new-session picker resolves PTC mode to
+  `ptc` rather than `code`, including before the server roster arrives. Update
+  any `dsh-emacs-default-preset` setting from `"code"` to `"ptc"`.
 - **Keep streaming output clear of the input highlight**: with local or global
   `hl-line-mode`, new thinking, tool and answer rows no longer acquire the
   input line's background while waiting for the next keyboard command.

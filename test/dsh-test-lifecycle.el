@@ -20,7 +20,7 @@
                      (lambda (callback) (setq ready callback)))
                     ((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (_method _params callback) (setq create callback))))
-            (setq draft (dsh-emacs-new-session "/tmp" "w-one" "code"))
+            (setq draft (dsh-emacs-new-session "/tmp" "w-one" "ptc"))
             (ert-info ((format "%s" "new-session-draft-precedes-server-readiness"))
               (should (bufferp draft))
               (should ready)
@@ -1230,14 +1230,14 @@
                            (setq-local dsh-emacs--buffer-session sid)
                            (dsh-emacs--chat-buffer-sync sid)
                            (dsh-emacs-mode)))))
-              (dsh-emacs-new-session nil "w1" "code")
+              (dsh-emacs-new-session nil "w1" "ptc")
               (let* ((call (car calls))
                      (params (cadr call)))
                 (ert-info ((format "%s" "new-session-workspace-with-preset"))
                   (should (and (string= "session/create" (car call))
                                (string= "w1" (cdr (assq 'workspaceId (cdr (assq 'request params)))))
                                (null (assq 'cwd (cdr (assq 'request params))))
-                               (string= "code" (cdr (assq 'agentPreset (cdr (assq 'request params)))))))))))
+                               (string= "ptc" (cdr (assq 'agentPreset (cdr (assq 'request params)))))))))))
           ;; no preset -> no agentPreset sent
           (let ((calls nil)
                 (dsh-emacs-new-session-auto-project nil))
@@ -1407,7 +1407,7 @@
           (goto-char (point-min))
           (setq dsh-emacs--agent-presets
                 (dsh-protocol-agent-preset-list--from-alist
-                 '((presets . [((id . "code") (name . "PTC mode"))]))))
+                 '((presets . [((id . "ptc"))]))))
           (cl-letf (((symbol-function 'dsh-emacs--rpc-async)
                      (lambda (method params cb)
                        (push (list method params) calls)
@@ -1433,7 +1433,7 @@
               (should (and create
                            (string= "w-C" (cdr (assq 'workspaceId
                                                      (cdr (assq 'request (cadr create))))))
-                           (string= "code" (cdr (assq 'agentPreset
+                           (string= "ptc" (cdr (assq 'agentPreset
                                                       (cdr (assq 'request (cadr create))))))
                            (member "agentPresets/list" (mapcar #'car calls)))))))
       (setq dsh-emacs--agent-presets old-cache)

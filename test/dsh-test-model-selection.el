@@ -1020,7 +1020,7 @@
           (ert-info ((format "%s" "preset-choices-fallback-builtins"))
             (should (equal '(("Standard mode" . "standard")
                              ("Minimal mode" . "minimal")
-                             ("PTC mode" . "code")
+                             ("PTC mode" . "ptc")
                              ("Creator mode" . "cordis"))
                            (dsh-emacs--preset-choices))))
           (setq dsh-emacs--agent-presets
@@ -1028,12 +1028,14 @@
                  '((presets . [((id . "standard") (trust . "system"))
                                ((id . "minimal") (trust . "system")
                                 (name . "Legacy name"))
+                               ((id . "ptc"))
                                ((id . "my-agent") (trust . "user")
                                 (name . "My Agent"))
                                ((id . "broken-agent") (broken . "x"))]))))
           (ert-info ((format "%s" "preset-choices-web-names-and-roster"))
             (should (equal '(("Standard mode" . "standard")
                              ("Minimal mode" . "minimal")
+                             ("PTC mode" . "ptc")
                              ("My Agent" . "my-agent"))
                            (dsh-emacs--preset-choices))))
           ;; display-name boundaries: system unknown id -> name ?? id;

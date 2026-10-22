@@ -11,7 +11,7 @@ minimal loading configuration. Adjust `:load-path` to your checkout:
   :commands (dsh-emacs dsh-emacs-new-session)
   :custom
   (dsh-emacs-base-url "http://127.0.0.1:3080") ; server address
-  (dsh-emacs-default-preset "code")           ; preset for new sessions
+  (dsh-emacs-default-preset "ptc")            ; preset for new sessions
   (dsh-emacs-server-start-on-init t)          ; start the server eagerly
   :bind (("C-x d" . dsh-emacs)
          :map dsh-emacs-mode-map
@@ -71,7 +71,7 @@ The most commonly used options, straight in your config:
 (setq dsh-emacs-default-cwd default-directory)     ; fallback working directory for new sessions (interactive ones use the current buffer's default-directory first)
 (setq dsh-emacs-new-session-auto-project t)        ; auto-detect the Emacs project of the working directory and place new sessions in its workspace (nil = always start in CWD)
 (setq dsh-emacs-default-model "claude-opus-4-5")   ; default model name
-(setq dsh-emacs-default-preset "standard")         ; default agent preset for new sessions (nil = host default; "standard"/"minimal"/"code"/"cordis" or a user preset id)
+(setq dsh-emacs-default-preset "standard")         ; default agent preset for new sessions (nil = host default; "standard"/"minimal"/"ptc"/"cordis" or a user preset id)
 (setq dsh-emacs-model-group-format #(" %s " 0 4 (face vertico-group-title))) ; provider group-header format inside the model picker (nil = hide group titles)
 (setq dsh-emacs-input-history-length 50)           ; prompts kept for M-p / M-n recall
 (setq dsh-emacs-input-history-cross-session nil)   ; M-p / M-n recall only the current session's prompts (nil, default); t = recall prompts from every session

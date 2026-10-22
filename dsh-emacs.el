@@ -199,7 +199,7 @@ Set to nil to keep the old behavior (sessions always start in CWD)."
 
 nil lets the host pick its own default preset (no `agentPreset' field is
 sent to `session/create').  Known values are the built-in preset ids
-\"standard\" (Standard mode), \"minimal\" (Minimal mode), \"code\" (PTC
+\"standard\" (Standard mode), \"minimal\" (Minimal mode), \"ptc\" (PTC
 mode) and \"cordis\" (Creator mode), or the id of a user preset listed
 by `agentPresets/list'.  Interactively, `dsh-emacs-new-session' with a
 prefix argument asks for the preset instead of using this value."
@@ -995,7 +995,7 @@ leaves the previous cache (when any) untouched.  Returns nothing."
 (defconst dsh-emacs--preset-display-name-mapping
   '(("standard" . "Standard mode")
     ("minimal" . "Minimal mode")
-    ("code" . "PTC mode")
+    ("ptc" . "PTC mode")
     ("cordis" . "Creator mode"))
   "Mapping (PRESET-ID . DISPLAY-NAME) of each shipped system preset.
 

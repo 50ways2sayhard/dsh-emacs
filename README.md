@@ -54,6 +54,9 @@ before connecting. A `use-package` example is in
 From a local project, the command locates its existing workspace; from a chat,
 it locates that session. New sessions open an editable draft while connecting.
 
+The PTC mode preset ID is now `ptc`. If your configuration sets
+`dsh-emacs-default-preset` to `"code"`, change it to `"ptc"`.
+
 Idle session dots, the `New Session` placeholder and muted text (timestamps,
 reply footers, deliverable descriptions, subagent error notices) use the
 theme's `shadow` face (grey by default); running session dots are orange.

@@ -98,7 +98,7 @@ Available stats segments:
 - **effort**: reasoning effort — the `reasoningEffort` chosen via the model
   picker, or the one the host announces in `request/header` or the model
   projection (e.g. `high`); a model projection without effort clears an old one
-- **preset**: agent preset of the session (`agentPreset`, e.g. `standard` / `code`)
+- **preset**: agent preset of the session (`agentPreset`, e.g. `standard` / `ptc`)
 - **permission**: the `permissions` session projection's current value, drawn
   as a shield icon so it costs one cell: the dsh-web SVG shield (check =
   `read-only`, pencil = `workspace-write`, exclamation = `danger-full-access`)
@@ -204,7 +204,7 @@ step shows right after the running whale tail:
 ```
 
 ```
- U:***  %b   L40  DSH [whale tail] Deep diving · 12s step 2 · 3s  (deepseek-v4-flash max code 95.0%)
+ U:***  %b   L40  DSH [whale tail] Deep diving · 12s step 2 · 3s  (deepseek-v4-flash max ptc 95.0%)
 ```
 
 - The badge comes from `dsh-emacs-modeline-note-step`, which the renderer
