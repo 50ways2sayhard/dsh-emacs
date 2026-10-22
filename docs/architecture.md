@@ -1180,6 +1180,10 @@ deltas, which are inserted together before formatting. An unchanged final
 message keeps the painted body. See [decision record 029](../postmortem/029-stream-write-batching.md).
 The WebSocket decoder walks each input batch by byte offset,
 retains its incomplete tail once, and joins message fragments only at FIN.
+A process-local drain guard keeps one consumer in charge across rendering
+yields. Reentrant filters append bytes only; the original consumer advances
+its exclusive cursor before dispatch, then consumes appended frames in order.
+This prevents re-parsing the current snapshot or overwriting partial input.
 Viewport bottom detection uses `vertical-motion` with each destination
 window, so wrapped lines count as screen rows.
 Stream insertion, timer flushes and corrected final replies capture the

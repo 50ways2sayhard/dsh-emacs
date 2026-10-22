@@ -1931,6 +1931,131 @@
               (should (equal (process-get process 'dsh-emacs-event-input) ""))))
         (delete-process process)))))
 
+(ert-deftest dsh-emacs-test-events-websocket-reentrant-drain-keeps-partial-input ()
+  :tags '(dsh-unit)
+  (dolist (fail '(nil t))
+    (with-temp-buffer
+      (let* ((process (make-pipe-process :name "dsh-reentrant-frames"
+                                         :buffer (current-buffer) :noquery t))
+             (first (concat (unibyte-string 129 3) "one"))
+             (second (concat (unibyte-string 129 3) "two"))
+             (third (concat (unibyte-string 129 5) "three"))
+             delivered messages injected)
+        (unwind-protect
+            (cl-letf (((symbol-function 'dsh-emacs-events--dispatch-json)
+                       (lambda (_process json)
+                         (push json delivered)
+                         (unless injected
+                           (setq injected t)
+                           (dsh-emacs-events--filter process (substring third 0 3))
+                           (when fail (error "Dispatch failed")))))
+                      ((symbol-function 'message)
+                       (lambda (format &rest args)
+                         (push (apply #'format format args) messages))))
+              (process-put process 'dsh-emacs-event-ready t)
+              (dsh-emacs-events--filter process (concat first second))
+              (ert-info ((format "Failed dispatch=%s releases the consumer" fail))
+                (should-not (process-get process 'dsh-emacs-event-draining))
+                (should (equal (reverse delivered) (if fail '("one") '("one" "two"))))
+                (should (equal (process-get process 'dsh-emacs-event-input)
+                               (concat (and fail second) (substring third 0 3))))
+                (should (= (length messages) (if fail 1 0))))
+              (dsh-emacs-events--filter process (substring third 3))
+              (should (equal (reverse delivered) '("one" "two" "three")))
+              (should (equal (process-get process 'dsh-emacs-event-input) ""))
+              (should-not (process-get process 'dsh-emacs-event-draining)))
+          (dsh-emacs-events--cancel-read-timer process)
+          (delete-process process))))))
+
+(ert-deftest dsh-emacs-test-events-follow-snapshot-serializes-reentrant-input ()
+  :tags '(dsh-unit)
+  (dolist (arrival '(snapshot tail newer))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (setq-local dsh-emacs--buffer-session "reentrant-history")
+      (let* ((owner (current-buffer))
+             (process (make-pipe-process :name "dsh-reentrant-history"
+                                         :buffer owner :noquery t))
+             (dsh-emacs-fold-work-details nil)
+             (dsh-emacs-reply-footer-items '(copy fork))
+             (dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+             (dsh-emacs--input-history-by-session (make-hash-table :test 'equal))
+             (dsh-emacs--subagent-catalogs (make-hash-table :test 'equal))
+             (events
+              (append
+               (cl-loop for seq from 1 to 5
+                        collect `((type . "step/end") (seq . ,seq)
+                                  (data . ((turn . 1) (step . 1)))))
+               '(((type . "assistant/message") (seq . 6)
+                  (data . ((turn . 1) (step . 1)
+                           (message . ((content . [((type . "reasoning")
+                                                    (text . "Tail thought"))]))))))
+                 ((type . "tool/call") (seq . 7)
+                  (data . ((turn . 1) (step . 1) (callId . "first")
+                           (name . "run_code") (arguments . "{}"))))
+                 ((type . "tool/call") (seq . 8)
+                  (data . ((turn . 1) (step . 1) (callId . "second")
+                           (name . "run_code") (arguments . "{}"))))
+                 ((type . "assistant/message") (seq . 9)
+                  (data . ((turn . 1) (step . 2)
+                           (message . ((content . [((type . "text")
+                                                    (text . "FINAL-ONCE"))]))))))
+                 ((type . "turn/end") (seq . 10)
+                  (data . ((turn . 1) (reason . ((kind . "completed")))))))))
+             (newer '((type . "assistant/message") (seq . 11)
+                      (data . ((turn . 2) (step . 1)
+                               (message . ((content . [((type . "text")
+                                                        (text . "AFTER-SNAPSHOT"))])))))))
+             (snapshot `((type . "snapshot") (cursor . 10)
+                         (records . ,(vconcat
+                                      (mapcar (lambda (event)
+                                                `((type . "event") (event . ,event)))
+                                              events)))))
+             injected)
+        (unwind-protect
+            (cl-labels
+                ((wire (value)
+                   (dsh-emacs-events--frame
+                    1 (dsh-protocol-write-json
+                       `((type . "item") (streamId . "follow") (value . ,value))))))
+              (process-put process 'dsh-emacs-chat-buffer owner)
+              (process-put process 'dsh-emacs-follow-stream-id "follow")
+              (process-put process 'dsh-emacs-event-ready t)
+              (set-process-filter process dsh-emacs-events--filter-fn)
+              (cl-letf (((symbol-function 'sit-for)
+                         (lambda (&rest _)
+                           (unless injected
+                             (setq injected t)
+                             ;; The read timer can fire while history yields.
+                             (dsh-emacs-events--resume-reads process)
+                             (dsh-emacs-events--filter
+                              process
+                              (concat
+                               (pcase arrival
+                                 ('snapshot (wire snapshot))
+                                 ('tail
+                                  (mapconcat
+                                   (lambda (event)
+                                     (wire `((type . "event") (event . ,event))))
+                                   (nthcdr 5 events) "")))
+                               (wire `((type . "event") (event . ,newer)))))))))
+                (dsh-emacs-events--filter process (wire snapshot)))
+              (ert-info ((format "Reentrant %s must wait for the snapshot" arrival))
+                (should injected)
+                (should (= (how-many "FINAL-ONCE" (point-min) (point-max)) 1))
+                (should (= (how-many "Tail thought" (point-min) (point-max)) 1))
+                (should (= (how-many "Run Code" (point-min) (point-max)) 2))
+                (should (= (how-many "Copy" (point-min) (point-max)) 1))
+                (should (= (how-many "AFTER-SNAPSHOT" (point-min) (point-max)) 1))
+                (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+                  (should (< (string-match "FINAL-ONCE" text)
+                             (string-match "Copy" text)
+                             (string-match "AFTER-SNAPSHOT" text))))
+                (should (= dsh-emacs--anchor-seq 11))
+                (should (equal (process-get process 'dsh-emacs-event-input) ""))))
+          (dsh-emacs-events--cancel-read-timer process)
+          (delete-process process))))))
+
 ;; --- Test 119: dsh 0.1.5 in-process assistant-stream frames drive live text ---
 ;; `assistant/chunk' is no longer a durable Session event (dsh 0.1.5); the
 ;; process-local `assistant-stream' frames are the only incremental source.

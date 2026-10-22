@@ -73,6 +73,11 @@ minor) and stay undated until the release is cut.
 - **Keep C-a on the user-message line**: navigating to the first line's
   beginning reaches its first authored character instead of jumping to the
   preceding blank line.
+- **Prevent duplicate replies during history replay**: reentrant WebSocket
+  reads queue behind the active snapshot consumer instead of parsing the
+  same snapshot again. Thinking, tools and final answers no longer appear
+  twice around the reply footer; queued and partial frames retain wire order.
+  (rationale: postmortem/142)
 - **Use the renamed PTC preset**: the new-session picker resolves PTC mode to
   `ptc` rather than `code`, including before the server roster arrives. Update
   any `dsh-emacs-default-preset` setting from `"code"` to `"ptc"`.

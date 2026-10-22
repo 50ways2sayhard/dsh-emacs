@@ -779,39 +779,49 @@ in the current chat.  Inbox is owned by the control stream."
       (dsh-emacs--session-questions-apply questions))))
 
 (defun dsh-emacs-events--consume-frames (process)
-  "Consume complete WebSocket frames buffered for PROCESS."
-  (condition-case err
-      (let ((input (process-get process 'dsh-emacs-event-input))
-            (offset 0)
-            frame)
-        (while (and input (setq frame (dsh-emacs-events--read-frame input offset)))
-          (setq offset (nth 3 frame))
-          (let ((opcode (nth 0 frame))
-                (fin (nth 1 frame))
-                (payload (nth 2 frame)))
-            (cond
-             ((= opcode 9) (dsh-emacs-events--send-pong process payload))
-             ((= opcode 10)
-              (let ((chat (dsh-emacs-events--chat process)))
-                (when (buffer-live-p chat)
-                  (with-current-buffer chat
-                    (when (and (eq process dsh-emacs--event-process)
-                               (equal payload dsh-emacs--ws-probe-inflight))
-                      (setq dsh-emacs--ws-probe-inflight nil))))))
-             ((= opcode 8) (delete-process process))
-             ((or (= opcode 1) (= opcode 0))
-              (let ((fragment (cons payload
-                                    (unless (= opcode 1)
-                                      (process-get process 'dsh-emacs-event-fragment)))))
-                (if fin
-                    (progn
-                      (process-put process 'dsh-emacs-event-fragment nil)
-                      (dsh-emacs-events--dispatch-json
-                       process (decode-coding-string
-                                (apply #'concat (nreverse fragment)) 'utf-8)))
-                  (process-put process 'dsh-emacs-event-fragment fragment)))))))
-        (process-put process 'dsh-emacs-event-input (substring input offset)))
-    (error (message "dsh WebSocket frame error: %S" err))))
+  "Consume complete WebSocket frames buffered for PROCESS in wire order.
+A dispatch can yield while rendering history.  Reentrant filters append
+input, but leave draining to the original consumer until it returns."
+  (unless (process-get process 'dsh-emacs-event-draining)
+    (let ((offset 0))
+      (process-put process 'dsh-emacs-event-draining t)
+      (unwind-protect
+          (condition-case err
+              (let (input frame)
+                (while (and (setq input (process-get process 'dsh-emacs-event-input))
+                            (setq frame (dsh-emacs-events--read-frame input offset)))
+                  ;; Only this consumer owns the cursor, even across a yield.
+                  (setq offset (nth 3 frame))
+                  (let ((opcode (nth 0 frame))
+                        (fin (nth 1 frame))
+                        (payload (nth 2 frame)))
+                    (cond
+                     ((= opcode 9) (dsh-emacs-events--send-pong process payload))
+                     ((= opcode 10)
+                      (let ((chat (dsh-emacs-events--chat process)))
+                        (when (buffer-live-p chat)
+                          (with-current-buffer chat
+                            (when (and (eq process dsh-emacs--event-process)
+                                       (equal payload dsh-emacs--ws-probe-inflight))
+                              (setq dsh-emacs--ws-probe-inflight nil))))))
+                     ((= opcode 8) (delete-process process))
+                     ((or (= opcode 1) (= opcode 0))
+                      (let ((fragment
+                             (cons payload
+                                   (unless (= opcode 1)
+                                     (process-get process 'dsh-emacs-event-fragment)))))
+                        (if fin
+                            (progn
+                              (process-put process 'dsh-emacs-event-fragment nil)
+                              (dsh-emacs-events--dispatch-json
+                               process (decode-coding-string
+                                        (apply #'concat (nreverse fragment)) 'utf-8)))
+                          (process-put process 'dsh-emacs-event-fragment fragment))))))))
+            (error (message "dsh WebSocket frame error: %S" err)))
+        (process-put process 'dsh-emacs-event-input
+                     (substring (or (process-get process 'dsh-emacs-event-input) "")
+                                offset))
+        (process-put process 'dsh-emacs-event-draining nil)))))
 
 (defconst dsh-emacs-events--read-batch-interval 0.05
   "Seconds to accumulate chat socket input between reads.
