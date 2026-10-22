@@ -210,12 +210,45 @@ a resize hook. See [decision record 023](../postmortem/023-fragment-layout-and-a
 
 The UI does not interpret message kinds. Renderers can mark text with
 `dsh-emacs-ui-space-after` to request blank lines after it; user messages
-request one. Fragment lookup/navigation use the contiguous state property.
+request one after their body and ensure one blank line before it, including
+when the preceding footer leaves none. Newly inserted spacing shares the
+message’s transcript boundary so older history precedes its work-start marker.
+User-message line/wrap prefixes draw a rail without editing message contents;
+the retained textual prompt has an empty display replacement.
+Fragment lookup/navigation use the contiguous state property.
 There is no group hierarchy or append/header-only mutation API. Streaming
 assistant text remains owned by the renderer's existing stream path.
 See [decision record 022](../postmortem/022-fragment-snapshots.md); the
 region-scoped face contract is [decision record
 039](../postmortem/039-region-scoped-fragment-faces.md).
+
+## Task work details (`dsh-emacs-render.el`, `dsh-emacs-ui.el`)
+
+The per-turn reply facts also own task-fold eligibility and boundary markers.
+The protocol decoder exposes completion reason and final-prose eligibility;
+`step/start`, `tool/call` and assistant settlements update the answer candidate
+in sequence order. Step starts and tool calls do not enter footer token totals;
+assistant usage accounting is unchanged. The Copy/Fork target remains the
+latest nonempty reply, a different contract from a final answer that has no
+later work. Facts are collected when either footers or task folding are enabled.
+
+After a successful `turn/end`, the renderer folds the loaded work before the
+final answer. Its earliest loaded event supplies a pre-render boundary even
+when the default history window omits `turn/start`; the actual turn start is
+still required for elapsed-time accounting. Earlier same-turn pages move the
+header and extend the overlay, retaining the reader's choice. Opening user
+messages and goal notices stay outside the fold. Active, failed, interrupted
+and interleaved-input tasks remain visible.
+
+`dsh-emacs-ui-fold-region` adds a stock-button header and an invisibility
+overlay over the original region. It does not copy or replace child cards,
+so their identities, late updates, links and independent fold states survive.
+The overlay retains the reader's choice across reconciliation; full transcript
+reset releases it, and trimming a start boundary unfolds the surviving text.
+During older-page insertion, existing task starts at the insertion boundary
+advance past the page; starts first encountered within the page still precede
+their own work. This keeps an active oldest task from absorbing older answers.
+See [decision 142](../postmortem/142-task-work-details.md).
 
 ## Reply footers (`dsh-emacs-render.el`)
 
@@ -248,7 +281,9 @@ end, so tools, thinking, deliveries and diagnostics remain above it, even
 after folding or deferred Markdown. Stock text buttons retain the reply's source
 Markdown and sequence for Copy/Fork. Pending Markdown states close their end
 markers against insertion so their idle replacement cannot absorb the footer.
-The row never carries assistant-body or message-sequence properties. See
+The row never carries assistant-body or message-sequence properties. Its
+items form one left-aligned label with ordinary dot separators, preserving
+configured item order without stretch spaces. See
 [decision record 084](../postmortem/084-reply-footer.md) and the placement
 correction in [086](../postmortem/086-reply-footer-turn-tail.md).
 

@@ -5,6 +5,16 @@
 (require 'dsh-test-support)
 
 ;; imenu: user message index
+(ert-deftest dsh-emacs-test-history-imenu-preserves-authored-prompt ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (dsh-emacs-render-user-message
+     '((type . "user/message") (seq . 1)
+       (data . ((content . [((type . "text") (text . "❯ literal"))])))))
+    (should (string-suffix-p ": ❯ literal"
+                             (caar (dsh-emacs-imenu-create-user-index))))))
+
 (ert-deftest dsh-emacs-test-history-imenu-user-index ()
   :tags '(dsh-unit)
   (with-temp-buffer
@@ -32,9 +42,9 @@
 (ert-deftest dsh-emacs-test-history-history-index-includes-buffer-start ()
   :tags '(dsh-unit)
   (with-temp-buffer
-    (insert (propertize "❯ FIRST QUESTION\n" 'dsh-emacs-user-message t)
+    (insert (propertize "FIRST QUESTION\n" 'dsh-emacs-user-message t)
             "answer\n"
-            (propertize "❯ SECOND QUESTION\n" 'dsh-emacs-user-message t))
+            (propertize "SECOND QUESTION\n" 'dsh-emacs-user-message t))
     (let ((index (dsh-emacs-imenu-create-user-index)))
       (ert-info ((format "%s" "history-index-includes-buffer-start"))
         (should (and (= (length index) 2)
@@ -45,7 +55,7 @@
         (should (and (markerp (cdar index))
                      (save-excursion
                        (goto-char (cdar index))
-                       (looking-at "❯ FIRST QUESTION"))))))))
+                       (looking-at "FIRST QUESTION"))))))))
 
 ;; --- Test: load earlier history forward (session/page prepend) ---
 ;; Record the assistant body as markdown so render order can be asserted by

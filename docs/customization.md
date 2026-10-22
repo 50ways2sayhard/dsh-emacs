@@ -39,6 +39,35 @@ remain controlled by `dsh-emacs-show-tool-calls` and
 `dsh-emacs-tool-expand-by-default`. See
 [decision 122](../postmortem/122-remove-inactive-transcript-options.md).
 
+## Task folding
+
+`dsh-emacs-fold-work-details` defaults to `t`. Once a task completes
+successfully, its thinking, tool calls and intermediate replies before the
+final answer collapse into a muted **Completed in 4m 10s** summary with an
+SVG chevron directly above the answer, without a separator. The duration uses
+server turn timestamps;
+without both timestamps the label is **Completed**. The question, final answer,
+deliverables and reply actions remain visible. Click the row or press `RET`
+on it to toggle the work without changing the individual tool-card folds.
+
+This applies to live completion and loaded history, independently of
+`dsh-emacs-reply-footer-items`. Reconnects and older-page loads preserve manual
+expansion. Completed tasks also fold a partially loaded tail: the loaded work
+bounds the disclosure, and older pages extend it without resetting your choice.
+Active, failed, interrupted and interleaved-input tasks stay open. Tasks
+without a final prose answer or without preceding work have no disclosure.
+Search can reveal hidden work, and the UI expand/collapse-all commands include
+the task disclosures as well as individual cards. Folding happens at completion;
+there is no separate next-input timing setting.
+
+To retain the flat transcript, set the option to `nil`, preserve any draft,
+then close the chat buffer and reopen the same session from the session list.
+`C-c C-r` reconnects without rebuilding existing transcript text or folds:
+
+```elisp
+(setq dsh-emacs-fold-work-details nil)
+```
+
 ## Reloading local source
 
 Run `M-x dsh-emacs-reload` after saving package source edits. It preserves
@@ -180,16 +209,21 @@ above still control how files are accepted.
 
 `dsh-emacs-reply-footer-items` controls the row below a completed turn's
 replies, tool/thinking cards, Deliverables and diagnostics, with one blank
-line above it. Between rendered human messages, only the latest completed
+line above and below it. Between rendered human messages, only the latest completed
 turn with a nonempty text reply keeps its row. Copy and Fork target that
 turn's last visible text reply, even when other content follows it.
-The default is `(copy fork usage duration)`; list order is display order,
-omitted items are hidden, and nil disables the whole row. Changing the option
+The default is `(copy fork usage)`: Copy, Fork and tokens appear together on
+the left, separated by dots. All items follow the configured order, including
+statistics placed before actions.
+Omitted items are hidden, and nil disables the whole row. Changing the option
 does not automatically redraw existing rows. `C-c C-r` reconnects the event
 stream but does not replay already consumed events.
 
 ```emacs-lisp
-(setq dsh-emacs-reply-footer-items '(copy fork usage duration))
+;; Default (elapsed time stays in the Completed disclosure):
+(setq dsh-emacs-reply-footer-items '(copy fork usage))
+;; Also show elapsed time below the reply:
+;; (setq dsh-emacs-reply-footer-items '(copy fork usage duration))
 ;; Actions only:
 ;; (setq dsh-emacs-reply-footer-items '(copy fork))
 ;; Statistics first:

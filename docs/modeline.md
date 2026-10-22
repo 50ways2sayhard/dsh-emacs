@@ -64,8 +64,10 @@ local observed running time, including tools and waits; it is independent of
 the three-second animation loop and does not reset on repeated running
 snapshots. Turn completion and disconnect clear it. A reconnect or reopening
 a session starts a new local observation interval, rather than claiming an
-exact server turn duration. For completed turns, the reply footer retains the
-server-based duration. See [095](../postmortem/095-running-status.md).
+exact server turn duration. For completed turns with folded work, the
+Completed summary above the answer shows the server-based duration; add
+`duration` to `dsh-emacs-reply-footer-items` to show it in the footer too.
+See [095](../postmortem/095-running-status.md).
 
 Customize `dsh-emacs-modeline-running-face` for the caption/clock foreground
 and `dsh-emacs-modeline-running-highlight-face` for the sweep's peak color.

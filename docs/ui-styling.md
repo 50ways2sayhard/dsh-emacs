@@ -12,8 +12,9 @@ icons and `ToolRow` / `ioCard` semantics, and the session list and context
 meter follow dsh-web conventions (the underlying rendering/folding machinery
 builds on agent-shell, the mode-line stats on pi-mono):
 
-- **User messages**: `❯` prompt followed by text, with blank-line spacing and
-  no background by default
+- **User messages**: left-aligned text with a thin left rail and no background;
+  one blank line before and after the message. The rail continues across
+  explicit newlines and wrapped lines; the editable input keeps its `❯` prompt
 - **Assistant messages**: frameless Markdown bodies with transcript spacing
 - **Thinking blocks**: collapsible `<details>`-style items, folded by default,
   shown with dsh web's Think icon (IconThink) + "Think" + a first-sentence
@@ -41,9 +42,21 @@ builds on agent-shell, the mode-line stats on pi-mono):
 
 | Face | Description |
 |---|---|
-| `dsh-emacs-input-prompt-face` | User message and input prompt `❯` (accent color) |
-| `dsh-emacs-user-block-face` | User message body (no background by default) |
+| `dsh-emacs-input-prompt-face` | Editable input prompt `❯` (accent color) |
+| `dsh-emacs-user-block-face` | User message body (no background or typography override) |
+| `dsh-emacs-user-border-face` | Three-pixel teal user rail on graphical displays |
 | `dsh-emacs-assistant-body-face` | Assistant message body (no background) |
+| `dsh-emacs-reply-meta-face` | Readable grey completion summaries and reply footers; theme font size and weight |
+
+User rails use display prefixes, preserving message text and navigation.
+Graphical displays draw a three-pixel teal rail (`#4f9eaf` in dark themes,
+`#348694` in light themes), followed by a two-column gap. The first visual
+line gets a little extra headroom, and the last line requests a quarter-line
+gap below it; interior lines retain their normal spacing. This adds no text
+or font overrides. Terminals use a muted `│` glyph and ordinary line spacing.
+Historical user messages contain only their authored text; `❯` belongs to
+the editable input. Copying and yanking a user message preserves its text
+without carrying the rail, spacing or transcript identity into the destination.
 
 ### Slash gestures in user messages
 
@@ -307,9 +320,25 @@ remaining space. Headers and bordered bodies/footers share one width measured
 from the displaying window, including narrow windows. Long body lines retain
 their content. Layout is recomputed when a card updates or folds.
 
-Tool cards currently fold independently; no aggregate activity-group header
-is rendered. The remaining renderer group options/faces are legacy state,
-not a working grouping surface.
+Tool cards retain their independent folds inside the completed task
+compact **Completed in 4m 10s** disclosure using theme typography, directly
+above the answer without a separator. On graphical displays its newline
+requests half a line of space below the summary, leaving larger user-defined
+line spacing intact. Terminals retain ordinary line spacing. Summary and footer
+text use `dsh-emacs-reply-meta-face` at normal weight, inheriting the theme's
+font size from `shadow`; the footer defaults to Copy, Fork and
+tokens, with `duration` still available as an opt-in item. All footer items
+stay together on the left in configured order, separated by dots.
+The disclosure shows **Completed** when full turn timestamps are
+unavailable, rather than estimating duration from a partial
+page. Its small, rounded-stroke SVG chevron uses the summary face color
+and points up when expanded, down when collapsed. Terminal/non-SVG displays
+retain a character fallback. The button hides or reveals the
+original work region, not a copied card body; final answers remain outside it.
+The summary row keeps the displaying window's truncation instead of widening
+a narrow row.
+`dsh-emacs-fold-work-details` controls this task-level behavior. There is no
+separate consecutive-tool activity-group header.
 
 ## Mode-line stats
 

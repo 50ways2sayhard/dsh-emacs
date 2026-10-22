@@ -92,6 +92,58 @@
     (should-not (dsh-protocol-tool-call-call-id call))
     (should-not (dsh-protocol-tool-call-arguments call))))
 
+(ert-deftest dsh-emacs-test-protocol-reply-event-folding-facts ()
+  :tags '(dsh-unit)
+  (dolist (string-keys '(nil t))
+    (cl-labels ((wire (value)
+                 (cond ((vectorp value) (vconcat (mapcar #'wire value)))
+                       ((consp value)
+                        (mapcar (lambda (entry)
+                                  (cons (if string-keys
+                                            (symbol-name (car entry))
+                                          (car entry))
+                                        (wire (cdr entry))))
+                                value))
+                       (t value)))
+               (decode (type content &optional reason)
+                 (dsh-protocol-reply-event--from-alist
+                  (wire `((type . ,type) (seq . 17) (time . 1200)
+                          (data (turn . 4) (step . 3)
+                                (reason (kind . ,reason))
+                                (message (content . ,content))
+                                (usage (inputTokens . 10)
+                                       (outputTokens . 2))))))))
+      (let ((reply (decode "assistant/message"
+                           [((type . "reasoning") (text . "work"))
+                            ((type . "text") (text . "**answer**"))])))
+        (should (= 17 (dsh-protocol-reply-event-seq reply)))
+        (should (= 4 (dsh-protocol-reply-event-turn reply)))
+        (should (dsh-protocol-reply-event-answer-p reply))
+        (should (equal "**answer**" (dsh-protocol-reply-event-text reply)))
+        (should (equal '(:input 10 :output 2 :cache-read 0 :cache-write 0)
+                       (dsh-protocol-reply-event-usage reply))))
+      (dolist (content '([((type . "text") (text . ""))]
+                         [((type . "text") (text . " \t\n"))]
+                         [((type . "reasoning") (text . "only thinking"))]
+                         [((type . "text") (text . "calling tool"))
+                          ((type . "tool-call") (name . "read"))]
+                         []))
+        (should-not (dsh-protocol-reply-event-answer-p
+                     (decode "assistant/message" content))))
+      (dolist (type '("assistant/attempt" "step/start" "tool/call"
+                      "turn/start" "turn/end"))
+        (let ((event (decode type [((type . "text") (text . "not an answer"))]
+                             "completed")))
+          (should (equal type (dsh-protocol-reply-event-type event)))
+          (should-not (dsh-protocol-reply-event-answer-p event))))
+      (dolist (reason '("completed" "error" "aborted" "interrupted" "forked"))
+        (let ((event (decode "turn/end" [] reason)))
+          (should (equal reason (dsh-protocol-reply-event-reason event)))
+          (should (equal (unless (equal reason "forked") 1200)
+                         (dsh-protocol-reply-event-time event)))))
+      (should-not (decode "step/end" []))
+      (should-not (decode "tool/result" [])))))
+
 (ert-deftest dsh-emacs-test-protocol-mux-frame-preserves-logical-payloads ()
   :tags '(dsh-unit)
   (let* ((payload '((type . "event") (records . [((seq . 3))])))

@@ -165,12 +165,14 @@ default); the error kind turns the node red."
   :type 'boolean
   :group 'dsh-emacs-render)
 
-(defcustom dsh-emacs-reply-footer-items '(copy fork usage duration)
+(defcustom dsh-emacs-reply-footer-items '(copy fork usage)
   "Footer items for the latest completed text turn between human messages.
 Items appear in this order; nil hides the row.  `copy' copies the selected
 turn's last reply as original Markdown; `fork' branches through that reply.
+Items stay together on the left, separated by dots.
 `usage' sums that turn's reported tokens, including cache reads/writes;
-`duration' uses its server timestamps.  Consecutive turns are not aggregated.
+`duration' optionally adds its server timestamps' elapsed time; the default
+leaves elapsed time in the Completed summary.  Turns are not aggregated.
 Existing rows are not automatically redrawn when this option changes."
   :type '(repeat (choice (const copy) (const fork)
                          (const usage) (const duration)))
@@ -199,6 +201,16 @@ page, while a displayed window is not following new output, and when the
 input area's position cannot be located, so the limit is soft during history
 browsing.  Set to nil to disable trimming."
   :type '(choice integer (const nil))
+  :group 'dsh-emacs-render)
+
+(defcustom dsh-emacs-fold-work-details t
+  "Whether completed tasks collapse their work details automatically.
+Thinking, tool calls and intermediate replies before the final answer fold
+behind a Completed summary.  RET or click reveals them without changing
+individual card folds.  A completed task can fold its loaded tail even when
+the history window omits its start.  Active, failed and interrupted tasks
+stay open.  Set to nil and reopen the chat buffer to disable task folding."
+  :type 'boolean
   :group 'dsh-emacs-render)
 
 (defcustom dsh-emacs-show-todos t
@@ -850,13 +862,17 @@ input area."
     (let ((buffer-undo-list t))
       (insert txt))))
 
+(defun dsh-emacs-render--yank-user-text (text)
+  "Insert copied user TEXT without transcript display or identity properties."
+  (insert (substring-no-properties text)))
+
 (defun dsh-emacs-render--insert-chat-message (text face insert-point event-id &optional role)
-  "Insert TEXT as a read-only, background-colored chat message.
+  "Insert TEXT as a read-only chat message.
 FACE is applied to the message body.  EVENT-ID is stored for navigation.
 The prompt remains after the message and each message ends with a newline,
 so subsequent messages are appended in history order.  Blank lines left by
 the previous content are consumed so everything stacks flush — except
-around a user message (`role' = `user'), which keeps one blank line
+around a user message (`role' = `user'), which gets one blank line
 above AND is marked so the NEXT insertion keeps one blank line below it
 (see `dsh-emacs-ui--blank-above-preserve').
 ROLE also tags the body with its transcript property
@@ -876,10 +892,20 @@ Return (START . END) for the inserted message text, excluding separators."
           (if-let* ((anchor (dsh-emacs-render--input-anchor-pos)))
               (progn (goto-char anchor) (beginning-of-line))
             (goto-char (point-max))))
-        ;; Flush against previous content, but keep one blank line above when
-        ;; this is a user message, or when the previous entry was one.
+        ;; User messages start a new visual group, even after a footer that
+        ;; leaves no blank lines.  Other content keeps the preceding request.
         (dsh-emacs-ui--consume-blanks-above
-         (if (or (eq role 'user) (dsh-emacs-ui--blank-above-preserve)) 1 0))
+         (if (eq role 'user) 1 (dsh-emacs-ui--blank-above-preserve)))
+        (when (and (eq role 'user) (not (bobp)))
+          (let ((missing (save-excursion
+                           (let ((end (point)))
+                             (skip-chars-backward "\n")
+                             (max 0 (- 2 (- end (point))))))))
+            (insert (propertize (make-string missing ?\n)
+                                'read-only t 'front-sticky '(read-only)
+                                ;; History must prepend before this message's
+                                ;; spacing, where its work-start marker sits.
+                                'dsh-emacs-transcript-block t))))
         (let ((start (point))
               (text-end (progn (insert text) (point))))
           (unless (string-suffix-p "\n" text)
@@ -898,7 +924,29 @@ Return (START . END) for the inserted message text, excluding separators."
             ;; trailing blank separator line, so blank lines stay transparent.
             (add-face-text-property start text-end face t)
             (when (eq role 'user)
+              (let ((prefix
+                     (if (display-graphic-p)
+                         (concat
+                          (propertize " " 'display '(space :width (3))
+                                      'face 'dsh-emacs-user-border-face)
+                          (propertize " " 'display '(space :width 2)))
+                       (propertize "│ " 'face 'dsh-emacs-reply-meta-face))))
+                (add-text-properties
+                 start text-end (list 'line-prefix prefix 'wrap-prefix prefix))
+                (when (display-graphic-p)
+                  ;; A zero-width strut adds headroom only to the first visual
+                  ;; line, including when the first paragraph wraps.
+                  (put-text-property
+                   start (1+ start) 'line-prefix
+                   (concat (propertize " " 'display
+                                       '(space :width (0) :height 1 :ascent 100))
+                           prefix))
+                  (let ((newline (if (string-suffix-p "\n" text)
+                                     (1- text-end) text-end)))
+                    (put-text-property newline (1+ newline) 'line-spacing 0.25))))
               ;; UI spacing is independent of the message's business identity.
+              (put-text-property start text-end 'yank-handler
+                                 '(dsh-emacs-render--yank-user-text))
               (put-text-property start text-end 'dsh-emacs-ui-space-after 1)
               (put-text-property start text-end 'dsh-emacs-user-message t))
             (when (eq role 'assistant)
@@ -977,8 +1025,9 @@ sit after its closing message, mirroring dsh web's turnTail placement.")
 Older pages can supply missing outcomes; trimming removes consumed turns.")
 
 (defvar-local dsh-emacs-render--reply-turns nil
-  "Turn summaries for reply footers, keyed by turn number.
-Retain per-message usage by seq so reconnects and older pages can merge.")
+  "Turn summaries for reply footers and work folds, keyed by turn number.
+Retain per-message usage and answer eligibility by seq for history merges,
+plus work boundary markers and the reader's disclosure overlay.")
 
 (defvar dsh-emacs-render--footer-batch nil
   "Non-nil while collecting a bounded history batch before painting footers.")
@@ -1007,6 +1056,10 @@ miss the entry is cleaned up.")
   (dsh-emacs--command-spinner-clear-all)
   (dsh-emacs-render--flush-stream nil t)
   (dsh-emacs-render--cancel-markdown)
+  (when dsh-emacs-render--reply-turns
+    (maphash (lambda (_turn state)
+               (dsh-emacs-render--release-work-details state))
+             dsh-emacs-render--reply-turns))
   (setq dsh-emacs--streaming-assistant nil
         dsh-emacs--streaming-thinking nil
         dsh-emacs--streamed-step nil
@@ -1859,8 +1912,7 @@ event seq."
                                           "\n"))))
           (prog1
               (dsh-emacs-render--insert-chat-message
-               (concat (propertize "❯ " 'face 'dsh-emacs-input-prompt-face)
-                       text)
+               text
                'dsh-emacs-user-block-face insert-point
                (format "%s-%s" (dsh-emacs-render--make-namespace) block-id)
                'user)
@@ -1947,8 +1999,8 @@ inspected.  An empty body leaves the row unfoldable."
      :insert-before (dsh-emacs-render--input-insert-point))))
 
 (defun dsh-emacs-render-user-message (event &optional references)
-  "Render a `user/message' event with a prompt and the user block face.
-The block gets one blank line before and after (see
+  "Render a `user/message' event with a left rail and the user block face.
+The block gets two blank lines before and one after (see
 `dsh-emacs-render--insert-chat-message' and `dsh-emacs-ui--blank-above-preserve').
 Image content blocks render as `[image …]' placeholders on their own
 line below the text; inline base64 shows immediately, attachment refs
@@ -3395,14 +3447,14 @@ unfold preserve the styling."
         ;; The last text reply is the action target, but tools, reasoning
         ;; and diagnostics can follow it before the turn actually ends.
         (when-let* ((tail
-                    (if-let* ((id (plist-get state :tail-fragment)))
-                        (cdr (dsh-emacs-ui-find-block (car id) (cdr id)))
-                      (when-let* ((id (plist-get state :tail-message)))
-                        (save-excursion
-                          (goto-char (point-max))
-                          (when-let* ((match (text-property-search-backward
-                                             'dsh-emacs-event-block id #'equal)))
-                            (prop-match-end match)))))))
+                     (if-let* ((id (plist-get state :tail-fragment)))
+                         (cdr (dsh-emacs-ui-find-block (car id) (cdr id)))
+                       (when-let* ((id (plist-get state :tail-message)))
+                         (save-excursion
+                           (goto-char (point-max))
+                           (when-let* ((match (text-property-search-backward
+                                               'dsh-emacs-event-block id #'equal)))
+                             (prop-match-end match)))))))
           (setq end (max end tail)))
         (dolist (entry (plist-get state :messages))
           (if (null (cdr entry))
@@ -3449,26 +3501,116 @@ unfold preserve the styling."
                       'help-echo "Turn elapsed time, including tools and waits; server timestamps")
                      parts)))))
         (when parts
-          (dsh-emacs-ui-update-fragment
-           (dsh-emacs-ui-make-fragment
-            :namespace-id (dsh-emacs-render--make-namespace)
-            :block-id (format "reply-footer-%s" turn)
-            :label-left (concat
-                         (unless (and (get-text-property
-                                       (1- end) 'dsh-emacs-ui-state)
-                                      (eq (char-before end) ?\n)
-                                      (eq (char-before (1- end)) ?\n))
-                           "\n")
-                         (mapconcat #'identity (nreverse parts) "  ·  "))
-            :style 'minimal :status 'reply-footer :non-foldable t
-            :header-face 'dsh-emacs-muted-face)
-           :insert-before (save-excursion
-                            (goto-char end)
-                            (unless (bolp) (forward-line 1))
-                            (point))))))))
+          (setq parts (nreverse parts))
+          (let ((label (mapconcat #'identity parts "  ·  ")))
+            ;; Prepend to the title face `dsh-emacs-ui--top-border' appends;
+            ;; its explicit normal weight keeps the row muted.
+            (add-face-text-property 0 (length label)
+                                    'dsh-emacs-reply-meta-face t label)
+            (let ((range
+                   (dsh-emacs-ui-update-fragment
+                    (dsh-emacs-ui-make-fragment
+                     :namespace-id (dsh-emacs-render--make-namespace)
+                     :block-id (format "reply-footer-%s" turn)
+                     :label-left label
+                     ;; Keep a trailing gap when history adds this row after
+                     ;; the next user message reserved its leading whitespace.
+                     :padding t
+                     :style 'minimal :status 'reply-footer :non-foldable t
+                     :header-face 'dsh-emacs-reply-meta-face)
+                    :insert-before (save-excursion
+                                     (goto-char end)
+                                     (unless (bolp) (forward-line 1))
+                                     (point)))))
+              ;; This padded row already ends with its own blank line.  When a
+              ;; following message reserved one before the row existed, drop
+              ;; the duplicate so the next question keeps a single blank line.
+              ;; Never touch an authored leading blank line or a fragment.
+              (when (and (eq (char-after (cdr range)) ?\n)
+                         (not (get-text-property
+                               (cdr range) 'dsh-emacs-ui-state))
+                         (not (get-text-property
+                               (cdr range) 'dsh-emacs-user-message))
+                         (not (get-text-property
+                               (cdr range) 'dsh-emacs-assistant-message)))
+                (let ((inhibit-read-only t)
+                      (buffer-undo-list t))
+                  (delete-region (cdr range) (1+ (cdr range))))))))))))
 
-(defun dsh-emacs-render--note-reply-event (event)
-  "Merge decoded EVENT into its turn's footer facts without double counting."
+(defun dsh-emacs-render--work-details (turn state)
+  "Fold TURN's completed process from STATE, leaving its final reply visible.
+Only a successfully completed turn with a final prose answer is eligible.
+An interleaved human message keeps the process open, as in the web client."
+  (let* ((overlay (plist-get state :work-overlay))
+         (namespace (dsh-emacs-render--make-namespace))
+         (id (format "work-details-%s" turn))
+         (origin (plist-get state :work-start))
+         (answer (and dsh-emacs-fold-work-details
+                      (equal (plist-get state :end-reason) "completed")
+                      (markerp origin) (marker-buffer origin)
+                      (plist-get state :answer-seq)
+                      (text-property-any origin (point-max)
+                                         'dsh-emacs-message-seq
+                                         (plist-get state :answer-seq))))
+         start)
+    (when answer
+      (save-excursion
+        (goto-char origin)
+        ;; Inputs and trigger notices lead the work, never belong inside it.
+        (while (progn
+                 (skip-chars-forward " \t\n" answer)
+                 (and (< (point) answer)
+                      (cond
+                       ((get-text-property (point) 'dsh-emacs-user-message)
+                        (goto-char (next-single-property-change
+                                    (point) 'dsh-emacs-user-message nil answer)))
+                       ((memq (map-elt (get-text-property
+                                        (point) 'dsh-emacs-ui-state) :status)
+                              '(goal-trigger reply-footer work-details))
+                        (goto-char (next-single-property-change
+                                    (point) 'dsh-emacs-ui-state nil answer)))))))
+        (when (and (< (point) answer)
+                   (not (text-property-any
+                         (point) (or (plist-get state :work-end) answer)
+                         'dsh-emacs-user-message t)))
+          (setq start (line-beginning-position)))))
+    (if start
+        (setf (plist-get state :work-overlay)
+              (dsh-emacs-ui-fold-region
+               namespace id start answer overlay
+               (let ((begin (plist-get state :start-time))
+                     (finish (plist-get state :end-time)))
+                 (if (and (numberp begin) (numberp finish) (>= finish begin))
+                     (let ((seconds (floor (/ (- finish begin) 1000.0))))
+                       (concat "Completed in "
+                               (cond
+                                ((>= seconds 3600)
+                                 (format "%dh %dm %ds" (/ seconds 3600)
+                                         (% (/ seconds 60) 60) (% seconds 60)))
+                                ((>= seconds 60)
+                                 (format "%dm %ds" (/ seconds 60) (% seconds 60)))
+                                (t (format "%ds" seconds)))))
+                   "Completed"))))
+      (when overlay
+        (delete-overlay overlay)
+        (dsh-emacs-ui-delete-fragment namespace id)
+        (setf (plist-get state :work-overlay) nil)))))
+
+(defun dsh-emacs-render--release-work-details (state)
+  "Release STATE's work-detail display and boundary marker."
+  (when-let* ((overlay (plist-get state :work-overlay)))
+    (delete-overlay overlay)
+    (dsh-emacs-ui-delete-fragment (overlay-get overlay 'namespace)
+                                 (overlay-get overlay 'block-id)))
+  (dolist (key '(:work-start :work-end))
+    (when-let* ((marker (plist-get state key)))
+      (set-marker marker nil)
+      (setf (plist-get state key) nil)))
+  (setf (plist-get state :work-overlay) nil))
+
+(defun dsh-emacs-render--note-reply-event (event &optional start)
+  "Merge decoded reply EVENT, with START preceding its rendered content.
+The earliest loaded event bounds visible work even without `turn/start'."
   (when (and event (integerp (dsh-protocol-reply-event-turn event))
              (integerp (dsh-protocol-reply-event-seq event)))
     (unless dsh-emacs-render--reply-turns
@@ -3478,13 +3620,26 @@ unfold preserve the styling."
            (type (dsh-protocol-reply-event-type event))
            (state (or (gethash turn dsh-emacs-render--reply-turns)
                       (list :start-seq nil :start-time nil :end-seq nil
-                            :end-time nil :reply-seq nil :text nil :messages nil))))
+                            :end-time nil :reply-seq nil :text nil :messages nil
+                            :work-overlay nil))))
+      (when (and start (not (equal type "turn/end"))
+                 (< seq (or (plist-get state :work-start-seq)
+                            most-positive-fixnum)))
+        (when-let* ((old (plist-get state :work-start)))
+          (set-marker old nil))
+        (setf (plist-get state :work-start) (copy-marker start nil)
+              (plist-get state :work-start-seq) seq))
       (pcase type
         ("turn/start"
          (setf (plist-get state :start-seq) seq
                (plist-get state :start-time) (dsh-protocol-reply-event-time event)))
         ("turn/end"
+         (unless (plist-get state :work-end)
+           (setf (plist-get state :work-end)
+                 (copy-marker (or (dsh-emacs-render--input-insert-point)
+                                  (point-max)) nil)))
          (setf (plist-get state :end-seq) seq
+               (plist-get state :end-reason) (dsh-protocol-reply-event-reason event)
                (plist-get state :end-time) (dsh-protocol-reply-event-time event))
          ;; Capture content identity, not a position that later insertions or
          ;; deferred Markdown could move.  Turn-end diagnostics are already
@@ -3501,7 +3656,7 @@ unfold preserve the styling."
                      (plist-get state :tail-message)
                      (unless fragment
                        (get-text-property (1- (point)) 'dsh-emacs-event-block)))))))
-        (_
+        ((or "assistant/message" "assistant/attempt")
          (unless (assq seq (plist-get state :messages))
            (push (cons seq (dsh-protocol-reply-event-usage event))
                  (plist-get state :messages)))
@@ -3510,10 +3665,20 @@ unfold preserve the styling."
                     (> seq (or (plist-get state :reply-seq) -1)))
            (setf (plist-get state :reply-seq) seq
                  (plist-get state :text) (dsh-protocol-reply-event-text event)))))
+      ;; Unlike the Copy target, a final answer cannot precede more work.
+      ;; Sequence ordering also protects it from older history page facts.
+      (when (and (member type '("step/start" "tool/call" "assistant/message"
+                               "assistant/attempt"))
+                 (> seq (or (plist-get state :answer-event-seq) -1)))
+        (setf (plist-get state :answer-event-seq) seq
+              (plist-get state :answer-seq)
+              (and (dsh-protocol-reply-event-answer-p event) seq)))
       (puthash turn state dsh-emacs-render--reply-turns)
       (if dsh-emacs-render--footer-batch
           (cl-pushnew turn dsh-emacs-render--footer-dirty)
-        (dsh-emacs-render--reply-footer turn state)))))
+        (progn
+          (dsh-emacs-render--reply-footer turn state)
+          (dsh-emacs-render--work-details turn state))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Renderer: turn start / end / interrupt / error
@@ -4370,7 +4535,12 @@ a finished row never animates again."
          (chunk (and (equal type "assistant/chunk")
                      (dsh-protocol-chunk--from-alist event)))
          (chunk-type (and chunk (dsh-protocol-chunk-kind chunk)))
-         (seq nil))
+         (seq nil)
+         (reply (and (or dsh-emacs-reply-footer-items
+                         dsh-emacs-fold-work-details)
+                     (not replacement)
+                     (dsh-protocol-reply-event--from-alist event)))
+         (start-marker nil))
     ;; Publish queued text before another event can insert transcript content.
     (when (and (plist-get dsh-emacs--streaming-assistant :timer)
                (not (equal chunk-type "text-delta")))
@@ -4380,68 +4550,74 @@ a finished row never animates again."
       (dsh-emacs-render--flush-thinking))
     (when (and execution (not (dsh-emacs-render--history-page-p)))
       (dsh-emacs-modeline-note-execution execution))
-    (pcase type
-      ((or "llm/retry" "llm/retry-started" "compaction/start")
-       (setq seq (dsh-protocol-event-sequence--from-alist event)))
-      ("compaction/summary"
-       (setq seq (dsh-emacs-render-compaction-summary event)))
-      ("compaction/end"
-       (setq seq (dsh-protocol-event-sequence--from-alist event))
-       ;; Slash-command failures already have a command/done card.  An
-       ;; automatic compaction needs its own durable, inspectable failure.
-       (when (and (dsh-protocol-execution-event-message execution)
-                  (not (dsh-protocol-execution-event-command-id execution)))
-         (dsh-emacs-render-info
-          "Context compaction failed"
-          (dsh-protocol-execution-event-message execution)
-          (format "compaction-%s"
-                  (dsh-protocol-execution-event-id execution)))))
-      ("user/message" (setq seq (dsh-emacs-render-user-message event)))
-      ("assistant/chunk"
-       (setq seq (dsh-emacs-render-assistant-chunk event chunk)))
-      ("assistant/message" (setq seq (dsh-emacs-render-assistant-message event))
-       (unless (dsh-emacs-render--history-page-p)
-         (dsh-emacs-modeline-note-event event)))
-      ;; A `plan/mode' record is durable but paints no row: the `plan'
-      ;; projection owns the badge, so the event is only consumed.
-      ("plan/mode" (setq seq (dsh-protocol-event-sequence--from-alist event)))
-      ("request/context" (setq seq (dsh-protocol-event-sequence--from-alist event))
-       (unless (dsh-emacs-render--history-page-p)
-         (dsh-emacs-modeline-note-request event)))
-      ("request/header" (setq seq (dsh-protocol-event-sequence--from-alist event))
-       (unless (dsh-emacs-render--history-page-p)
-         (dsh-emacs-modeline-note-header event)))
-      ("tool/call" (setq seq (dsh-emacs-render-tool-call event)))
-      ;; A replacement `tool/result' rewrites what the model sees; the human
-      ;; card keeps the append-origin record.  Skipping the copy still counts
-      ;; the event as consumed (seq returned), so the dedup anchor advances.
-      ("tool/result" (if replacement
-                         (setq seq (dsh-protocol-event-sequence--from-alist event))
-                       (setq seq (dsh-emacs-render-tool-result event))))
-      ("command/run" (setq seq (dsh-emacs-render-command event)))
-      ("command/done" (setq seq (dsh-emacs-render-command event)))
-      ("turn/start" (setq seq (dsh-emacs-render-turn-start event)))
-      ("turn/end" (setq seq (dsh-emacs-render-turn-end event)))
-      ((or "step/start" "step/end")
-       (setq seq (if (dsh-emacs-render--history-page-p)
-                     (dsh-protocol-event-sequence--from-alist event)
-                   (dsh-emacs-render-step-event event))))
-      ("assistant/attempt"
-       (setq seq (dsh-emacs-render-assistant-attempt event)))
-      ("session/end-seed" (setq seq (dsh-protocol-event-sequence--from-alist event)))
-      ("deliverables/presented"
-       (setq seq (dsh-emacs-render-deliverables event)))
-      (_ nil))
-    (unless replacement
-      (dsh-emacs-render--note-attempt-outcome execution))
-    (when (and dsh-emacs-reply-footer-items (not replacement))
-      (dsh-emacs-render--note-reply-event
-       (dsh-protocol-reply-event--from-alist event)))
-    (when (and (integerp seq)
-               (boundp 'dsh-emacs--anchor-seq)
-               (> seq (or dsh-emacs--anchor-seq 0)))
-      (setq dsh-emacs--anchor-seq seq))
-    seq))
+    (setq start-marker
+          (and reply (copy-marker
+                      (or (dsh-emacs-render--input-insert-point) (point-max)) nil)))
+    (unwind-protect
+        (progn
+          (pcase type
+            ((or "llm/retry" "llm/retry-started" "compaction/start")
+             (setq seq (dsh-protocol-event-sequence--from-alist event)))
+            ("compaction/summary"
+             (setq seq (dsh-emacs-render-compaction-summary event)))
+            ("compaction/end"
+             (setq seq (dsh-protocol-event-sequence--from-alist event))
+             ;; Slash-command failures already have a command/done card.  An
+             ;; automatic compaction needs its own durable, inspectable failure.
+             (when (and (dsh-protocol-execution-event-message execution)
+                        (not (dsh-protocol-execution-event-command-id execution)))
+               (dsh-emacs-render-info
+                "Context compaction failed"
+                (dsh-protocol-execution-event-message execution)
+                (format "compaction-%s"
+                        (dsh-protocol-execution-event-id execution)))))
+            ("user/message" (setq seq (dsh-emacs-render-user-message event)))
+            ("assistant/chunk"
+             (setq seq (dsh-emacs-render-assistant-chunk event chunk)))
+            ("assistant/message" (setq seq (dsh-emacs-render-assistant-message event))
+             (unless (dsh-emacs-render--history-page-p)
+               (dsh-emacs-modeline-note-event event)))
+            ;; A `plan/mode' record is durable but paints no row: the `plan'
+            ;; projection owns the badge, so the event is only consumed.
+            ("plan/mode" (setq seq (dsh-protocol-event-sequence--from-alist event)))
+            ("request/context" (setq seq (dsh-protocol-event-sequence--from-alist event))
+             (unless (dsh-emacs-render--history-page-p)
+               (dsh-emacs-modeline-note-request event)))
+            ("request/header" (setq seq (dsh-protocol-event-sequence--from-alist event))
+             (unless (dsh-emacs-render--history-page-p)
+               (dsh-emacs-modeline-note-header event)))
+            ("tool/call" (setq seq (dsh-emacs-render-tool-call event)))
+            ;; A replacement `tool/result' rewrites what the model sees; the human
+            ;; card keeps the append-origin record.  Skipping the copy still counts
+            ;; the event as consumed (seq returned), so the dedup anchor advances.
+            ("tool/result" (if replacement
+                               (setq seq (dsh-protocol-event-sequence--from-alist event))
+                             (setq seq (dsh-emacs-render-tool-result event))))
+            ("command/run" (setq seq (dsh-emacs-render-command event)))
+            ("command/done" (setq seq (dsh-emacs-render-command event)))
+            ("turn/start" (setq seq (dsh-emacs-render-turn-start event)))
+            ("turn/end" (setq seq (dsh-emacs-render-turn-end event)))
+            ((or "step/start" "step/end")
+             (setq seq (if (dsh-emacs-render--history-page-p)
+                           (dsh-protocol-event-sequence--from-alist event)
+                         (dsh-emacs-render-step-event event))))
+            ("assistant/attempt"
+             (setq seq (dsh-emacs-render-assistant-attempt event)))
+            ("session/end-seed" (setq seq (dsh-protocol-event-sequence--from-alist event)))
+            ("deliverables/presented"
+             (setq seq (dsh-emacs-render-deliverables event)))
+            (_ nil))
+          (unless replacement
+            (dsh-emacs-render--note-attempt-outcome execution))
+          (when reply
+            (dsh-emacs-render--note-reply-event reply start-marker))
+          (when (and (integerp seq)
+                     (boundp 'dsh-emacs--anchor-seq)
+                     (> seq (or dsh-emacs--anchor-seq 0)))
+            (setq dsh-emacs--anchor-seq seq))
+          seq)
+      (when start-marker
+        (set-marker start-marker nil)))))
 
 (defun dsh-emacs-render--consume-pending-user-message (event)
   "Consume one optimistic user message matching EVENT, if present.
@@ -4506,6 +4682,9 @@ draft.  The size limit is soft in all three cases."
         (when dsh-emacs-render--reply-turns
           (maphash
            (lambda (turn state)
+             (when-let* ((start (plist-get state :work-start))
+                         ((<= start (point-min))))
+               (dsh-emacs-render--release-work-details state))
              (when (and (plist-get state :end-seq)
                         (or (null (plist-get state :reply-seq))
                             (not (text-property-any
@@ -4650,10 +4829,25 @@ re-delivered and the running animation had no later event to stop it."
                 (dsh-emacs--turn-awaiting nil)
                 (dsh-emacs--pending-command nil)
                 (dsh-emacs--todo-list nil)
-                (dsh-emacs-render--turn-deliverables nil))
-            (dolist (entry entries)
-              (consume-entry entry))
-            (dsh-emacs-render--flush-deliverables))
+                (dsh-emacs-render--turn-deliverables nil)
+                (work-starts nil))
+            ;; Existing turns at the page boundary belong AFTER the page.
+            ;; New starts created by this batch still precede their own work.
+            (when dsh-emacs-render--reply-turns
+              (maphash
+               (lambda (_turn state)
+                 (when-let* ((marker (plist-get state :work-start))
+                             ((= marker insert-before)))
+                   (push marker work-starts)
+                   (set-marker-insertion-type marker t)))
+               dsh-emacs-render--reply-turns))
+            (unwind-protect
+                (progn
+                  (dolist (entry entries)
+                    (consume-entry entry))
+                  (dsh-emacs-render--flush-deliverables))
+              (dolist (marker work-starts)
+                (set-marker-insertion-type marker nil))))
         (dolist (entry entries)
           (consume-entry entry)
           ;; Yield to the input queue between groups so a long seed still
@@ -4668,8 +4862,9 @@ re-delivered and the running animation had no later event to stop it."
     (unless prepend-p
       (dsh-emacs-render--flush-deliverables))
     (dolist (turn dsh-emacs-render--footer-dirty)
-      (dsh-emacs-render--reply-footer
-       turn (gethash turn dsh-emacs-render--reply-turns)))
+      (let ((state (gethash turn dsh-emacs-render--reply-turns)))
+        (dsh-emacs-render--reply-footer turn state)
+        (dsh-emacs-render--work-details turn state)))
     ;; A prepend is a settled history page: no viewport follow.
     (when (and (> rendered 0) follow-p (not prepend-p))
       (dsh-emacs-render--follow-stream))

@@ -21,8 +21,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'button)
 (require 'map)
 (require 'text-property-search)
+(require 'dsh-emacs-faces)
 
 (defvar-local dsh-emacs-ui--following-windows-function nil
   "Optional function returning this buffer's windows that follow new output.
@@ -630,7 +632,14 @@ Silent no-op when no fragment exists at or after point."
   (interactive)
   (when-let* ((pos (dsh-emacs-ui--enclosing-fragment-position)))
     (goto-char pos)
-    (dsh-emacs-ui--toggle-fragment-at-point)))
+    (let* ((state (get-text-property pos 'dsh-emacs-ui-state))
+           (label (map-elt state :label-left))
+           (overlay (and label (get-text-property
+                                0 'dsh-emacs-work-details label))))
+      (if overlay
+          (dsh-emacs-ui--set-work-details-expanded
+           overlay (overlay-get overlay 'invisible))
+        (dsh-emacs-ui--toggle-fragment-at-point)))))
 
 (defun dsh-emacs-ui--enclosing-fragment-position ()
   "Return position of the nearest enclosing fragment, or nil."
@@ -651,6 +660,109 @@ Silent no-op when no fragment exists at or after point."
                               (lambda (_ state) (and state t))
                               t)))
             (prop-match-beginning match))))))
+
+(defun dsh-emacs-ui--set-work-details-expanded (overlay expanded)
+  "Set OVERLAY's work-detail visibility to EXPANDED."
+  (overlay-put overlay 'invisible (unless expanded 'dsh-emacs-work-details))
+  ;; A hidden first character's image display can otherwise remain visible.
+  (overlay-put overlay 'display (unless expanded ""))
+  (when-let* ((block (dsh-emacs-ui-find-block
+                     (overlay-get overlay 'namespace)
+                     (overlay-get overlay 'block-id)))
+              (pos (text-property-not-all (car block) (cdr block) 'button nil))
+              (button (button-at pos)))
+    (let* ((inhibit-read-only t)
+           (buffer-undo-list t)
+           (start (button-start button))
+           (end (button-end button))
+           (icon
+            (if (and (display-graphic-p) (image-type-available-p 'svg))
+                (let* ((foreground (face-foreground 'dsh-emacs-reply-meta-face nil t))
+                       (rgb (and foreground (color-values foreground)))
+                       (color (if rgb
+                                  (apply #'format "#%02x%02x%02x"
+                                         (mapcar (lambda (channel) (/ channel 257)) rgb))
+                                "#808080")))
+                  (create-image
+                   (format (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+                                   "width=\"16\" height=\"16\" viewBox=\"0 0 16 16\">"
+                                   "<path d=\"%s\" fill=\"none\" stroke=\"%s\" "
+                                   "stroke-width=\"1.4\" stroke-linecap=\"round\" "
+                                   "stroke-linejoin=\"round\"/></svg>")
+                           (if expanded "M4 10l4-4 4 4" "M4 6l4 4 4-4") color)
+                   'svg t :ascent 'center :height 0.9))
+              (if expanded "▴" "▾"))))
+      ;; The caption keeps the label's own face.  A display replacement would
+      ;; bypass the header's width truncation and widen a narrow window.
+      (remove-text-properties start end '(display nil))
+      ;; Space below the summary without changing its font or the answer's.
+      (when (and (< end (point-max)) (eq (char-after end) ?\n))
+        (put-text-property end (1+ end) 'line-spacing 0.5))
+      ;; Only a surviving chevron can carry the icon; a truncated header keeps
+      ;; its ellipsis instead of overflowing the row.
+      (when (and (>= (- end start) 2)
+                 (equal " ▾" (buffer-substring-no-properties (- end 2) end)))
+        (put-text-property (1- end) end 'display icon)))))
+
+(defun dsh-emacs-ui--toggle-work-details (button)
+  "Toggle the work-detail region controlled by BUTTON."
+  (let ((overlay (button-get button 'dsh-emacs-work-details)))
+    (dsh-emacs-ui--set-work-details-expanded
+     overlay (overlay-get overlay 'invisible))))
+
+(defun dsh-emacs-ui--isearch-open-work-details (overlay)
+  "Reveal work details in OVERLAY when search finds hidden content."
+  (dsh-emacs-ui--set-work-details-expanded overlay t))
+
+(defun dsh-emacs-ui-fold-region (namespace block-id start end &optional overlay label)
+  "Fold START..END behind a work-details control named NAMESPACE and BLOCK-ID.
+Keep the original text and child fragments in place.  Reuse OVERLAY when
+provided, preserving the reader's choice, even when older work is prepended.
+LABEL is the completion summary; without timing facts it defaults to Completed.
+A changed LABEL re-renders the header so later timing facts replace the text."
+  (let* ((live (and overlay (overlay-buffer overlay)))
+         (header (and live (dsh-emacs-ui-find-block namespace block-id)))
+         (expanded (and live (not (overlay-get overlay 'invisible))))
+         (previous (and live (overlay-get overlay 'dsh-emacs-work-label)))
+         (caption (or label "Completed")))
+    (when live (overlay-put overlay 'dsh-emacs-work-label caption))
+    (if (and header (<= (car header) start) (<= start (cdr header))
+             (equal previous caption))
+        (progn
+          (move-overlay overlay (cdr header) end)
+          (dsh-emacs-ui--set-work-details-expanded overlay expanded))
+      (unless live
+        (setq overlay (make-overlay start end nil nil nil))
+        (overlay-put overlay 'dsh-emacs-work-label caption)
+        (overlay-put overlay 'namespace namespace)
+        (overlay-put overlay 'block-id block-id)
+        (overlay-put overlay 'isearch-open-invisible
+                     #'dsh-emacs-ui--isearch-open-work-details)
+        (add-to-invisibility-spec 'dsh-emacs-work-details))
+      (let ((end-marker (copy-marker end t))
+            (start-marker (copy-marker start nil)))
+        (unwind-protect
+            (progn
+              (when header
+                (dsh-emacs-ui-delete-fragment namespace block-id))
+              (setq header
+                    (dsh-emacs-ui-update-fragment
+                     (dsh-emacs-ui-make-fragment
+                      :namespace-id namespace :block-id block-id
+                      :label-left
+                      (make-text-button
+                       (concat caption " ▾") nil 'follow-link t
+                       'face 'dsh-emacs-reply-meta-face
+                       'help-echo "Show or hide this task's work details"
+                       'action #'dsh-emacs-ui--toggle-work-details
+                       'dsh-emacs-work-details overlay)
+                      :style 'minimal :status 'work-details :non-foldable t)
+                     :insert-before start-marker))
+              (move-overlay overlay (cdr header) end-marker)
+              (dsh-emacs-ui--set-work-details-expanded overlay expanded))
+          (set-marker start-marker nil)
+          (set-marker end-marker nil)))))
+  overlay)
 
 ;;; ---------------------------------------------------------------------------
 ;;; Delete fragment
@@ -678,26 +790,41 @@ Silent no-op when no fragment exists at or after point."
   "Jump to the next fragment block."
   (interactive)
   (let* ((block (dsh-emacs-ui--block-at (point)))
+         (escape (and (invisible-p (point))
+                      (next-single-char-property-change
+                       (point) 'invisible nil (point-max))))
          (pos (if block (cdr block) (point))))
-    (unless (get-text-property pos 'dsh-emacs-ui-state)
-      (setq pos (next-single-property-change
-                 pos 'dsh-emacs-ui-state nil (point-max))))
-    (when (get-text-property pos 'dsh-emacs-ui-state)
-      (goto-char pos))))
+    (while (and (< pos (point-max))
+                (or (invisible-p pos)
+                    (not (get-text-property pos 'dsh-emacs-ui-state))))
+      (setq pos (if (invisible-p pos)
+                    (next-single-char-property-change
+                     pos 'invisible nil (point-max))
+                  (next-single-property-change
+                   pos 'dsh-emacs-ui-state nil (point-max)))))
+    (cond ((and (not (invisible-p pos))
+                (get-text-property pos 'dsh-emacs-ui-state))
+           (goto-char pos))
+          (escape (goto-char escape)))))
 
 (defun dsh-emacs-ui-backward-block ()
   "Jump to the previous fragment block."
   (interactive)
-  (when-let* ((found (save-mark-and-excursion
-                       (let* ((block (dsh-emacs-ui--block-at (point)))
-                              (block-start (and block (car block))))
-                         (if (and block-start (< block-start (point)))
-                             block-start
-                           (when-let* ((match (text-property-search-backward
-                                               'dsh-emacs-ui-state nil
-                                               (lambda (_ state) (and state t))
-                                               t)))
-                             (prop-match-beginning match)))))))
+  (when-let* ((found
+               (save-mark-and-excursion
+                 (let* ((block (dsh-emacs-ui--block-at (point)))
+                        (start (and block (car block)))
+                        match found)
+                   (if (and start (< start (point)) (not (invisible-p start)))
+                       start
+                     (while (and (not found)
+                                 (setq match
+                                       (text-property-search-backward
+                                        'dsh-emacs-ui-state nil
+                                        (lambda (_ state) (and state t)) t)))
+                       (unless (invisible-p (prop-match-beginning match))
+                         (setq found (prop-match-beginning match))))
+                     found)))))
     (goto-char found)))
 
 ;;; ---------------------------------------------------------------------------
@@ -722,12 +849,17 @@ Silent no-op when no fragment exists at or after point."
     (let ((inhibit-read-only t))
       (goto-char (point-min))
       (while (not (eobp))
-        (let ((state (get-text-property (point) 'dsh-emacs-ui-state)))
-          (when (and state
-                     (not (map-elt state :collapsed)))
-            (dsh-emacs-ui--toggle-fragment-at-point)))
+        (let* ((state (get-text-property (point) 'dsh-emacs-ui-state))
+               (label (map-elt state :label-left))
+               (overlay (and label (get-text-property
+                                    0 'dsh-emacs-work-details label))))
+          (cond (overlay (dsh-emacs-ui--set-work-details-expanded overlay nil))
+                ((and state (not (map-elt state :collapsed)))
+                 (dsh-emacs-ui--toggle-fragment-at-point))))
         (goto-char (next-single-property-change
-                    (point) 'dsh-emacs-ui-state nil (point-max)))))))
+                    (point) 'dsh-emacs-ui-state nil (point-max))))))
+  (when (invisible-p (point))
+    (dsh-emacs-ui-backward-block)))
 
 (defun dsh-emacs-ui-expand-all ()
   "Expand every fragment in the current buffer."
@@ -736,10 +868,13 @@ Silent no-op when no fragment exists at or after point."
     (let ((inhibit-read-only t))
       (goto-char (point-min))
       (while (not (eobp))
-        (let ((state (get-text-property (point) 'dsh-emacs-ui-state)))
-          (when (and state
-                     (map-elt state :collapsed))
-            (dsh-emacs-ui--toggle-fragment-at-point)))
+        (let* ((state (get-text-property (point) 'dsh-emacs-ui-state))
+               (label (map-elt state :label-left))
+               (overlay (and label (get-text-property
+                                    0 'dsh-emacs-work-details label))))
+          (cond (overlay (dsh-emacs-ui--set-work-details-expanded overlay t))
+                ((and state (map-elt state :collapsed))
+                 (dsh-emacs-ui--toggle-fragment-at-point))))
         (goto-char (next-single-property-change
                     (point) 'dsh-emacs-ui-state nil (point-max)))))))
 

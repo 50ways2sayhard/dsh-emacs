@@ -4,6 +4,8 @@ _Footer placement is superseded by [086](086-reply-footer-turn-tail.md)._
 _Always-visible per-turn rows are superseded by [117](117-consecutive-reply-footer.md);
 action targets and per-turn statistics remain unchanged._
 
+_Default footer items are superseded by [145](145-light-conversation-markers.md)._
+
 ## Background
 
 `5fb6674` exposed exact reply branching through `C-c C-y`, but its

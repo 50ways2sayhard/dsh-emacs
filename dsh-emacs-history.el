@@ -36,10 +36,8 @@ identify repeated questions."
       (goto-char (point-min))
       (while (< (point) (point-max))
         (when (get-text-property (point) 'dsh-emacs-user-message)
-          (let* ((raw (buffer-substring-no-properties
-                       (point) (line-end-position)))
-                 (content (if (string-prefix-p "❯ " raw)
-                              (substring raw 2) raw))
+          (let* ((content (buffer-substring-no-properties
+                           (point) (line-end-position)))
                  (preview (if (> (length content) 60)
                               (concat (substring content 0 57) "...")
                             content)))

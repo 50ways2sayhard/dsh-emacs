@@ -1634,33 +1634,46 @@ stays raw for its event-specific consumers.  Unknown types have no payload."
 ;; Turn footer facts are independent of the cumulative session projections.
 (cl-defstruct (dsh-protocol-reply-event
                (:constructor dsh-protocol--make-reply-event))
-  type seq turn time text usage)
+  type seq turn time text usage reason answer-p)
 
 (defun dsh-protocol-reply-event--from-alist (event)
-  "Decode a turn boundary or assistant settlement from wire EVENT.
+  "Decode turn, step, tool-call or assistant facts from wire EVENT.
 USAGE is a normalized plist, or nil when no token counts were reported.
+ANSWER-P marks assistant prose without tool calls, not turn completion.
 Synthetic fork endings have no usable elapsed-time endpoint."
   (let ((type (dsh-protocol--field 'type event)))
-    (when (member type '("turn/start" "turn/end"
+    (when (member type '("turn/start" "turn/end" "step/start" "tool/call"
                          "assistant/message" "assistant/attempt"))
       (let* ((data (dsh-protocol--field 'data event))
+             (reason (dsh-protocol--field
+                      'kind (dsh-protocol--field 'reason data)))
              (raw (dsh-protocol--field 'usage data))
              (counts (mapcar (lambda (key) (dsh-protocol--field key raw))
                              '(inputTokens outputTokens cacheReadTokens
                                            cacheWriteTokens)))
-             (content (dsh-protocol--field
-                       'content (dsh-protocol--field 'message data))))
+             (content (dsh-protocol--objects
+                       (dsh-protocol--field
+                        'content (dsh-protocol--field 'message data))))
+             (text (mapconcat
+                    (lambda (block) (or (dsh-protocol--field 'text block) ""))
+                    (cl-remove-if-not
+                     (lambda (block)
+                       (equal (dsh-protocol--field 'type block) "text"))
+                     content) "\n")))
         (dsh-protocol--make-reply-event
          :type type :seq (dsh-protocol--field 'seq event)
          :turn (dsh-protocol--field 'turn data)
-         :time (unless (equal (dsh-protocol--field
-                              'kind (dsh-protocol--field 'reason data)) "forked")
+         :reason (and (equal type "turn/end") reason)
+         :time (unless (equal reason "forked")
                  (dsh-protocol--field 'time event))
-         :text (mapconcat
-                (lambda (block) (or (dsh-protocol--field 'text block) ""))
-                (cl-remove-if-not
-                 (lambda (block) (equal (dsh-protocol--field 'type block) "text"))
-                 (dsh-protocol--objects content)) "\n")
+         :text text
+         :answer-p (and (equal type "assistant/message")
+                        (not (string-blank-p text))
+                        (not (cl-some
+                              (lambda (block)
+                                (equal (dsh-protocol--field 'type block)
+                                       "tool-call"))
+                              content)))
          :usage (when (cl-some #'numberp counts)
                   (cl-loop for key in '(:input :output :cache-read :cache-write)
                            for count in counts

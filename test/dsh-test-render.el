@@ -71,7 +71,7 @@
              (title-face (and title-pos (get-text-property (1+ title-pos) 'face text)))
              (bold-face (and bold-pos (get-text-property (1+ bold-pos) 'face text))))
         (ert-info ((format "%s" "chat-prefix-and-markdown-render"))
-          (should (and (string-match "❯ hello" text)
+          (should (and (string-match "\nhello\n" text)
                        (member 'dsh-emacs-markdown-header-1
                                (if (listp title-face) title-face (list title-face)))
                        (member 'dsh-emacs-markdown-bold
@@ -332,8 +332,8 @@
                   (link (face-foreground 'dsh-emacs-reference-face nil t)))
               (and title link (not (equal title link)))))))
 
-;; --- Test 27g: one blank line around user messages; assistant messages still
-;; stay tight ---
+;; --- Test 27g: one blank line before and after user messages; assistant
+;; messages still stay tight ---
 (ert-deftest dsh-emacs-test-render-user-message-spaced-above-and-below ()
   :tags '(dsh-unit)
   (let ((buf (generate-new-buffer " *t27g-layout*")))
@@ -356,7 +356,7 @@
           (let* ((user-line
                   (save-excursion
                     (goto-char (point-min))
-                    (when (search-forward "❯ u1" nil t)
+                    (when (search-forward "u1" nil t)
                       (line-number-at-pos (line-beginning-position)))))
                  (above-blank
                   (and user-line
@@ -379,11 +379,398 @@
                             (when (search-forward "a2" nil t)
                               (line-number-at-pos (line-beginning-position))))))
             (ert-info ((format "%s" "user-message-spaced-above-and-below"))
-              (should (and above-blank below-blank)))
+              (should (and above-blank below-blank))
+              (should (string-match-p "a2\n\nu1" (buffer-string))))
             ;; Adjacent assistant messages still stay tight (no blank line)
             (ert-info ((format "%s" "assistant-messages-remain-flush"))
               (should (and a1-line a2-line (= a2-line (1+ a1-line)))))))
       (kill-buffer buf))))
+
+(ert-deftest dsh-emacs-test-render-user-message-beginning-of-line ()
+  :tags '(dsh-unit)
+  (save-window-excursion
+    (with-temp-buffer
+      ;; Keyboard macros run in the selected window's buffer, and exercise
+      ;; command-loop point adjustment around display replacements.
+      (switch-to-buffer (current-buffer))
+      (dsh-emacs-mode)
+      (use-local-map (copy-keymap (current-local-map)))
+      (local-set-key (kbd "C-a") #'beginning-of-line)
+      (dsh-emacs-render-user-message
+       '((type . "user/message") (seq . 1)
+         (data . ((content . [((type . "text")
+                              (text . "first question\nsecond line"))])))))
+      (dolist (text '("first question" "second line"))
+        (goto-char (point-min))
+        (search-forward text)
+        (let ((start (line-beginning-position)))
+          (execute-kbd-macro (kbd "C-a"))
+          (should (= (point) start))
+          ;; Repeated C-a must stay on the same message line.
+          (execute-kbd-macro (kbd "C-a"))
+          (should (= (point) start)))))))
+
+(ert-deftest dsh-emacs-test-render-user-message-copy-line-plain-text ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (dsh-emacs-render-user-message
+     '((type . "user/message") (seq . 1)
+       (data . ((content . [((type . "text")
+                            (text . "first question\n❯ literal prompt"))])))))
+    (let ((kill-ring nil)
+          (interprogram-cut-function nil)
+          (interprogram-paste-function nil))
+      (dolist (text '("first question" "❯ literal prompt"))
+        (goto-char (point-min))
+        (search-forward text)
+        (copy-region-as-kill (line-beginning-position) (line-end-position))
+        (should (equal (substring-no-properties (car kill-ring)) text))
+        ;; Native yank, including a copy command's direct buffer-substring
+        ;; path, must not transplant transcript styling or identity.
+        (let ((raw (buffer-substring (line-beginning-position)
+                                     (line-end-position))))
+          (dolist (copied (list (car kill-ring) raw))
+            (with-temp-buffer
+              (insert-for-yank copied)
+              (should (equal (buffer-string) text))
+              (should-not (text-properties-at (point-min))))))))))
+
+(defconst dsh-emacs-test--work-events
+  '(((type . "turn/start") (seq . 100) (data . ((turn . 7))))
+    ((type . "user/message") (seq . 101)
+     (data . ((content . [((type . "text") (text . "Task question"))]))))
+    ((type . "assistant/message") (seq . 102)
+     (data . ((turn . 7) (step . 1)
+              (message . ((content . [((type . "text")
+                                       (text . "**Intermediate work**"))]))))))
+    ((type . "tool/call") (seq . 103)
+     (data . ((turn . 7) (step . 1) (callId . "work-tool")
+              (name . "read") (arguments . "{\"path\":\"work.txt\"}"))))
+    ((type . "assistant/message") (seq . 104)
+     (data . ((turn . 7) (step . 2)
+              (message . ((content . [((type . "reasoning")
+                                       (text . "Final reasoning"))
+                                      ((type . "text")
+                                       (text . "**Final answer**"))]))))))
+    ((type . "turn/end") (seq . 105)
+     (data . ((turn . 7) (reason . ((kind . "completed")))))))
+  "A task with opening input, intermediate work, tool and final answer.")
+
+(ert-deftest dsh-emacs-test-render-work-details-live-and-history ()
+  :tags '(dsh-unit)
+  (dolist (delivery '(live history prepend))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let* ((dsh-emacs-reply-footer-items nil)
+             (dsh-emacs-stream-markdown-limit 1)
+             (entries (mapcar (lambda (event) (list (cons 'event event)))
+                              dsh-emacs-test--work-events)))
+        (pcase delivery
+          ('live
+           (dolist (event (butlast dsh-emacs-test--work-events))
+             (dsh-emacs-render-event event))
+           (should-not (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+           (dsh-emacs-render-event (car (last dsh-emacs-test--work-events))))
+          ('history (dsh-emacs-render-history-events entries))
+          ('prepend
+           (dsh-emacs-render-history-events (nthcdr 4 entries))
+           (should (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+           (let* ((dsh-emacs--history-insert-marker
+                   (dsh-emacs-render--history-prepend-marker))
+                  (position (marker-position dsh-emacs--history-insert-marker)))
+             (dsh-emacs-render-history-events
+              (cl-subseq entries 0 4) nil 104 :insert-before position :follow-p nil)
+             (set-marker dsh-emacs--history-insert-marker nil))))
+        (while dsh-emacs--markdown-pending
+          (dsh-emacs-render--run-markdown (current-buffer)))
+        (let* ((header (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+               (tool (dsh-emacs-ui-find-block "sess-global" "tool-work-tool"))
+               (answer (text-property-any (point-min) (point-max)
+                                          'dsh-emacs-message-seq 104)))
+          (should header)
+          (should tool)
+          (should answer)
+          (should-not (invisible-p (car header)))
+          (should-not (invisible-p answer))
+          (should (invisible-p (car tool)))
+          (goto-char (point-min))
+          (search-forward "Intermediate work")
+          (should (invisible-p (1- (point))))
+          (goto-char (point-min))
+          (search-forward "Task question")
+          (should-not (invisible-p (1- (point))))
+          (let ((button (button-at (car header))))
+            (should button)
+            (button-activate button)
+            (should-not (invisible-p (car tool)))
+            (should (map-elt (get-text-property (car tool) 'dsh-emacs-ui-state)
+                             :collapsed))
+            ;; A reconnect with no new events must retain the reader's choice.
+            (dsh-emacs-render-history-events entries)
+            (should-not (invisible-p (car tool)))
+            (button-activate button)
+            (should (invisible-p (car tool))))
+          (should (= (how-many "^Completed" (point-min) (point-max)) 1))
+          (dsh-emacs-render--reset-tool-tracking)
+          (should-not (invisible-p (text-property-any
+                                    (point-min) (point-max)
+                                    'dsh-emacs-message-seq 102)))
+          (should-not (dsh-emacs-ui-find-block "sess-global" "work-details-7")))))))
+
+(ert-deftest dsh-emacs-test-render-work-details-completion-duration ()
+  :tags '(dsh-unit)
+  (dolist (case '((250000 "Completed in 4m 10s")
+                  (7000 "Completed in 7s")
+                  (3661000 "Completed in 1h 1m 1s")
+                  (-1000 "Completed") (nil "Completed")))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let ((events (copy-tree dsh-emacs-test--work-events t)))
+        (setf (alist-get 'time (car events)) 1000)
+        (when (car case)
+          (setf (alist-get 'time (car (last events))) (+ 1000 (car case))))
+        (dolist (event events) (dsh-emacs-render-event event))
+        (let* ((header (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+               (caption (lambda ()
+                          (let ((button (button-at (car header))))
+                            (buffer-substring-no-properties
+                             (button-start button) (- (button-end button) 2))))))
+          (should (equal (funcall caption) (cadr case)))
+          (button-activate (button-at (car header)))
+          (should (equal (funcall caption) (cadr case))))))))
+
+(ert-deftest dsh-emacs-test-render-work-details-partial-history ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (let ((entries (mapcar (lambda (event) (list (cons 'event event)))
+                           dsh-emacs-test--work-events)))
+      ;; The default message window commonly begins inside a long task.
+      (dsh-emacs-render-history-events (nthcdr 3 entries))
+      (let* ((state (gethash 7 dsh-emacs-render--reply-turns))
+             (header (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+             (overlay (plist-get state :work-overlay)))
+        (should-not (plist-get state :start-seq))
+        (should header)
+        (should (overlay-buffer overlay))
+        (should-not (invisible-p (text-property-any
+                                  (point-min) (point-max)
+                                  'dsh-emacs-message-seq 104)))
+        (button-activate (button-at (car header)))
+        (let* ((dsh-emacs--history-insert-marker
+                (dsh-emacs-render--history-prepend-marker))
+               (position (marker-position dsh-emacs--history-insert-marker)))
+          (dsh-emacs-render-history-events
+           (cl-subseq entries 0 3) nil 103 :insert-before position :follow-p nil)
+          (set-marker dsh-emacs--history-insert-marker nil))
+        (should (eq overlay (plist-get (gethash 7 dsh-emacs-render--reply-turns)
+                                       :work-overlay)))
+        (should-not (overlay-get overlay 'invisible))
+        (should (= (how-many "^Completed" (point-min) (point-max)) 1))
+        (setq header (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+        (button-activate (button-at (car header)))
+        (goto-char (point-min))
+        (search-forward "Intermediate work")
+        (should (invisible-p (1- (point))))
+        (goto-char (point-min))
+        (search-forward "Task question")
+        (should-not (invisible-p (1- (point))))))))
+
+(ert-deftest dsh-emacs-test-render-work-details-keeps-unsafe-turns-open ()
+  :tags '(dsh-unit)
+  (dolist (case '(disabled error aborted interrupted forked unknown
+                          no-final interleaved later-step later-tool))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let* ((dsh-emacs-fold-work-details (not (eq case 'disabled)))
+             (events (copy-tree dsh-emacs-test--work-events t))
+             (end (car (last events)))
+             (final (nth 4 events)))
+        (pcase case
+          ((or 'error 'aborted 'interrupted 'forked 'unknown)
+           (setf (alist-get 'reason (alist-get 'data end))
+                 (list (cons 'kind (symbol-name case)))))
+          ('no-final
+           (setf (alist-get 'content (alist-get 'message (alist-get 'data final)))
+                 [((type . "reasoning") (text . "No final prose"))]))
+          ('interleaved
+           (setq events
+                 (append (cl-subseq events 0 4)
+                         '(((type . "user/message") (seq . 103)
+                            (data . ((content . [((type . "text")
+                                                   (text . "Wait please"))])))))
+                         (nthcdr 4 events))))
+          ((or 'later-step 'later-tool)
+           (setf (alist-get 'seq end) 107)
+           (setq events
+                 (append (butlast events)
+                         (list (if (eq case 'later-step)
+                                   '((type . "step/start") (seq . 106)
+                                     (data . ((turn . 7) (step . 3))))
+                                 '((type . "tool/call") (seq . 106)
+                                   (data . ((turn . 7) (step . 3)
+                                            (callId . "later") (name . "read")
+                                            (arguments . "{}"))))))
+                         (list end)))))
+        (dolist (event events) (dsh-emacs-render-event event))
+        (ert-info ((format "Work must remain visible for %s" case))
+          (should-not (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+          (goto-char (point-min))
+          (search-forward "Intermediate work")
+          (should-not (invisible-p (1- (point)))))))))
+
+(ert-deftest dsh-emacs-test-render-work-details-stream-keeps-final-and-draft ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (let ((dsh-emacs-stream-markdown-limit 1))
+      (dolist (event (cl-subseq dsh-emacs-test--work-events 0 4))
+        (dsh-emacs-render-event event))
+      (dsh-emacs-render-event
+       '((type . "assistant/chunk") (seq . 104)
+         (data . ((turn . 7) (step . 2)
+                  (chunk . ((type . "reasoning-delta") (index . 0)
+                            (text . "Final reasoning")))))))
+      (dsh-emacs-render-event
+       '((type . "assistant/chunk") (seq . 105)
+         (data . ((turn . 7) (step . 2)
+                  (chunk . ((type . "text-delta") (index . 1)
+                            (text . "**Final answer**")))))))
+      (dsh-emacs-render--flush-stream)
+      (let ((final (copy-tree (nth 4 dsh-emacs-test--work-events) t))
+            (end (copy-tree (nth 5 dsh-emacs-test--work-events) t)))
+        (setf (alist-get 'seq final) 106
+              (alist-get 'seq end) 107)
+        (dsh-emacs-render-event final)
+        (dsh-emacs-render-event end))
+      (while dsh-emacs--markdown-pending
+        (dsh-emacs-render--run-markdown (current-buffer)))
+      (should (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+      (goto-char (point-min))
+      (search-forward "Final answer")
+      (should-not (invisible-p (1- (point))))
+      (goto-char (point-min))
+      (search-forward "Think")
+      (should (invisible-p (1- (point))))
+      (goto-char (point-min))
+      (search-forward "Copy")
+      (should-not (invisible-p (1- (point))))
+      (goto-char (point-max))
+      (insert "Unsent draft")
+      (should-not (invisible-p (1- (point))))
+      (dsh-emacs-render-event
+       '((type . "user/message") (seq . 108)
+         (data . ((content . [((type . "text") (text . "Next task"))])))))
+      (goto-char (point-min))
+      (search-forward "Next task")
+      (should-not (invisible-p (1- (point))))
+      (should (string-suffix-p "Unsent draft" (buffer-string))))))
+
+(ert-deftest dsh-emacs-test-render-work-details-trim-releases-overlay ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (dolist (event dsh-emacs-test--work-events)
+      (dsh-emacs-render-event event))
+    (let* ((state (gethash 7 dsh-emacs-render--reply-turns))
+           (overlay (plist-get state :work-overlay))
+           (origin (plist-get state :work-start))
+           (dsh-emacs-max-buffer-size 30))
+      (should (overlay-buffer overlay))
+      (dsh-emacs-render--trim-buffer)
+      (should-not (overlay-buffer overlay))
+      (should-not (marker-buffer origin))
+      (should-not (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+      (should-not (invisible-p dsh-emacs--input-marker)))))
+
+(ert-deftest dsh-emacs-test-render-work-details-no-empty-control ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (let ((final (copy-tree (nth 4 dsh-emacs-test--work-events) t)))
+      (setf (alist-get 'content (alist-get 'message (alist-get 'data final)))
+            [((type . "text") (text . "Just the answer"))])
+      (dolist (event (list (nth 0 dsh-emacs-test--work-events)
+                          (nth 1 dsh-emacs-test--work-events) final
+                          (nth 5 dsh-emacs-test--work-events)))
+        (dsh-emacs-render-event event))
+      (should-not (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+      (goto-char (point-min))
+      (search-forward "Just the answer")
+      (should-not (invisible-p (1- (point)))))))
+
+(ert-deftest dsh-emacs-test-render-work-details-independent-turns ()
+  :tags '(dsh-unit)
+  (dolist (footers '(nil (copy)))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let* ((dsh-emacs-reply-footer-items footers)
+             (second (copy-tree dsh-emacs-test--work-events t)))
+        (dolist (event second)
+          (cl-incf (alist-get 'seq event) 100)
+          (when (alist-get 'turn (alist-get 'data event))
+            (setf (alist-get 'turn (alist-get 'data event)) 8)))
+        (setf (alist-get 'callId (alist-get 'data (nth 3 second))) "second-tool")
+        (dsh-emacs-render-history-events
+         (mapcar (lambda (event) (list (cons 'event event)))
+                 (append dsh-emacs-test--work-events second)))
+        (let* ((first (gethash 7 dsh-emacs-render--reply-turns))
+               (second (gethash 8 dsh-emacs-render--reply-turns))
+               (one (plist-get first :work-overlay))
+               (two (plist-get second :work-overlay)))
+          (should (overlay-buffer one))
+          (should (overlay-buffer two))
+          (should (< (overlay-end one) (overlay-start two)))
+          (dolist (seq '(104 204))
+            (should-not (invisible-p (text-property-any
+                                      (point-min) (point-max)
+                                      'dsh-emacs-message-seq seq))))
+          (let ((header (dsh-emacs-ui-find-block "sess-global" "work-details-7")))
+            (button-activate (button-at (car header))))
+          (should-not (invisible-p (overlay-start one)))
+          (should (invisible-p (overlay-start two))))))))
+
+(ert-deftest dsh-emacs-test-render-work-details-prepend-during-active-task ()
+  :tags '(dsh-unit)
+  (dolist (human-input '(t nil))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let ((older (copy-tree dsh-emacs-test--work-events t)))
+        (dolist (event older)
+          (cl-decf (alist-get 'seq event) 50)
+          (when (alist-get 'turn (alist-get 'data event))
+            (setf (alist-get 'turn (alist-get 'data event)) 6)))
+        (setf (alist-get 'callId (alist-get 'data (nth 3 older))) "older-tool")
+        (unless human-input
+          (setq older (cl-remove-if
+                       (lambda (event)
+                         (equal (alist-get 'type event) "user/message"))
+                       older)))
+        (dolist (event (cl-subseq dsh-emacs-test--work-events 0 4))
+          (unless (and (not human-input)
+                       (equal (alist-get 'type event) "user/message"))
+            (dsh-emacs-render-event event)))
+        (let* ((dsh-emacs--history-insert-marker
+                (dsh-emacs-render--history-prepend-marker))
+               (position (marker-position dsh-emacs--history-insert-marker)))
+          (dsh-emacs-render-history-events
+           (mapcar (lambda (event) (list (cons 'event event))) older)
+           nil 100 :insert-before position :follow-p nil)
+          (set-marker dsh-emacs--history-insert-marker nil))
+        (dolist (event (nthcdr 4 dsh-emacs-test--work-events))
+          (dsh-emacs-render-event event))
+        (should (dsh-emacs-ui-find-block "sess-global" "work-details-7"))
+        (dolist (seq '(54 104))
+          (should-not (invisible-p (text-property-any
+                                    (point-min) (point-max)
+                                    'dsh-emacs-message-seq seq))))
+        (should (< (overlay-end (plist-get
+                                (gethash 6 dsh-emacs-render--reply-turns)
+                                :work-overlay))
+                   (overlay-start (plist-get
+                                  (gethash 7 dsh-emacs-render--reply-turns)
+                                  :work-overlay))))))))
 
 ;; Reply footers summarize a turn, not the session or just its last step.
 (ert-deftest dsh-emacs-test-render-footer-option-can-disable-row ()
@@ -808,7 +1195,8 @@
   :tags '(dsh-unit)
   (with-temp-buffer
     (dsh-emacs-mode)
-    (let ((dsh-emacs-stream-markdown-limit 1))
+    (let ((dsh-emacs-stream-markdown-limit 1)
+          (dsh-emacs-reply-footer-items '(copy fork usage duration)))
       (dsh-emacs-render-event
        '((type . "turn/start") (seq . 1) (time . 5000) (data . ((turn . 1)))))
       (dsh-emacs-render--start-assistant-stream
@@ -843,6 +1231,73 @@
                   (data . ((turn . 1) (reason . ((kind . "forked")))))))))
     (ert-info ((format "%s" "footer-fork-end-has-no-elapsed-endpoint"))
       (should (null (dsh-protocol-reply-event-time event))))))
+
+;; A footer is painted after its history batch, so a following question may
+;; already own the leading blank line the footer's padding also reserves.
+(ert-deftest dsh-emacs-test-render-footer-history-keeps-one-blank-line ()
+  :tags '(dsh-unit)
+  (dolist (tail '(reply fragment))
+    (with-temp-buffer
+      (dsh-emacs-mode)
+      (let* ((dsh-emacs-fold-work-details nil)
+             (dsh-emacs-reply-footer-items '(copy))
+             (dsh-emacs-stream-markdown-limit 1)
+             (events
+              (append
+               '(((type . "turn/start") (seq . 1) (time . 1000)
+                  (data . ((turn . 1))))
+                 ((type . "user/message") (seq . 2)
+                  (data . ((content . [((type . "text") (text . "First"))]))))
+                 ((type . "assistant/message") (seq . 3)
+                  (data . ((turn . 1) (step . 1)
+                           (message . ((content . [((type . "text")
+                                                    (text . "ANSWER"))])))))))
+               (when (eq tail 'fragment)
+                 '(((type . "tool/call") (seq . 4)
+                    (data . ((turn . 1) (step . 2) (callId . "after")
+                             (name . "read")
+                             (arguments . "{\"path\":\"x\"}"))))))
+               '(((type . "turn/end") (seq . 5) (time . 5000)
+                  (data . ((turn . 1) (reason . ((kind . "completed"))))))
+                 ((type . "user/message") (seq . 6)
+                  (data . ((content . [((type . "text")
+                                        (text . "Second"))]))))))))
+        (dsh-emacs-render-history-events
+         (mapcar (lambda (event) (list (cons 'event event))) events))
+        (while dsh-emacs--markdown-pending
+          (dsh-emacs-render--run-markdown (current-buffer)))
+        (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+          (ert-info ((format "footer history tail=%s" tail))
+            (should (string-match-p "\nCopy\n\nSecond" text))
+            (should-not (string-match-p "\nCopy\n\n\nSecond" text))))))))
+
+;; The muted row must not inherit the fragment title's bold weight.
+(ert-deftest dsh-emacs-test-render-footer-uses-normal-weight-meta-face ()
+  :tags '(dsh-unit)
+  (should (eq 'normal
+              (face-attribute 'dsh-emacs-reply-meta-face :weight nil nil)))
+  (with-temp-buffer
+    (dsh-emacs-mode)
+    (let ((dsh-emacs-fold-work-details nil)
+          (dsh-emacs-reply-footer-items '(copy)))
+      (dsh-emacs-render-history-events
+       (mapcar (lambda (event) (list (cons 'event event)))
+               '(((type . "turn/start") (seq . 1) (time . 1000)
+                  (data . ((turn . 1))))
+                 ((type . "user/message") (seq . 2)
+                  (data . ((content . [((type . "text") (text . "Q"))]))))
+                 ((type . "assistant/message") (seq . 3)
+                  (data . ((turn . 1) (step . 1)
+                           (message . ((content . [((type . "text")
+                                                    (text . "A"))]))))))
+                 ((type . "turn/end") (seq . 4) (time . 5000)
+                  (data . ((turn . 1) (reason . ((kind . "completed")))))))))
+      (goto-char (point-min))
+      (search-forward "Copy")
+      (let ((face (get-text-property (1- (point)) 'face)))
+        ;; Reply meta must precede the title face that `--label-merge' appends.
+        (should (eq 'dsh-emacs-reply-meta-face
+                    (if (listp face) (car face) face)))))))
 
 ;; --- Test 98o: a non-envelope failure response (vendor error body passed
 ;; through) unwraps into a message ---

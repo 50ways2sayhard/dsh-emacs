@@ -139,7 +139,7 @@
               (progn
                 (should (= (window-start first) boundary))
                 (should (= (window-point first) (1+ boundary))))
-            (should (looking-at "[ \t\n]*❯ OLDER QUESTION"))
+            (should (looking-at "[ \t\n]*OLDER QUESTION"))
             (should (= (window-start first) (point)))
             (should (< (point) boundary)))
           (should (= (window-start second) inside))

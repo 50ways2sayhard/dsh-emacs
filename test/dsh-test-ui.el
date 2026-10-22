@@ -1205,5 +1205,220 @@ both followers' prompts above their viewports."
           (should (and (search-backward "─" nil t)
                        (not (memq 'italic (dsh-test--faces-at (match-beginning 0)))))))))))
 
+(ert-deftest dsh-emacs-test-ui-work-details-hides-display-properties ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert (propertize "Icon" 'display "VISIBLE-ICON") " Work\n")
+    (let ((end (point)))
+      (insert "Final answer\n")
+      (let* ((overlay (dsh-emacs-ui-fold-region "display" "details" (point-min) end))
+             (start (overlay-start overlay)))
+        ;; GUI image/replacement display can win over invisibility alone.
+        (should (equal (get-char-property start 'display) ""))
+        (should (equal (get-text-property start 'display) "VISIBLE-ICON"))
+        (dsh-emacs-ui--set-work-details-expanded overlay t)
+        (should (equal (get-char-property start 'display) "VISIBLE-ICON"))
+        (dsh-emacs-ui--set-work-details-expanded overlay nil)
+        (should (equal (get-char-property start 'display) ""))))))
+
+(ert-deftest dsh-emacs-test-ui-work-details-child-replacement-boundaries ()
+  :tags '(dsh-unit)
+  (dolist (ids '(("only") ("first" "last")))
+    (dolist (expanded '(nil t))
+      (with-temp-buffer
+        (cl-labels ((card (id text)
+                     (dsh-emacs-ui-make-fragment
+                      :namespace-id "work" :block-id id :style 'minimal
+                      :label-left text :body (concat text " body"))))
+          (dolist (id ids)
+            (dsh-emacs-ui-update-fragment (card id id) :expanded expanded))
+          (goto-char (point-max))
+          (let ((end (point))
+                (inhibit-read-only t))
+            (insert "Final answer\n")
+            (let ((overlay (dsh-emacs-ui-fold-region
+                            "work" "details" (point-min) end)))
+              (cl-labels
+                  ((check-bounds ()
+                     (let ((header (dsh-emacs-ui-find-block "work" "details"))
+                           (first (dsh-emacs-ui-find-block "work" (car ids)))
+                           (last (dsh-emacs-ui-find-block "work" (car (last ids))))
+                           (answer (save-excursion
+                                     (goto-char (point-min))
+                                     (search-forward "Final answer")
+                                     (match-beginning 0))))
+                       (should (= (overlay-start overlay) (cdr header)))
+                       (should (= (overlay-end overlay) answer))
+                       (should (= (cdr last) answer))
+                       (should (invisible-p (car first)))
+                       (should (invisible-p (1- (cdr last))))
+                       (should-not (invisible-p (car header)))
+                       (should-not (invisible-p answer)))))
+                (check-bounds)
+                (dolist (id ids)
+                  (dsh-emacs-ui-update-fragment
+                   (card id (concat "Changed " id " with more output")))
+                  (check-bounds)
+                  (goto-char (car (dsh-emacs-ui-find-block "work" id)))
+                  (dsh-emacs-ui--toggle-fragment-at-point)
+                  (check-bounds)
+                  (dsh-emacs-ui--toggle-fragment-at-point)
+                  (check-bounds)))
+              ;; Work refreshes retain a manual reveal and exact answer bounds.
+              (dsh-emacs-ui--set-work-details-expanded overlay t)
+              (should (eq overlay
+                          (dsh-emacs-ui-fold-region
+                           "work" "details" (point-min)
+                           (overlay-end overlay) overlay)))
+              (should-not (overlay-get overlay 'invisible)))))))))
+
+(ert-deftest dsh-emacs-test-ui-work-details-controls-and-navigation ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dolist (id '("first" "last" "answer"))
+      (dsh-emacs-ui-update-fragment
+       (dsh-emacs-ui-make-fragment
+        :namespace-id "controls" :block-id id :style 'minimal
+        :label-left id :body (concat id " body"))
+       :expanded (equal id "first")))
+    (let ((overlay (dsh-emacs-ui-fold-region
+                    "controls" "details" (point-min)
+                    (car (dsh-emacs-ui-find-block "controls" "answer")))))
+      (goto-char (point-min))
+      (dsh-emacs-ui-toggle-fragment)
+      (should-not (overlay-get overlay 'invisible))
+      (should-not (map-elt (get-text-property
+                           (car (dsh-emacs-ui-find-block "controls" "first"))
+                           'dsh-emacs-ui-state) :collapsed))
+      (should (map-elt (get-text-property
+                       (car (dsh-emacs-ui-find-block "controls" "last"))
+                       'dsh-emacs-ui-state) :collapsed))
+      (dsh-emacs-ui-toggle-fragment)
+      (should (overlay-get overlay 'invisible))
+      (dsh-emacs-ui-forward-block)
+      (should (= (point) (car (dsh-emacs-ui-find-block "controls" "answer"))))
+      (should-not (invisible-p (point)))
+      (dsh-emacs-ui-backward-block)
+      (should (= (point) (point-min)))
+      (should-not (invisible-p (point)))
+      ;; Search opens only the outer disclosure, keeping inner folds intact.
+      (funcall (overlay-get overlay 'isearch-open-invisible) overlay)
+      (should-not (overlay-get overlay 'invisible))
+      (should (map-elt (get-text-property
+                       (car (dsh-emacs-ui-find-block "controls" "last"))
+                       'dsh-emacs-ui-state) :collapsed))
+      (let* ((button (button-at (point-min)))
+             (start (button-start button))
+             (end (button-end button)))
+        ;; The header keeps its text: no display replacement may sidestep the
+        ;; fragment's width truncation.
+        (should (equal "Completed"
+                       (buffer-substring-no-properties start (- end 2))))
+        (should-not (get-text-property start 'display))
+        ;; The muted face outranks the bold title face `--label-merge' appends.
+        (should (eq 'dsh-emacs-reply-meta-face
+                    (let ((face (get-text-property start 'face)))
+                      (if (listp face) (car face) face))))
+        (let ((icon (get-text-property (1- end) 'display)))
+          (should (if (and (display-graphic-p) (image-type-available-p 'svg))
+                      (and (eq (car-safe icon) 'image)
+                           (string-match-p "M4 10l4-4 4 4"
+                                           (plist-get (cdr icon) :data)))
+                    (equal icon "▴")))))
+      (dsh-emacs-ui-collapse-all)
+      (should (overlay-get overlay 'invisible))
+      (dolist (id '("first" "last" "answer"))
+        (should (map-elt (get-text-property
+                         (car (dsh-emacs-ui-find-block "controls" id))
+                         'dsh-emacs-ui-state) :collapsed)))
+      (dsh-emacs-ui-expand-all)
+      (should-not (overlay-get overlay 'invisible))
+      (dolist (id '("first" "last" "answer"))
+        (should-not (map-elt (get-text-property
+                             (car (dsh-emacs-ui-find-block "controls" id))
+                             'dsh-emacs-ui-state) :collapsed)))
+      (should (= (overlay-end overlay)
+                 (car (dsh-emacs-ui-find-block "controls" "answer")))))))
+
+(ert-deftest dsh-emacs-test-ui-work-details-caption-refreshes ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (insert "work\n")
+    (let ((end (point)))
+      (insert "answer\n")
+      (let ((overlay (dsh-emacs-ui-fold-region
+                      "caption" "details" (point-min) end nil "Completed")))
+        ;; Later timing facts replace the header text itself, not a display
+        ;; string that could sidestep truncation.
+        (should (eq overlay
+                    (dsh-emacs-ui-fold-region
+                     "caption" "details" (point-min) end overlay
+                     "Completed in 4s")))
+        (let* ((header (dsh-emacs-ui-find-block "caption" "details"))
+               (button (button-at (car header))))
+          (should (equal "Completed in 4s"
+                         (buffer-substring-no-properties
+                          (button-start button) (- (button-end button) 2)))))
+        (dsh-emacs-ui--set-work-details-expanded overlay t)
+        (should (eq overlay
+                    (dsh-emacs-ui-fold-region
+                     "caption" "details" (point-min) end overlay
+                     "Completed in 4s")))
+        (should-not (overlay-get overlay 'invisible))))))
+
+(ert-deftest dsh-emacs-test-ui-work-details-narrow-header-keeps-truncation ()
+  :tags '(dsh-unit)
+  (dolist (width '(1 2 12 30))
+    (with-temp-buffer
+      (insert "work\n")
+      (let ((end (point))
+            (caption "Completed in 4m 10s"))
+        (insert "answer\n")
+        (cl-letf (((symbol-function 'dsh-emacs-ui--box-width) (lambda () width)))
+          (let ((overlay (dsh-emacs-ui-fold-region
+                          "narrow" "details" (point-min) end nil caption)))
+            (let* ((header (dsh-emacs-ui-find-block "narrow" "details"))
+                   (text (buffer-substring-no-properties
+                          (car header) (1- (cdr header))))
+                   (button (button-at (car header))))
+              (ert-info ((format "narrow work header width=%d" width))
+                ;; The header never renders wider than the body width.
+                (should (<= (string-width text) width))
+                (should-not (get-text-property (car header) 'display))
+                ;; A chevron that survived truncation carries the icon; a
+                ;; truncated one keeps its ellipsis instead of erroring.
+                (when button
+                  (should (eq (not (null (get-text-property
+                                          (1- (button-end button)) 'display)))
+                              (>= width (length (concat caption " ▾"))))))))
+            ;; Toggling a truncated row is a no-op for the caption, not an error.
+            (dsh-emacs-ui--set-work-details-expanded overlay t)
+            (dsh-emacs-ui--set-work-details-expanded overlay nil)))))))
+
+(ert-deftest dsh-emacs-test-ui-work-details-navigation-from-hidden-content ()
+  :tags '(dsh-unit)
+  (with-temp-buffer
+    (dsh-emacs-ui-update-fragment
+     (dsh-emacs-ui-make-fragment
+      :namespace-id "hidden" :block-id "child" :style 'minimal
+      :label-left "Tool" :body "Output") :expanded t)
+    (goto-char (point-max))
+    (let ((end (point)) (inhibit-read-only t))
+      (insert "Final prose\n")
+      (let ((overlay (dsh-emacs-ui-fold-region
+                      "hidden" "details" (point-min) end)))
+        (goto-char (overlay-start overlay))
+        (dsh-emacs-ui-forward-block)
+        (should-not (invisible-p (point)))
+        (should (= (point) (overlay-end overlay)))
+        (goto-char (overlay-start overlay))
+        (dsh-emacs-ui-backward-block)
+        (should (= (point) (point-min)))
+        (dsh-emacs-ui-expand-all)
+        (goto-char (overlay-start overlay))
+        (dsh-emacs-ui-collapse-all)
+        (should-not (invisible-p (point)))
+        (should (= (point) (point-min)))))))
+
 (provide 'dsh-test-ui)
 ;;; dsh-test-ui.el ends here

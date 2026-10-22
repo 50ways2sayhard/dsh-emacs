@@ -83,9 +83,20 @@ theme's `shadow` face (grey by default); running session dots are orange.
 | `M-p` / `M-n` | Recall previous / next input |
 | `TAB` | Complete commands, skills, references, local paths, or words |
 
+User messages stay left aligned with a teal left rail and light inner
+spacing, with one blank line before and after each question. Answers
+remain frameless; completion summaries leave a small gap above the answer without changing its font.
 Ordinary Emacs undo applies only to the input, leaving the transcript intact.
+Copying a user-message line yields its authored text; pasting does not carry
+the conversation rail or spacing into the destination.
 `M-x imenu` navigates the conversation's questions. Click a folded tool or
-thinking header, or press `RET` on it, to expand it.
+thinking header, or press `RET` on it, to expand it. Completed tasks also fold
+their thinking, tool calls and intermediate replies behind **Completed…**,
+leaving the final answer visible. Click that row or press `RET` to reveal the
+work; individual card folds are preserved. Completed tasks fold their loaded
+work even when the history window omits the task start. Active, failed and
+interrupted tasks stay open. Set `dsh-emacs-fold-work-details` to `nil` and
+reopen the chat buffer to disable task folding.
 Visible chat windows follow new output independently while their cursors and
 views stay near the draft, preserving each editing position. Windows reading
 older messages stay put; `C-c >` returns that window to the draft and following.
@@ -156,7 +167,9 @@ whale and elapsed clock; without it, activity captions remain static.
 Native mode lines always keep the plain `DSH` major-mode label; the separate
 whale-tail animation, caption and clock appear only during activity.
 Doom keeps its static whale logo and existing layout.
-Completed replies provide configurable Copy, Fork, token, and time controls.
+Completed replies show Copy, Fork and tokens together on the left, in order.
+Elapsed time appears in the compact Completed disclosure above the answer; add `duration` to
+`dsh-emacs-reply-footer-items` to also show it in the footer.
 
 See [Mode line](docs/modeline.md),
 [Reply footer](docs/customization.md#reply-footer), and

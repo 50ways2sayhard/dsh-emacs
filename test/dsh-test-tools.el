@@ -1198,7 +1198,7 @@ Lets a test drive a malformed content value through the result path."
           (let* ((user-line
                   (save-excursion
                     (goto-char (point-min))
-                    (when (search-forward "❯ u2" nil t)
+                    (when (search-forward "u2" nil t)
                       (line-number-at-pos (line-beginning-position)))))
                  (tool-line
                   (save-excursion

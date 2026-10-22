@@ -29,6 +29,16 @@ minor) and stay undated until the release is cut.
 
 ### Added
 
+- **Fold completed task work details**: successful tasks collapse thinking,
+  tool calls and intermediate replies behind a muted **Completed in …**
+  summary with a matching SVG chevron directly above the final answer.
+  Without full timing data it shows **Completed**.
+  `RET` toggles the row while preserving
+  individual card folds. Completed tasks fold their loaded work even when the
+  history window omits the task start; active, failed and interrupted tasks
+  stay open. The summary keeps the window's truncation instead of widening a
+  narrow row. Set `dsh-emacs-fold-work-details` to `nil` and reopen the chat
+  buffer for the flat transcript. (rationale: postmortem/142)
 - **Pulsing running-subagent icon and count**: while the connection is live
   and at least one direct child is running, the mode-line subagent icon and
   child count pulse together between their muted tint and the running orange
@@ -39,12 +49,30 @@ minor) and stay undated until the release is cut.
 
 ### Changed
 
+- **Clearer conversation grouping**: left-aligned user messages use a
+  three-pixel teal rail instead of a full-width highlight, with a wider gap
+  after the rail, light top/bottom padding and one blank line before each
+  question to keep turns distinct without excessive space above the rail.
+  Completed summaries leave a small gap above answers without a divider;
+  theme font sizes stay unchanged, and summary/footer text uses the muted
+  reply face at normal weight. Footers default to Copy, Fork
+  and tokens together on the left, in configured order; `duration` remains
+  available in `dsh-emacs-reply-footer-items`.
+  (rationale: postmortem/145)
+
 - **Next Message above the Goal Row**: the queued-message preview now leads the
   composer chrome, with the active goal row beneath it. Faces, actions and the
   `C-c C-g` / `C-c C-q` keys are unchanged.
 
 ### Fixed
 
+- **Copy user-message text cleanly**: copy-line and region copies no longer
+  include a hidden prompt; yanking them also drops transcript styling and
+  identity properties. Authored `❯` characters remain intact, including in
+  Imenu labels. (rationale: postmortem/146)
+- **Keep C-a on the user-message line**: navigating to the first line's
+  beginning reaches its first authored character instead of jumping to the
+  preceding blank line.
 - **Use the renamed PTC preset**: the new-session picker resolves PTC mode to
   `ptc` rather than `code`, including before the server roster arrives. Update
   any `dsh-emacs-default-preset` setting from `"code"` to `"ptc"`.

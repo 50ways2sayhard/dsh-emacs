@@ -223,7 +223,25 @@ Used by the Composer Next Message glyph."
 
 (defface dsh-emacs-user-block-face
   '((t))
-  "User message card background (no background, matches default)."
+  "User message body, without a background or typography overrides."
+  :group 'dsh-emacs-faces)
+
+(defface dsh-emacs-user-border-face
+  '((((class color) (background light)) :background "#348694")
+    (((class color) (background dark)) :background "#4f9eaf")
+    (t :inherit shadow))
+  "Soft teal left border of user messages on graphical displays."
+  :group 'dsh-emacs-faces)
+
+(defface dsh-emacs-reply-meta-face
+  '((((class color) (background light)) :inherit shadow
+     :foreground "#68727d" :weight normal :underline nil)
+    (((class color) (background dark)) :inherit shadow
+     :foreground "#8b949e" :weight normal :underline nil)
+    (t :inherit shadow :weight normal :underline nil))
+  "Readable completion summaries and reply footers using theme typography.
+The explicit normal weight cancels the fragment title's bold face; callers
+must place this face before the title face in the face list."
   :group 'dsh-emacs-faces)
 
 (defface dsh-emacs-assistant-face
