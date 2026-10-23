@@ -70,6 +70,10 @@ minor) and stay undated until the release is cut.
 
 ### Fixed
 
+- **Keep links looking like links**: a link label authored as inline code,
+  bold, italic or strikethrough keeps the link's own colour and underline;
+  the label's styling still applies underneath instead of overriding the
+  link. Backticked labels no longer render as plain inline code.
 - **Keep Markdown file destinations intact**: emphasis and inline code no
   longer rewrite characters in link/image targets, including incomplete
   streamed destinations. Balanced or escaped parentheses and optional titles

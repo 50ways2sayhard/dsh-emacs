@@ -524,15 +524,39 @@ all stream markers.  Return the (START . END) formatted range."
                         (set-marker cursor (max cursor (cdr range)))))
                     ;; Text properties survive emphasis's delete/reinsert;
                     ;; resource markers do not.  Freeze only the styled labels.
+                    ;; Inline code and emphasis style a label after the link
+                    ;; face was applied, prepending their face; put the link
+                    ;; face back in front so the link colour stays visible
+                    ;; over the label's code/emphasis styling.
                     (let ((pos (point-min)))
                       (while (< pos (point-max))
                         (let ((end (next-single-property-change
                                     pos 'dsh-emacs-markdown-resource nil
                                     (point-max))))
                           (when (get-text-property pos 'dsh-emacs-markdown-resource)
+                            (when (get-text-property
+                                   pos 'dsh-emacs-markdown-link-label)
+                              ;; Make the link face lead each label's face
+                              ;; list.  `add-face-text-property' would keep a
+                              ;; duplicate at the tail when the face is
+                              ;; already there, and the label may contain
+                              ;; several styled runs.
+                              (let ((at pos))
+                                (while (< at end)
+                                  (let* ((next (next-single-property-change
+                                                at 'face nil end))
+                                         (value (get-text-property at 'face))
+                                         (faces (cond ((listp value) value)
+                                                      (value (list value)))))
+                                    (put-text-property
+                                     at next 'face
+                                     (cons 'dsh-emacs-markdown-link
+                                           (delq 'dsh-emacs-markdown-link faces)))
+                                    (setq at next)))))
                             (put-text-property pos end 'dsh-emacs-markdown-frozen t)
                             (remove-text-properties
-                             pos end '(dsh-emacs-markdown-resource nil)))
+                             pos end '(dsh-emacs-markdown-resource nil
+                                       dsh-emacs-markdown-link-label nil)))
                           (setq pos end))))
                     (when render-images
                       (dsh-emacs-markdown--replace-image-file-paths
@@ -937,8 +961,9 @@ as links after their outer resource has been rendered."
     (&key avoid-ranges (resources nil resources-supplied-p) defer-freeze)
   "Render links in RESOURCES, or scan outside AVOID-RANGES.
 Return the rendered records.  With DEFER-FREEZE, mark labels for freezing
-only after prose styling.  Capture the rendering buffer's directory for
-clicks made after switching buffers."
+only after prose styling, and tag them so the link face keeps priority over
+that styling (see `dsh-emacs-markdown-render').  Capture the rendering
+buffer's directory for clicks made after switching buffers."
   (let (rendered)
     (dolist (resource (if resources-supplied-p resources
                         (dsh-emacs-markdown--inline-resources
@@ -959,7 +984,10 @@ clicks made after switching buffers."
                    (if defer-freeze 'dsh-emacs-markdown-resource
                      'dsh-emacs-markdown-frozen) t
                    'rear-nonsticky '(dsh-emacs-markdown-frozen
-                                     dsh-emacs-markdown-resource)))
+                                     dsh-emacs-markdown-resource
+                                     dsh-emacs-markdown-link-label))
+             (when defer-freeze
+               (put-text-property start end 'dsh-emacs-markdown-link-label t)))
             (push resource rendered)))))
     (nreverse rendered)))
 

@@ -1034,6 +1034,19 @@
         (call-interactively command))
       (should (equal opened "https://example.test/a(b)")))))
 
+(ert-deftest dsh-emacs-test-markdown-resource-link-face-leads-label-styling ()
+  :tags '(dsh-unit)
+  (dolist (case '(("**label**" dsh-emacs-markdown-bold)
+                  ("*label*" dsh-emacs-markdown-italic)
+                  ("~~label~~" dsh-emacs-markdown-strikethrough)
+                  ("`label`" dsh-emacs-markdown-inline-code)))
+    (let* ((rendered (dsh-emacs-markdown-convert
+                      (format "[%s](https://example.test/x)" (car case))))
+           (face (ensure-list (get-text-property 0 'face rendered))))
+      (should (equal rendered "label"))
+      (should (eq (car face) 'dsh-emacs-markdown-link))
+      (should (memq (cadr case) face)))))
+
 (ert-deftest dsh-emacs-test-markdown-resource-emphasis-around-link ()
   :tags '(dsh-unit)
   (dolist (case '(("**" dsh-emacs-markdown-bold)
