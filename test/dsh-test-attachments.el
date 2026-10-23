@@ -4,6 +4,9 @@
 
 (require 'dsh-test-support)
 
+;; Terminal-only Emacs builds omit this graphical capability variable.
+(defvar image-types)
+
 (defun dsh-test--has-text-property-p (prop)
   "Non-nil when some character in the current buffer carries PROP."
   (let ((pos (point-min))
@@ -151,13 +154,14 @@
   (let ((png-b64 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
         (buf (generate-new-buffer " *dsh-image-size*"))
         (dsh-emacs-render-image-thumbnail-lines 3)
+        (image-types '(png))
         (sizes nil))
     (unwind-protect
         (with-current-buffer buf
           (dsh-emacs-mode)
           (dsh-emacs-modeline-setup)
-          ;; No graphics display in batch: pretend one so the image spec is
-          ;; built, and capture the bounds instead of creating a real image.
+          ;; Supply PNG support as well as a graphical display: terminal-only
+          ;; builds omit `image-types'.  Capture bounds without decoding images.
           (cl-letf (((symbol-function 'display-graphic-p)
                      (lambda (&optional _frame) t))
                     ((symbol-function 'frame-char-height)
