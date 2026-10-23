@@ -203,6 +203,16 @@ browsing.  Set to nil to disable trimming."
   :type '(choice integer (const nil))
   :group 'dsh-emacs-render)
 
+(defcustom dsh-emacs-render-image-thumbnail-lines 4
+  "Height of one image thumbnail in a user message, in text lines.
+Every image attachment renders below the text inside a square box of this
+size, in wrapping rows like dsh web's message gallery (64px tiles); a lone
+image uses the same style as a gallery.  Aspect ratio is preserved, so a wide
+picture fills the box's width and is shorter than its height.  RET or mouse-1
+opens the original."
+  :type 'integer
+  :group 'dsh-emacs-render)
+
 (defcustom dsh-emacs-fold-work-details t
   "Whether to use Web-style task and activity disclosures.
 When a turn ends, thinking and tool cards between visible messages fold
@@ -1715,18 +1725,25 @@ providers may close earlier blocks after later blocks have already streamed."
     (let ((type (intern (substring media-type (length "image/")))))
       (and (memq type image-types) type))))
 
+(defun dsh-emacs-render--image-box-pixels (lines)
+  "Return the side in pixels of a square image box LINES text lines tall."
+  (max 1 (* (frame-char-height) (max 1 lines))))
+
 (defun dsh-emacs-render--attachment-image (data media-type)
   "Build an image spec from decoded image DATA for MEDIA-TYPE.
-Returns nil when DATA is empty, the type is unsupported, or the
-display cannot render images (terminal Emacs keeps the placeholder)."
+The picture fits one compact gallery tile
+\(`dsh-emacs-render-image-thumbnail-lines') whether the message carries one
+image or several.  Returns nil when DATA is empty, the type is unsupported,
+or the display cannot render images (terminal Emacs keeps the placeholder)."
   (when (and (display-graphic-p)
              (stringp data)
              (> (length data) 0))
-    (let ((type (dsh-emacs-render--image-type-from-media media-type)))
+    (let ((type (dsh-emacs-render--image-type-from-media media-type))
+          (box (dsh-emacs-render--image-box-pixels
+                dsh-emacs-render-image-thumbnail-lines)))
       (when type
         (ignore-errors
-          (create-image data type t
-                        :max-width (dsh-emacs-markdown--image-max-width)))))))
+          (create-image data type t :max-width box :max-height box))))))
 
 (defun dsh-emacs-render--open-image-data (data name)
   "Show raw image DATA (unibyte string) in a dedicated image buffer."
@@ -1809,7 +1826,9 @@ already in the event); an attachment ref is fetched via
          (data (and data-b64 (ignore-errors (base64-decode-string data-b64)))))
     (if data
         (dsh-emacs-render--apply-attachment
-         buffer id (dsh-emacs-render--attachment-image data media-type) data)
+         buffer id
+         (dsh-emacs-render--attachment-image data media-type)
+         data)
       (when attachment-id
         (dsh-emacs-render--request-attachment
          (dsh-emacs--active-session-id) attachment-id
@@ -1818,6 +1837,38 @@ already in the event); an attachment ref is fetched via
             buffer id
             (dsh-emacs-render--attachment-image bytes media-type)
             bytes)))))))
+
+(defun dsh-emacs-render--image-gallery-columns ()
+  "Return how many thumbnails fit on one user-message line.
+Widths are measured in pixels, so the count follows the buffer's window;
+the user-message rail costs five columns of the line."
+  (let* ((window (or (get-buffer-window (current-buffer) t)
+                     (selected-window)))
+         (width (window-body-width window t))
+         (box (dsh-emacs-render--image-box-pixels
+               dsh-emacs-render-image-thumbnail-lines))
+         (gap (frame-char-width))
+         (usable (max 0 (- width (* 5 gap)))))
+    (max 1 (/ usable (+ box gap)))))
+
+(defun dsh-emacs-render--image-gallery (placeholders)
+  "Lay out image PLACEHOLDERS as thumbnail rows that fit the window.
+PLACEHOLDERS are propertized strings, one per image, each keeping its own
+identity properties.  A row joins its images with one space and rows are
+joined with newlines, so the asynchronous fill-in still finds every slot."
+  (let ((per-row (dsh-emacs-render--image-gallery-columns))
+        (rows nil)
+        (row nil)
+        (count 0))
+    (dolist (placeholder placeholders)
+      (push placeholder row)
+      (setq count (1+ count))
+      (when (>= count per-row)
+        (push (mapconcat #'identity (nreverse row) " ") rows)
+        (setq row nil count 0)))
+    (when row
+      (push (mapconcat #'identity (nreverse row) " ") rows))
+    (mapconcat #'identity (nreverse rows) "\n")))
 
 (defun dsh-emacs-render--image-placeholder (id block)
   "Build the `[image …]' placeholder string tagged ID for image BLOCK."
@@ -1828,6 +1879,8 @@ already in the event); an attachment ref is fetched via
                 'dsh-emacs-attachment-id attachment-id
                 'dsh-emacs-image-name name
                 'keymap dsh-emacs-render--image-keymap
+                'help-echo (format "%s — RET or mouse-1 opens it"
+                                   (or name "Image"))
                 'mouse-face 'highlight)))
 
 (defun dsh-emacs-render--file-placeholder (block)
@@ -1890,13 +1943,15 @@ event seq."
          (insert-point (dsh-emacs-render--input-insert-point))
          (block-id (dsh-emacs-render--make-block-id event))
          (specs nil)
-         (placeholders nil))
+         (images nil)
+         (files nil))
     (prog1
         (when (dsh-emacs-render--user-authored-p event)
-          ;; Placeholder lines follow the body in content order, one per image
-          ;; or file attachment: an image gets a unique id so the async
-          ;; fill-in can locate its line, a file is a static chip (the
-          ;; durable reference keeps no local path to open).
+          ;; Attachments follow the body: every image is one compact thumbnail
+          ;; in a wrapping gallery row, the same style whether the message
+          ;; carries one image or several.  Files stay one static chip per
+          ;; line.  An image gets a unique id so the asynchronous fill-in can
+          ;; locate its slot.
           (let ((index 0))
             (dolist (block content)
               (pcase (dsh-protocol-content-block-kind block)
@@ -1905,15 +1960,19 @@ event seq."
                  (let ((id (format "%s-img-%d" block-id index)))
                    (setq specs (append specs (list (cons id block))))
                    (push (dsh-emacs-render--image-placeholder id block)
-                         placeholders)))
+                         images)))
                 ("file"
-                 (push (dsh-emacs-render--file-placeholder block)
-                       placeholders)))))
-          (when placeholders
-            (setq text (concat text
-                               (and (not (string-empty-p text)) "\n")
-                               (mapconcat #'identity (nreverse placeholders)
-                                          "\n"))))
+                 (push (dsh-emacs-render--file-placeholder block) files)))))
+          (let ((gallery (and images (dsh-emacs-render--image-gallery
+                                      (nreverse images))))
+                (chips (and files (mapconcat #'identity (nreverse files)
+                                             "\n"))))
+            (when (or gallery chips)
+              (setq text (concat text
+                                 (and (not (string-empty-p text)) "\n")
+                                 (mapconcat #'identity
+                                            (delq nil (list gallery chips))
+                                            "\n")))))
           (prog1
               (dsh-emacs-render--insert-chat-message
                text
@@ -2006,10 +2065,12 @@ inspected.  An empty body leaves the row unfoldable."
   "Render a `user/message' event with a left rail and the user block face.
 The block gets two blank lines before and one after (see
 `dsh-emacs-render--insert-chat-message' and `dsh-emacs-ui--blank-above-preserve').
-Image content blocks render as `[image …]' placeholders on their own
-line below the text; inline base64 shows immediately, attachment refs
-fill in when `session/attachment' settles (see
-`dsh-emacs-render--show-attachment').  File content blocks render as
+Image content blocks render below the text like dsh web's message gallery:
+every image is a compact thumbnail in wrapping rows (four text lines tall by
+default), whether the message carries one image or several.
+Inline base64 shows immediately, attachment refs fill in when
+`session/attachment' settles (see `dsh-emacs-render--show-attachment') and
+RET or mouse-1 opens the original.  File content blocks render as
 display-only `[file: name · size]' lines (see
 `dsh-emacs-render--file-placeholder').
 A host-injected goal round continuation renders its trigger notice instead

@@ -53,6 +53,14 @@ minor) and stay undated until the release is cut.
 
 ### Changed
 
+- **Web-style image gallery for message attachments**: every image attachment
+  now shows as a compact thumbnail in wrapping rows below the text instead of
+  one full-width picture per line, mirroring dsh web's message gallery — a
+  lone image uses the same style as a multi-image gallery. Inline bytes show
+  immediately, attachment refs fill in when the fetch settles, and `RET` or
+  `mouse-1` opens the original. The new
+  `dsh-emacs-render-image-thumbnail-lines` option sets the height in text
+  lines. (rationale: postmortem/151)
 - **Clearer conversation grouping**: left-aligned user messages use a
   three-pixel teal rail instead of a full-width highlight, with a wider gap
   after the rail, light top/bottom padding and one blank line before each

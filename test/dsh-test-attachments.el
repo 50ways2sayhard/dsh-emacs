@@ -105,6 +105,89 @@
                            (equal stash (base64-decode-string png-b64)))))))
       (kill-buffer buf))))
 
+;; --- Test 48b2: several image blocks share one gallery row (web-style
+;; thumbnails), each keeping its own identity and stashed bytes ---
+(ert-deftest dsh-emacs-test-attachments-image-gallery-row ()
+  :tags '(dsh-unit)
+  (let ((png-b64 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+        (buf (generate-new-buffer " *dsh-image-gallery*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (dsh-emacs-mode)
+          (dsh-emacs-modeline-setup)
+          (dsh-emacs-render-event
+           (json-read-from-string
+            (concat "{\"type\":\"user/message\",\"seq\":3,\"data\":{\"content\":["
+                    "{\"type\":\"text\",\"text\":\"two shots\"},"
+                    "{\"type\":\"image\",\"mediaType\":\"image/png\","
+                    "\"data\":\"" png-b64 "\",\"name\":\"a.png\"},"
+                    "{\"type\":\"image\",\"mediaType\":\"image/png\","
+                    "\"data\":\"" png-b64 "\",\"name\":\"b.png\"}]}}")))
+          (let* ((text (buffer-substring (point-min) (point-max)))
+                 (a-pos (string-match "\\[image: a\\.png\\]" text))
+                 (b-pos (string-match "\\[image: b\\.png\\]" text))
+                 (a-id (and a-pos (get-text-property
+                                   (1+ a-pos) 'dsh-emacs-image-id text)))
+                 (b-id (and b-pos (get-text-property
+                                   (1+ b-pos) 'dsh-emacs-image-id text)))
+                 (a-stash (and a-pos (get-text-property
+                                      (1+ a-pos) 'dsh-emacs-image-data text))))
+            ;; Both pictures occupy ONE row (a space, not a newline, between
+            ;; them), so a multi-image message reads as a gallery rather than
+            ;; a stack of full-width pictures; the async fill-in still finds
+            ;; each slot by its own id.
+            (ert-info ((format "%s" "image-gallery-row"))
+              (should (string-match
+                       "two shots\n\\[image: a\\.png\\] \\[image: b\\.png\\]"
+                       text))
+              (should (and a-id b-id (not (equal a-id b-id))))
+              (should (equal a-stash (base64-decode-string png-b64))))))
+      (kill-buffer buf))))
+
+;; --- Test 48b3: a lone image uses the same thumbnail bounds as a gallery
+;; image (one style for every image count) ---
+(ert-deftest dsh-emacs-test-attachments-image-thumbnail-size-uniform ()
+  :tags '(dsh-unit)
+  (let ((png-b64 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+        (buf (generate-new-buffer " *dsh-image-size*"))
+        (dsh-emacs-render-image-thumbnail-lines 3)
+        (sizes nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (dsh-emacs-mode)
+          (dsh-emacs-modeline-setup)
+          ;; No graphics display in batch: pretend one so the image spec is
+          ;; built, and capture the bounds instead of creating a real image.
+          (cl-letf (((symbol-function 'display-graphic-p)
+                     (lambda (&optional _frame) t))
+                    ((symbol-function 'frame-char-height)
+                     (lambda (&optional _frame) 20))
+                    ((symbol-function 'create-image)
+                     (lambda (_data _type &optional _data-p &rest props)
+                       (push (cons (plist-get props :max-width)
+                                   (plist-get props :max-height))
+                             sizes)
+                       nil)))
+            (dsh-emacs-render-event
+             (json-read-from-string
+              (concat "{\"type\":\"user/message\",\"seq\":4,\"data\":{\"content\":["
+                      "{\"type\":\"text\",\"text\":\"one\"},"
+                      "{\"type\":\"image\",\"mediaType\":\"image/png\","
+                      "\"data\":\"" png-b64 "\",\"name\":\"one.png\"}]}}")))
+            (dsh-emacs-render-event
+             (json-read-from-string
+              (concat "{\"type\":\"user/message\",\"seq\":5,\"data\":{\"content\":["
+                      "{\"type\":\"text\",\"text\":\"two\"},"
+                      "{\"type\":\"image\",\"mediaType\":\"image/png\","
+                      "\"data\":\"" png-b64 "\",\"name\":\"a.png\"},"
+                      "{\"type\":\"image\",\"mediaType\":\"image/png\","
+                      "\"data\":\"" png-b64 "\",\"name\":\"b.png\"}]}}")))
+            (ert-info ((format "%s" "image-thumbnail-size-uniform"))
+              ;; Newest first: the two gallery tiles, then the lone image.
+              ;; Three 20-pixel text lines bound both dimensions to 60 pixels.
+              (should (equal sizes '((60 . 60) (60 . 60) (60 . 60)))))))
+      (kill-buffer buf))))
+
 ;; --- Test 48c: attachmentId reference block goes through
 ;; session/attachment backfill placeholder ---
 (ert-deftest dsh-emacs-test-attachments-image-ref-fetched-via-session-attachment ()
