@@ -209,8 +209,12 @@
 ;; stdout/stderr rendering ---
 (ert-deftest dsh-emacs-test-shell-shell-run-finished-output-and-exit ()
   :tags '(dsh-unit)
+  ;; The command under test uses POSIX heredoc / redirection syntax, so pin
+  ;; the shell (the user's interactive shell may be fish, which rejects <<).
   (let ((buf (generate-new-buffer " *dsh-shell-run*"))
-        (done nil))
+        (done nil)
+        (shell-file-name "/bin/sh")
+        (shell-command-switch "-c"))
     (unwind-protect
         (progn
           (with-current-buffer buf
