@@ -50,6 +50,109 @@
                    (not (string-match-p "\\*\\*" rendered))
                    (not (string-match-p "`" rendered)))))))
 
+;; The zebra band is one background across the whole row: border glyphs
+;; included, header excluded.  A face layered per cell instead leaves an
+;; unbanded gap at every pipe, which is what this pins down.
+(ert-deftest dsh-emacs-test-markdown-table-zebra-band-crosses-row ()
+  :tags '(dsh-unit)
+  ;; The batch frame has no theme to derive a color from, and this test
+  ;; is about where the band lands, not which color it carries.  Pin a
+  ;; background so the renderer keeps the face symbol as the band value.
+  (face-spec-set 'dsh-emacs-markdown-table-zebra
+                 '((t :background "#123456")))
+  (unwind-protect
+      (let* ((rendered (dsh-emacs-markdown-render
+                        "| Name | Value |\n| --- | --- |\n| a | 1 |\n| b | 2 |\n| c | 3 |\n"))
+             (lines (split-string rendered "\n"))
+             (offsets (let ((sum 0))
+                        (mapcar (lambda (line)
+                                  (prog1 sum
+                                    (setq sum (+ sum 1 (length line)))))
+                                lines)))
+             (faces-of
+              (lambda (idx)
+                (let ((start (nth idx offsets)))
+                  (cl-loop for pos from start
+                           below (+ start (length (nth idx lines)))
+                           collect (get-text-property pos 'face rendered))))))
+        (ert-info ((format "%s" "markdown-table-zebra-band-crosses-row"))
+          (let ((second-data-row (funcall faces-of 3)))
+            ;; Every position of the second data row carries the band,
+            ;; including both border glyphs.
+            (should (cl-every (lambda (face)
+                                (memq 'dsh-emacs-markdown-table-zebra
+                                      (ensure-list face)))
+                              second-data-row))
+            (should (memq 'dsh-emacs-markdown-table-border
+                          (ensure-list (car second-data-row))))
+            (should (memq 'dsh-emacs-markdown-table-border
+                          (ensure-list (car (last second-data-row))))))
+          ;; The header and the first data row stay unbanded.
+          (dolist (idx '(0 2))
+            (should-not (cl-some (lambda (face)
+                                   (memq 'dsh-emacs-markdown-table-zebra
+                                         (ensure-list face)))
+                                 (funcall faces-of idx))))))
+    (face-spec-set 'dsh-emacs-markdown-table-zebra '((t)))))
+
+;; The band color is read from the frame's theme on every render: the
+;; default background pulled slightly toward the foreground, so light,
+;; dark and tinted themes keep their own hue instead of a fixed gray.
+;; Batch frames cannot resolve real colors, so the check mocks the color
+;; layer.
+(ert-deftest dsh-emacs-test-markdown-table-zebra-color-follows-theme ()
+  :tags '(dsh-unit)
+  (cl-letf (((symbol-function 'face-attribute)
+             (lambda (face attr &rest _)
+               (cond ((and (eq face 'default) (eq attr :background))
+                      "#101010")
+                     ((and (eq face 'default) (eq attr :foreground))
+                      "#f8f8f8")
+                     (t 'unspecified))))
+            ((symbol-function 'color-name-to-rgb)
+             (lambda (color &rest _)
+               (cond ((string= color "#101010")
+                      '(0.0627 0.0627 0.0627))
+                     ((string= color "#f8f8f8")
+                      '(0.9725 0.9725 0.9725))))))
+    (should (equal (dsh-emacs-markdown--table-zebra-face (selected-window))
+                   '(:background "#232323"))))
+  ;; A frame with no resolvable default colors (plain terminal) falls
+  ;; back to the neutral gray chosen by `background-mode'.
+  (cl-letf (((symbol-function 'face-attribute)
+             (lambda (&rest _) 'unspecified))
+            ((symbol-function 'frame-parameter)
+             (lambda (&rest _) 'dark)))
+    (should (equal (dsh-emacs-markdown--table-zebra-face (selected-window))
+                   '(:background "#30353f"))))
+  ;; Terminal frames report the color *names* `unspecified-bg' and
+  ;; `unspecified-fg'.  Resolving them is what broke table rendering in
+  ;; batch: they must be recognized as "no color" and skipped.
+  (cl-letf (((symbol-function 'face-attribute)
+             (lambda (face attr &rest _)
+               (cond ((and (eq face 'default) (eq attr :background))
+                      "unspecified-bg")
+                     ((and (eq face 'default) (eq attr :foreground))
+                      "unspecified-fg")
+                     (t 'unspecified))))
+            ((symbol-function 'color-name-to-rgb)
+             (lambda (color &rest _)
+               (if (member color '("unspecified-bg" "unspecified-fg"))
+                   (error "resolved terminal color name %s" color)
+                 '(0 0 0))))
+            ((symbol-function 'frame-parameter)
+             (lambda (&rest _) 'dark)))
+    (should (equal (dsh-emacs-markdown--table-zebra-face (selected-window))
+                   '(:background "#30353f"))))
+  ;; A background customized on the face itself wins over derivation and
+  ;; is passed through untouched.
+  (face-spec-set 'dsh-emacs-markdown-table-zebra
+                 '((t :background "#123456")))
+  (unwind-protect
+      (should (eq (dsh-emacs-markdown--table-zebra-face (selected-window))
+                  'dsh-emacs-markdown-table-zebra))
+    (face-spec-set 'dsh-emacs-markdown-table-zebra '((t)))))
+
 ;; Pixel paths use the target frame even when it is not the selected frame.
 (ert-deftest dsh-emacs-test-markdown-table-pixel-paths-use-the-destination-frame ()
   :tags '(dsh-unit)

@@ -517,6 +517,20 @@ Table wrapping measures each character's face-aware width once per cell and
 reuses it for fit checks and word boundaries. The measurements live only for
 that wrap call, so later renders use the current text and font settings.
 
+Body rows alternate between plain and banded: the second, fourth, … data row
+of a table carries `dsh-emacs-markdown-table-zebra` across its whole width,
+border glyphs included, so the stripe is one continuous band instead of
+per-cell highlights. The band color follows the active theme: each render
+blends the frame's `default` background slightly toward its foreground, so
+light, dark and tinted themes keep their own hue instead of a fixed gray.
+Terminal frames, which report no theme background to blend, use a neutral
+light/dark gray. Set `dsh-emacs-markdown-table-zebra-stripe` to nil for
+plain rows; give the face an explicit `:background` to pin a color, or
+customize its other attributes to change the band. Bands stop at the row's
+right border — extending them to the window edge would turn the table into
+a full-width stripe across the transcript. Already-rendered tables keep the
+color they were rendered with; a theme switch applies to new renders.
+
 | Face | Description |
 |---|---|
 | `dsh-emacs-markdown-bold` | Bold |
@@ -530,7 +544,7 @@ that wrap call, so later renders use the current text and font settings.
 | `dsh-emacs-markdown-blockquote` | Blockquote |
 | `dsh-emacs-markdown-table-header` | Table header |
 | `dsh-emacs-markdown-table-border` | Table border |
-| `dsh-emacs-markdown-table-zebra` | Table zebra striping |
+| `dsh-emacs-markdown-table-zebra` | Alternating table row bands (zebra-cross) |
 
 Customize the faces above for transcript Markdown. The renderer does not use
 the `dsh-emacs-markdown-*-face` definitions in `dsh-emacs-faces.el`.

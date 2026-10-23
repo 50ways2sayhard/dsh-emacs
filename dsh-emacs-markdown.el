@@ -44,8 +44,9 @@
 ;;   divider     `---' / `***' / `___'    rendered as an underlined rule line
 ;;   fenced code ```LANG\nX\n```          body syntax-highlighted via LANG mode
 ;;   tables      `| A | B |' grid rows    rendered with aligned columns,
-;;                                         unicode borders, header/zebra rows
-;;                                         and wrap-to-window-width support
+;;                                         unicode borders, header rows and
+;;                                         zebra-cross bands, and
+;;                                         wrap-to-window-width support
 ;;
 ;; All dsh-emacs-markdown-* faces inherit from the conventional faces
 ;; (`bold', `italic', `org-level-N', etc.) so default rendering is
@@ -60,6 +61,7 @@
 
 (eval-when-compile
   (require 'cl-lib))
+(require 'color)
 (require 'map)
 (require 'seq)
 (require 'org-faces)
@@ -141,8 +143,18 @@
   :group 'dsh-emacs-markdown)
 
 (defface dsh-emacs-markdown-table-zebra
-  '((t :inherit default))
-  "Face for alternating (zebra) data rows in tables (no background)."
+  '((t))
+  "Face for alternating (zebra-cross) data rows in tables.
+The background fills every column and the border glyphs of the row,
+so the stripes read as one band across the table.  The renderer puts
+the band on each physical line of a wrapped row, never on the
+newline, so it stops at the row's right border.  By default the
+background is derived from the frame's `default' face: its
+background blended slightly toward its foreground, so the band
+follows the active theme's hue and contrast instead of a fixed gray.
+Frames without a known background (plain terminals) get a neutral
+light/dark gray instead.  Give this face a `:background' to pin an
+explicit color; the renderer then uses the face as-is."
   :group 'dsh-emacs-markdown)
 
 (defface dsh-emacs-markdown-source-block
@@ -177,7 +189,9 @@ When nil, fall back to ASCII pipes and dashes.")
   "Fraction of window width to use as max table width when wrapping.")
 
 (defvar dsh-emacs-markdown-table-zebra-stripe t
-  "When non-nil, alternate row backgrounds in tables for readability.")
+  "When non-nil, paint alternate table data rows as zebra-cross bands.
+The band covers the whole row, borders included; its color follows
+the frame's theme through `dsh-emacs-markdown-table-zebra'.")
 
 (defvar dsh-emacs-markdown-language-mapping
   '(("elisp" . "emacs-lisp")
@@ -2129,12 +2143,16 @@ via different paths and drift sub-pixel on their right edge."
     (insert (if unicode "┤" "|"))
     (put-text-property start (point) 'face 'dsh-emacs-markdown-table-border)))
 
-(cl-defun dsh-emacs-markdown--insert-table-data-row (&key processed-cells col-widths row-face window)
+(cl-defun dsh-emacs-markdown--insert-table-data-row
+    (&key processed-cells col-widths row-face band-face window)
   "Insert the rendered data row at point, possibly multi-line.
 
 PROCESSED-CELLS is the list of propertized cell strings.
 COL-WIDTHS is the list of column widths.  ROW-FACE, when non-nil,
 is layered on top of the row content (preserving inline faces).
+BAND-FACE, when non-nil, is layered across each whole physical line,
+border pipes included and newlines excluded, so a background face
+reads as one continuous band that stops at the row's right border.
 WINDOW, when given, is forwarded to `dsh-emacs-markdown--pad-table-string'
 for pixel-accurate padding of non-ASCII content.
 
@@ -2200,7 +2218,9 @@ logical rows (skipping the visual continuation lines)."
                (put-text-property (1+ start) (+ start 2)
                                   'dsh-emacs-markdown-table-cell-start t))))
          wrapped col-widths force-pixel-flags))
-      (insert pipe))))
+      (insert pipe)
+      (when band-face
+        (add-face-text-property (line-beginning-position) (point) band-face t)))))
 
 (cl-defun dsh-emacs-markdown--preprocess-table (&key rows window)
   "Parse cells in ROWS and compute natural column widths.
@@ -2321,6 +2341,47 @@ output."
         (setq props (cddr props))))
     (nreverse carried)))
 
+(defun dsh-emacs-markdown--table-zebra-face (window)
+  "Return the face value painting one zebra-cross table row on WINDOW.
+A background customized on `dsh-emacs-markdown-table-zebra' (by the
+user or a theme) wins and the face symbol is returned unchanged.
+Otherwise return an anonymous face whose background is derived from
+the frame's `default' colors: the background blended slightly toward
+the foreground, so the band inherits the theme's hue instead of a
+fixed gray.  Frames that report no background (plain terminals) fall
+back to a neutral light/dark gray; nil means the row gets no band."
+  (let ((frame (window-frame window)))
+    (if (not (eq 'unspecified
+                 (face-attribute 'dsh-emacs-markdown-table-zebra
+                                 :background frame)))
+        'dsh-emacs-markdown-table-zebra
+      (let* ((bg-name (face-attribute 'default :background frame))
+             (fg-name (face-attribute 'default :foreground frame))
+             ;; Terminal frames answer with these names instead of a
+             ;; color; there is nothing to blend there.
+             (bg (and (stringp bg-name)
+                      (not (string= bg-name "unspecified-bg"))
+                      (color-name-to-rgb bg-name)))
+             (fg (and (stringp fg-name)
+                      (not (string= fg-name "unspecified-fg"))
+                      (color-name-to-rgb fg-name))))
+        (cond
+         ((and bg fg)
+          ;; 8% toward the foreground: visible as a surface, but still
+          ;; quiet enough to stay a background on any theme.
+          (list :background
+                (format "#%02x%02x%02x"
+                        (round (* 255 (+ (* 0.92 (nth 0 bg))
+                                         (* 0.08 (nth 0 fg)))))
+                        (round (* 255 (+ (* 0.92 (nth 1 bg))
+                                         (* 0.08 (nth 1 fg)))))
+                        (round (* 255 (+ (* 0.92 (nth 2 bg))
+                                         (* 0.08 (nth 2 fg))))))))
+         ((eq 'dark (frame-parameter frame 'background-mode))
+          (list :background "#30353f"))
+         ((eq 'light (frame-parameter frame 'background-mode))
+          (list :background "#eaeef3")))))))
+
 (cl-defun dsh-emacs-markdown--render-table-source (&key source window)
   "Render SOURCE (markdown table text) to a propertized string.
 
@@ -2372,6 +2433,10 @@ prone to a few-pixel drift on emoji-heavy tables."
                             target-width)
                          natural-widths))
            (data-row-num 0)
+           ;; Resolve the band once per table, not per row: the color
+           ;; depends only on the frame's theme.
+           (zebra-face (and dsh-emacs-markdown-table-zebra-stripe
+                            (dsh-emacs-markdown--table-zebra-face window)))
            (first t))
       ;; Cells are strings now; reuse this buffer for the output.
       (erase-buffer)
@@ -2386,9 +2451,8 @@ prone to a few-pixel drift on emoji-heavy tables."
                               (not is-header)
                               (not is-separator)
                               (= (mod data-row-num 2) 1)))
-               (row-face (cond
-                          (is-header 'dsh-emacs-markdown-table-header)
-                          (is-zebra 'dsh-emacs-markdown-table-zebra))))
+               (row-face (and is-header 'dsh-emacs-markdown-table-header))
+               (band-face (and is-zebra zebra-face)))
           (unless (or is-header is-separator)
             (setq data-row-num (1+ data-row-num)))
           (unless first (insert "\n"))
@@ -2399,6 +2463,7 @@ prone to a few-pixel drift on emoji-heavy tables."
              :processed-cells processed-cells
              :col-widths col-widths
              :row-face row-face
+             :band-face band-face
              :window window))))
       (buffer-string))))
 
