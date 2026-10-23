@@ -229,6 +229,29 @@ all staged attachments; blank input uses the staged file names. Each file's
 list. File uploads happen only at submission; the media-type and size options
 above still control how files are accepted.
 
+## Sending editor context
+
+The `dsh-emacs-send-*` commands bring the region, the file at point, dired's
+marked files, the line under point or a screenshot into the chat input
+without sending it; see [Sending editor context](editor-context.md). They
+have no default keybindings, so bind the ones you use in your own
+configuration, for example:
+
+```elisp
+(define-key dsh-emacs-mode-map (kbd "C-c C-s") #'dsh-emacs-send-dwim)
+```
+
+A sent file becomes an `@` mention, an image file is staged through the same
+attachment list as `C-c C-a`, and a region or line becomes a fenced text
+block labeled with its file and line range.
+
+`dsh-emacs-send-screenshot-command` is the command used by
+`dsh-emacs-send-screenshot`: a list of the program and its arguments, where
+each argument containing `%s` is expanded to a temporary PNG path. The
+default is `("screencapture" "-i" "-x" "%s")` on macOS and nil elsewhere;
+set it to an equivalent command on other platforms, or leave it nil to keep
+the command unavailable.
+
 ## Reply footer
 
 `dsh-emacs-reply-footer-items` controls the row below a completed turn's

@@ -63,6 +63,16 @@ minor) and stay undated until the release is cut.
   tint. It stops when the last child settles or the connection drops. The
   tooltip and mouse-1 picker are unchanged.
 
+- **Send editor context into the chat input**: `M-x dsh-emacs-send-dwim`
+  sends what the current context suggests — dired's marked files, the active
+  region, the file at point, or the line at point (in a chat buffer it reads
+  a file name); `dsh-emacs-send-region`, `dsh-emacs-send-file`,
+  `dsh-emacs-send-other-file` and `dsh-emacs-send-screenshot` send one kind
+  explicitly, and their `-to` variants (or a prefix argument) first ask which
+  open chat receives it. Text is appended to the chat input and never
+  submitted, so `C-c C-c` still sends. Files become `@` mentions, regions and
+  lines become fenced text, and images are staged as attachments.
+  (rationale: postmortem/143)
 ### Changed
 
 - **Web-style image gallery for message attachments**: every image attachment

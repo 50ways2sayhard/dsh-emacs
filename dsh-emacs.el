@@ -90,6 +90,7 @@
 (require 'dsh-emacs-command)
 (require 'dsh-emacs-skill)
 (require 'dsh-emacs-reference)
+(require 'dsh-emacs-send)
 (require 'dsh-emacs-shell)
 (require 'dsh-emacs-session)
 (require 'dsh-emacs-reload)

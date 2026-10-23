@@ -140,6 +140,15 @@ line itself. See [Question and approval prompts](docs/customization.md#questions
 - **Attachments** are staged with `C-c C-a`, clipboard paste, or drag-and-drop.
   `C-c C-c` sends them with your input; a blank input uses their file names.
   See [Attachment staging](docs/customization.md#attachment-staging).
+- **Editor context** is sent into the chat input by `M-x
+  dsh-emacs-send-dwim` (dired's marked files, the region, the file at point,
+  or the line at point); `dsh-emacs-send-region`, `dsh-emacs-send-file`,
+  `dsh-emacs-send-other-file` and `dsh-emacs-send-screenshot` send one kind
+  explicitly, and their `-to` variants (or a prefix argument) first ask which
+  open chat receives it. Files become `@` mentions, regions and lines become
+  fenced text, and images are staged as attachments; nothing is sent before
+  `C-c C-c`. There are no default keybindings for these commands. See
+  [Sending editor context](docs/editor-context.md).
 - **`!git status`** runs locally in the session's workspace. Its output is
   neither sent to the model nor saved in server history. Plain path completion
   also uses the machine running Emacs; use `@` for remote server files.

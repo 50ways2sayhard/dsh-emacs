@@ -26,6 +26,7 @@ dsh-emacs/
 ├── dsh-emacs-reference.el    # @ reference completion, chips and navigation
 ├── dsh-emacs-composer.el     # Composer chrome: Next Message, Goal and Attachments rows above the input
 ├── dsh-emacs-interaction.el  # Question/approval forms in the Composer, answers, late answers
+├── dsh-emacs-send.el         # Send editor context (region, file, line, screenshot) into a chat input
 ├── dsh-emacs-reload.el       # Local source reload and bounded presentation refresh
 └── dsh-emacs-session.el      # Session list card view
 ```
@@ -476,6 +477,47 @@ and releases both markers when no rows remain. A content/layout signature
 avoids rewriting unchanged rows; resize reflows Next Message even without a
 goal. The input prompt remains a plain `❯ ` run, with no queue-prefix scanning
 or text matching needed to remove stale previews.
+
+## Editor context sends (`dsh-emacs-send.el`)
+
+The send commands own one transition: editor state → text or attachments
+already present in a chat's input area, never a submission. They do not opt
+into a second send path — `C-c C-c` remains the only submit, exactly as if
+the text had been typed. The module owns four pieces:
+
+- **Target resolution** (`dsh-emacs-send--auto-target`): the current chat
+  buffer, else the live chat whose session cwd contains `default-directory`,
+  else the only live chat, else `completing-read` over live chat buffer
+  names. Liveness is `derived-mode-p 'dsh-emacs-mode` plus a buffer-local
+  `dsh-emacs--buffer-session`; `buffer-list` order supplies recency. The `-to`
+  commands and a prefix argument call `dsh-emacs-send--prompt-target`
+  directly. Session cwd comes from `dsh-emacs--chat-cwd` (session cache with
+  workspace fallback), not from the target buffer's `default-directory`, so a
+  chat whose buffer was never synced still resolves correctly.
+- **Insertion** (`dsh-emacs-send--deliver`): validates the target, stages
+  attachments with `dsh-emacs--stage-attachments` (the same list and Composer
+  refresh as `C-c C-a`), appends text at `dsh-emacs--input-end` with
+  `inhibit-read-only`, and pops to the target. Appending inserts a blank line
+  first when `dsh-emacs--get-input` is non-empty, so an existing draft is
+  never replaced.
+- **Context text** (`dsh-emacs-send--context-text`): files become `@path`
+  mentions through `dsh-emacs-reference--format-file-mention` (relative to the
+  target chat's cwd when the file is inside it, absolute otherwise); a region
+  or line becomes an `@file (lines A-B):` header plus a fenced block with the
+  major mode's language. Buffers without a file are labeled by buffer name.
+  Fence length grows past backtick runs in the body. An `@` mention has no
+  line-range grammar, which is why the body is inlined instead of referenced.
+- **Image exception and screenshots**: `dsh-emacs-send--classify` routes paths
+  that `dsh-emacs--attachable-file` accepts as images to attachment staging
+  (a filesystem read cannot show the model pixels), while every other path
+  stays a mention. `dsh-emacs-send-screenshot` captures through
+  `dsh-emacs-send-screenshot-command` into a `make-temp-file` PNG, deletes it
+  after reading the bytes into an attachment, and fails with `user-error`
+  when capture is cancelled or configured off.
+
+Tests live in [test/dsh-test-send.el](../test/dsh-test-send.el) and cover the
+region format, draft appending, relative mentions, cwd target preference,
+prompted targets, the image exception and screenshot staging.
 
 ## Undo (`dsh-emacs.el`)
 
