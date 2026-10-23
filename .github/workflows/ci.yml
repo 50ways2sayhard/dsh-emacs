@@ -22,7 +22,7 @@ concurrency:
 jobs:
   verify:
     name: verify (Emacs ${{ matrix.emacs }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -35,7 +35,7 @@ jobs:
           - emacs: '31.1'
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Emacs
         uses: jcs090218/setup-emacs@master
