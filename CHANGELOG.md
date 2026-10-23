@@ -10,6 +10,18 @@ minor) and stay undated until the release is cut.
 
 ### Breaking Changes
 
+- **Questions and approvals are answered in the Composer, not the
+  minibuffer**: `ask` questions no longer open a `completing-read` prompt and
+  approvals no longer ask `y-or-n-p`. Requests render as forms in the
+  Composer above the `❯` input line, and the draft is the answer field, so
+  `C-c C-c` answers the pending question instead of sending while one waits
+  (a prefix argument still sends). `dsh-emacs-question-skip-key`,
+  `dsh-emacs-question-help-display` and `M-x dsh-emacs-question-preview` are
+  removed without aliases; the reader keymap that bound the skip key is gone
+  with them. `C-c C-k` now declines a request, `C-c C-u a` allows an approval
+  once, `C-c C-u s` skips the current question, and `C-c C-p`
+  (`M-x dsh-emacs-answer-question`) focuses the form instead of reading an
+  answer. (rationale: postmortem/142)
 - **Remove unused Lisp helper APIs**: `dsh-emacs-modeline-set-cwd`,
   `dsh-emacs-modeline-set-branch`, `dsh-emacs-modeline-teardown` and
   `dsh-emacs-usage-p` are removed without aliases. External callers must

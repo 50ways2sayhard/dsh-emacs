@@ -251,12 +251,12 @@ sessionReferenceResolver) is otherwise untouched by 0.2.0:
 2. **The `account/*` and `workspace/initializeDefault` arg changes do not apply
    to dsh-emacs**: the client calls neither namespace.
 3. **Timed questions are adopted (§4.25).** dsh-emacs claims a timed
-   question's foreground wait while its prompt is on screen, renders the
-   expired-window result as `pending`, and answers a `continued` call later
+   question's foreground wait while its composer form is pending, keeps the
+   expired-window question as a late form, and answers a `continued` call later
    through `userQuestions/answer` (`M-x dsh-emacs-answer-question`), completing
-   the original ask card from the projection (postmortem/073).
+   the original ask card from the projection (postmortem/073, postmortem/142).
 4. **Localized approval reasons are adopted (§11.5).** `displayReason` is
-   decoded at the protocol boundary and selected before notification/queueing,
+   decoded at the protocol boundary and selected before notification/recording,
    using `dsh-emacs-approval-language` or the Emacs message locale
    (postmortem/074). `schedule`, `productAnalytics` and the four new host emits
    remain unused; `user-question-reply` messages are intentionally hidden.
@@ -682,9 +682,8 @@ Subsequent downstream frames:
   `rejected` (`{error:{name,message,code?,details?}}`). The response to
   `$events/result` is `{ok:true}` (value omitted). After the host receives a
   cancellation (a `cancel` frame or the session ending), a pending waterfall no
-  longer needs an answer. dsh-emacs removes the queued item by `eventId`; if the
-  corresponding question or approval is being displayed in the minibuffer, it
-  closes it immediately and does not send a stale outcome.
+  longer needs an answer. dsh-emacs retires the matching form by `eventId`;
+  the form disappears from the chat's composer and no stale outcome is sent.
 - The `request` of an `approval/request` waterfall (after agent/signal stripping) =
   `{toolName, callId?, reason?, displayReason?}`; **0.2.0** adds
   `displayReason?: {en: string, [locale]: string}`, a presentation-only
@@ -705,7 +704,8 @@ Subsequent downstream frames:
   not the protocol. **0.2.0** adds optional `wait?: {callId, timed?: true}`: a
   timed foreground wait that can expire while the question stays answerable — an
   answerer that wants to show a countdown attaches to
-  `userQuestions/attachWait` (§4.25) before starting its local timer, and a
+  `userQuestions/attachWait` (§4.25) before starting its local timer (dsh-emacs
+  claims it while the question's composer form is pending; postmortem/142), and a
   continued question is later answered through `userQuestions/answer` rather
   than this waterfall. Request changes rejects with `error.name = "cancelled"`,
   returning the host to waiting for feedback. The answer value =
@@ -1868,9 +1868,10 @@ continued, is answered here instead. The end-to-end recipe is §11.1.
   codes (`extends HarnessError`, **not** `RemoteError`), so on the wire the
   `code` is `gateway/internal` and only the message survives — a client cannot
   route on `DELEGATED_CALLER` / `CALLER_NOT_LIVE` / `BAD_ANSWER` / `REPLY_QUEUED`.
-- dsh-emacs **does** call both verbs (postmortem/073): while a timed question
-  is being read it holds `userQuestions/attachWait` so the window cannot expire
-  mid-prompt, and `M-x dsh-emacs-answer-question` submits a `continued` call
+- dsh-emacs **does** call both verbs (postmortem/073, postmortem/142): while a
+  timed question's composer form is pending it holds `userQuestions/attachWait`
+  so the window cannot expire mid-form, and `M-x dsh-emacs-answer-question`
+  submits a `continued` call
   through `userQuestions/answer`. The `wait` field of the request (§3.3) is how
   it learns the call id; `userQuestions/attachWait` for a `wait` without
   `timed` (the indefinite form) yields no frames and is not called.
@@ -2728,10 +2729,11 @@ projection cell `{active, settled}`.
    higher-seq-wins (§9); a missing key is a capability signal, not an unknown
    value.
 
-**dsh-emacs** (postmortem/073): holds `attachWait` around the read, renders the
-expired result as `❓ Ask question · pending`, answers a continued call with
-`M-x dsh-emacs-answer-question` (`C-c C-p`), and completes the original card from
-`settled`. Dormant against a 0.1.7 server (no `wait`, no cell).
+**dsh-emacs** (postmortem/073, postmortem/142): holds `attachWait` while the
+question's composer form is pending, keeps the expired window as a late form,
+answers a continued call with `M-x dsh-emacs-answer-question` (`C-c C-p`), and
+completes the original card from `settled`. Dormant against a 0.1.7 server (no
+`wait`, no cell).
 
 ### 11.2 Platform account (`account/*`) — unused
 

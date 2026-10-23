@@ -140,7 +140,8 @@
           (ert-info ((format "%s" "copy-dwim-keybinding"))
             (should (eq (lookup-key dsh-emacs-mode-map (kbd "C-c C-w"))
                         #'dsh-emacs-copy-dwim))
-            (should (null (lookup-key dsh-emacs-mode-map (kbd "C-c C-k"))))))
+            (should (eq (lookup-key dsh-emacs-mode-map (kbd "C-c C-k"))
+                           #'dsh-emacs-interaction-decline))))
       (kill-buffer buf))))
 
 (ert-deftest dsh-emacs-test-copy-copy-assistant-message-errors-without-replies ()

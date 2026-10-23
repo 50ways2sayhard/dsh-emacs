@@ -4,13 +4,26 @@
 
 (require 'dsh-test-support)
 
-(ert-deftest dsh-emacs-test-reload-rejects-each-active-interaction ()
+(ert-deftest dsh-emacs-test-reload-rejects-pending-form ()
   :tags '(dsh-unit)
-  (dolist (active '((question . "question-event")
-                    (approval . "approval-event")
-                    (late-answer)))
-    (let ((dsh-emacs--interaction-active active))
-      (should-error (dsh-emacs-reload) :type 'user-error))))
+  (let ((chat (get-buffer-create " *reload-pending-form*"))
+        (dsh-emacs--chat-buffers (make-hash-table :test 'equal)))
+    (unwind-protect
+        (with-current-buffer chat
+          (dsh-emacs-mode)
+          (setq-local dsh-emacs--buffer-session "sess-reload")
+          (puthash "sess-reload" chat dsh-emacs--chat-buffers)
+          (setq-local dsh-emacs-interaction--requests
+                      (list (dsh-emacs-interaction--make-request
+                             :kind 'question :id "evt" :event-id "evt"
+                             :state 'pending)))
+          (should (dsh-emacs-interaction--pending-p))
+          (should-error (dsh-emacs-reload) :type 'user-error))
+      (when (buffer-live-p chat) (kill-buffer chat))))
+  (cl-letf (((symbol-function 'dsh-emacs-interaction--pending-p)
+             (lambda () nil)))
+    ;; No pending form: other reload guards still apply, but this one must not fire.
+    (should (null (dsh-emacs-interaction--pending-p)))))
 
 ;; Exercise real source reload in a fresh Emacs, not this suite's mocks.
 (ert-deftest dsh-emacs-test-reload-reload-sources-preserve-state-and-refresh-definitions ()

@@ -76,6 +76,12 @@ then close the chat buffer and reopen the same session from the session list.
 ```elisp
 (setq dsh-emacs-fold-work-details nil)
 ```
+The same release answers questions and approvals in the composer instead of
+the minibuffer. `dsh-emacs-question-skip-key`,
+`dsh-emacs-question-help-display` and `M-x dsh-emacs-question-preview` are
+removed without aliases; remove these entries from personal configuration.
+See [Questions and approvals](#questions-and-approvals) below and
+[decision 142](../postmortem/142-inline-question-forms.md).
 
 ## Reloading local source
 
@@ -115,7 +121,6 @@ The most commonly used options, straight in your config:
 (setq dsh-emacs-input-history-cross-session nil)   ; M-p / M-n recall only the current session's prompts (nil, default); t = recall prompts from every session
 (setq dsh-emacs-word-completion-limit 100000)      ; how many characters above the input TAB searches when completing an ordinary word from the draft/transcript (nil = whole buffer)
 (setq dsh-emacs-busy-enter-behavior 'queue)          ; what C-c C-c does while a turn runs: `queue` lines input up as the next turn (default), `steer` wakes the running agent before its next step, `stop` interrupts like before; `C-u C-c C-c` explicitly sends a nonempty message with steer mode regardless of this setting or the local busy indicator, a blank input with no staged attachments interrupts a running turn, and `C-c C-b` interrupts explicitly (C-c C-q manages the queue)
-(setq dsh-emacs-question-skip-key "C-c C-s") ; key that skips the current ask question inside the reader (nil = no shortcut; empty input also skips)
 (setq dsh-emacs-ui-label-separator "·")            ; separator between Think/Tool title and its right-side summary ("" = plain gap)
 (setq dsh-emacs-tool-titles '(("pwsh" . "PowerShell"))) ; tool name -> display title overrides (icons stay per variant; unnamed tools get a humanized name, e.g. grep -> "Grep")
 (setq dsh-emacs-attach-media-types '("image/png" "image/jpeg" "image/webp" "image/gif")) ; image types sent inline (`C-c C-a' file attach, `C-c C-v' clipboard paste, `M-x yank-media'); every other file is uploaded at submit time
@@ -445,6 +450,16 @@ and leaves the raw reply visible. See
 
 ## Approval prompts
 
+An approval arrives as a form in the chat's composer, directly above the
+input line: `⚠ Approval · tool` with the call's command line and the localized
+reason, then `Allow once` and `Reject` rows. `RET` or `mouse-1` on a row
+decides, as do `C-c C-u a` (allow the oldest approval once) and `C-c C-k`
+(reject the oldest pending request). Nothing reads the minibuffer, so an
+approval in one session does not interrupt typing in another, and the draft
+stays available: `C-c C-c` still sends it. The decision is one-shot — there is
+no allow-always shortcut in the form; automatic approval belongs to dsh policy
+presets (see [Permission presets](#permission-presets)).
+
 `dsh-emacs-approval-language` selects the language of approval reasons supplied
 by a dsh 0.2.0 host. Its default, **nil**, uses the first nonempty value from
 `system-messages-locale`, `LC_ALL`, `LC_MESSAGES`, and `LANG`, then English.
@@ -461,97 +476,89 @@ suffixes are accepted (`zh_CN.UTF-8` selects `zh-cn`, then `zh`). Empty or
 invalid translation values are skipped. Older hosts without localized reasons
 keep displaying their original text.
 
-The selected reason is fixed when the approval enters the queue, keeping the
-prompt and notification consistent. Notifications still prefer the actual
-command when it is available. This option selects host-provided text only;
-it does not translate commands, the yes/no reader, or the saved audit record.
+The selected reason is fixed when the request arrives, keeping the form and
+notification consistent. Notifications still prefer the actual command when
+it is available. This option selects host-provided text only; it does not
+translate commands, the approval form, or the saved audit record.
 
-## `ask` question prompts
+## Questions and approvals
 
-Each question is one minibuffer read. The question text is the prompt, the
-options are the completion candidates, and each candidate carries its own
-description as a completion annotation (visible in the `*Completions*`
-buffer or in the frontend's list), styled with `dsh-emacs-meta-face` — the
-same face the transcript's ask card gives it, rather than whatever
-`completions-annotations` default the frontend would otherwise apply.
-Nothing is toggled in place and the reader never reopens, so the menu can
-neither flicker nor reorder.
+`ask` questions and approval requests both render in the owning chat buffer's
+composer, directly above the `❯ ` input line. Nothing is read synchronously,
+so the event stream keeps running, a request in one session never interrupts
+typing in another, and a request stays answerable at any pace — switch
+buffers, keep working, and answer it later.
 
-| Key | Single choice | Multiple choices |
-|---|---|---|
-| typing | Narrows the candidates as usual | The answer itself, comma-separated |
-| `RET` | Accept the chosen candidate | Submit every comma-separated value |
-| `C-c C-s` (default) | Skip the question | Skip the question |
-| empty input | Skip the question | Skip the question |
-| `C-g` | Abandon the whole question group | Abandon the whole question group |
+The oldest question form owns the input line; later requests render as muted
+queued rows (`? Question · header — queued behind the form above`, Nerd Font help-circle when available). Up to
+three forms are visible at once; beyond that a summary row counts the rest,
+and the oldest request is always shown. Approvals can be decided in any order
+because each carries its own rows.
 
-Multiple choice uses Emacs' standard `completing-read-multiple`: type the
-options separated by `crm-separator` (default `,`), for example `2,3` or
-`alpha,beta`. Both the number and the label work — the number is part of the
-candidate, and a bare number addresses the option at that position — so
-either form round-trips to the same answer. Values are submitted in the order
-the question offered the options, not the order they were typed. The prompt
-says `2,3 or names, or your own text; empty = skip`. An unambiguous
-prefix of a label resolves to it (`alph` finds `Alpha`); an ambiguous prefix
-is not guessed and instead becomes the answer text, exactly like an
-unmatched input at any Emacs completion prompt — there is no separate
-"type an answer" candidate, the reader's text *is* the answer.  A
-single-choice question accepts exactly one value.
+A question form shows a `? Question 1/2 · header` title (Nerd Font `nf-md-help_circle_outline` when available), the question text and detail wrapped to the Composer width (long URLs hard-break without an indent so copy/paste stays intact, and `http(s)` links are clickable), option cells packed across as many rows as needed instead of being ellipsized, and a hint. The draft text in the input line is the answer:
 
-The skip shortcut is controlled by `dsh-emacs-question-skip-key`; nil disables
-it.  It uses a prefix key because the reader's text is the answer, so a bare
-letter would make that letter untypable. Questions without options read free text directly and skip on empty input.
+| Draft content | Answer |
+|---|---|
+| empty | Skips the question |
+| an option number or label | Selects that option |
+| comma-separated numbers or labels | Selects those options on a multi-select question |
+| anything else | Free-text answer |
 
-`dsh-emacs-question-help-display` controls the echo-area detail:
+Single-select option rows answer on `RET` / `mouse-1`. Multi-select rows
+toggle their number into the comma-separated draft so you can keep picking,
+then `C-c C-c` sends; the draft stays editable after staging. An unmatched
+token becomes a custom answer, matching dsh web's per-question semantics;
+submitted options follow the question's option order, not the order they were
+typed.
 
-| Value | Display |
-|-------|---------|
-| `echo-area` (default) | The question's own detail in the bottom echo area, without message logging |
-| `nil` | No detail; answering is unchanged |
+| Key | Action |
+|---|---|
+| `C-c C-c` | Answer the current question (or the batch) instead of sending |
+| `C-u C-c C-c` | Send the draft as a message; the form waits |
+| `C-c C-k` | Decline the oldest request |
+| `C-c C-u a` | Allow the oldest approval once |
+| `C-c C-u d` | Decline the oldest request |
+| `C-c C-u s` | Skip the current question (answer it empty) |
+| `C-c C-u f` | Move point to the input line |
 
-```elisp
-(setq dsh-emacs-question-help-display nil)
-```
-
-Only the question's detail goes to the echo area; option descriptions ride
-along with their candidates instead, so they do not compete for that space.
-Command errors and status messages take priority. On exit, cleanup removes
-only the question's own message and preserves an unrelated message that has
-replaced it.
+`C-c C-k` declines a live question batch as a whole, so the host aborts that
+`ask` (the same effect the closed prompt used to have); a late form is
+dismissed locally. An approval always consumes its rows, never the draft, so
+`C-c C-c` cannot send one by accident. `M-x dsh-emacs-reload` refuses while a
+form is pending — answer or decline it first. Desktop notifications still
+announce arrivals (`Question: …` / `Approval: …`), and a plan sent for review
+keeps its own `*dsh Plan:` buffer instead of a composer form.
 
 ### Timed questions (dsh 0.2.0)
 
 A dsh 0.2.0 `ask_user_question` call may carry a foreground window (120
-seconds by default). While the prompt is on screen Emacs holds the host's
-foreground wait, so the window cannot expire and discard what you are typing.
-Submitting keeps that protection until the host responds.
-If the window does close before an answer — for example because the question
-was queued behind another session's prompt — the question becomes **pending**
-instead of lost:
+seconds by default). While the form is pending, Emacs holds the host's
+foreground wait with a `userQuestions/attachWait` claim, so the window cannot
+expire while you are typing; the claim is released when the answer is
+acknowledged.
 
-- the transcript's ask row reads `❓ Ask question · pending`, and its expanded
-  body keeps the questionnaire and names the recovery command;
-- `M-x dsh-emacs-answer-question` (`C-c C-p`) lists the session's pending
-  questions (one call is answered directly; several are chosen by their first
-  question), asks them with the same reader, and submits the batch as a late
-  reply. Incoming questions and approvals wait until this picker and reader
-  close, including when you cancel with `C-g`;
-- when the host records that reply the original card completes to
-  `N/M answered` with the chosen options marked, and the answers also arrive in
-  the transcript history on the next open or when loading older messages.
+If the window closes first — for example because the claim was lost when the
+session reconnected — the question form becomes **late** instead of lost:
 
-If another client answers the question before your reply is accepted, Emacs
-reports that it is no longer waiting for an answer instead of reporting success.
+- the title adds `window closed — answer late`, and the hint reads
+  `Type the answer in the input line, then C-c C-c`;
+- `C-c C-p` (`M-x dsh-emacs-answer-question`) renders any still-continued
+  timed calls as late forms and moves point to the input line; it starts no
+  minibuffer read;
+- a late answer submits through `userQuestions/answer`; when the host records
+  it, the ask card completes to `N/M answered` with the chosen options
+  marked and the answers arrive in transcript history on the next open.
 
-The pending state comes from the host's `userQuestions` projection, so a
-question asked while Emacs was disconnected is still answerable. On dsh 0.1.7
+If another client answers first, Emacs reports that the question is no longer
+waiting for an answer instead of reporting success. The late state comes from
+the host's `userQuestions` projection, so a timed question asked while Emacs
+was disconnected is answerable once the projection arrives. On dsh 0.1.7
 there is no timed mode and none of this appears.
 
-`M-x dsh-emacs-question-preview` runs a local three-question sample batch
-through the same reader — a multi-select with option descriptions, a
-single-select, and an option-less free-text question — so it also shows the
-`Question N/M` framing. It honors the display setting, sends no RPC, and
-prints the whole batch's answers when you finish.
+Two limits follow from one draft per buffer: questions in a batch are answered
+in order, and the draft doubles as the answer field, so text typed before the
+form arrived is read as its answer. See
+[decision 142](../postmortem/142-inline-question-forms.md).
 
 ## Adding providers
 

@@ -24,7 +24,8 @@ dsh-emacs/
 ├── dsh-emacs-skill.el        # Skill catalog (skills/list) and /name gestures
 ├── dsh-emacs-shell.el        # Client-side `!command` shell commands (local execution)
 ├── dsh-emacs-reference.el    # @ reference completion, chips and navigation
-├── dsh-emacs-composer.el     # Composer chrome: Next Message and Goal rows above the input
+├── dsh-emacs-composer.el     # Composer chrome: Next Message, Goal and Attachments rows above the input
+├── dsh-emacs-interaction.el  # Question/approval forms in the Composer, answers, late answers
 ├── dsh-emacs-reload.el       # Local source reload and bounded presentation refresh
 └── dsh-emacs-session.el      # Session list card view
 ```
@@ -64,8 +65,10 @@ nor reformats the existing transcript. Stable named `eval-after-load` callbacks
 register optional icon integrations without retaining a new anonymous callback
 body on each source revision.
 
-Reload refuses during an active minibuffer, question or approval interaction,
-or while any chat/draft is creating a session or loading history. Ordinary
+Reload refuses while the minibuffer is active or any chat buffer holds an
+unanswered question or approval form
+(`dsh-emacs-interaction--pending-p`), or while any chat/draft is creating a
+session or loading history. Ordinary
 streaming is not a blocker: existing callbacks continue against their retained
 state, and named function calls resolve the new definitions. The command has
 no default keybinding. In an already-running older Emacs, use `M-x load-file`
@@ -312,18 +315,24 @@ correction in [086](../postmortem/086-reply-footer-turn-tail.md).
 ## Composer (`dsh-emacs-composer.el`)
 
 The bottom of a chat buffer is a **Composer**: a persistent, non-transcript UI
-region with optional read-only **Next Message**, **Goal Row** and
-**Attachments** rows, in that order, above the editable **Input Area**. The
+region with optional read-only **Next Message**, **Goal Row**,
+**Attachments** and question/approval **form** rows, in that order, above the
+editable **Input Area**. The
 input geometry (the `❯ ` prompt,
 `dsh-emacs--input-marker` /
 `dsh-emacs--input-end`, cursor clamps, delete guards) is owned by
-`dsh-emacs.el`; `dsh-emacs-composer.el` owns all three chrome rows and the seam
-that keeps streamed transcript above them. The queue module supplies the
+`dsh-emacs.el`; `dsh-emacs-composer.el` owns the chrome region and the seam
+that keeps streamed transcript above it. The queue module supplies the
 visible next item directly from its mirror; Composer keeps no second queue.
 Staged attachments stay in `dsh-emacs.el` (file/drop acquisition, clipboard
 paste and the submit path own them); Composer reads them, exactly as it reads
 the queue mirror, and a row's per-file remove cell only calls back into
 `dsh-emacs--remove-attachment`.
+The form rows are supplied by `dsh-emacs-interaction.el` through
+`dsh-emacs-interaction--chrome`, which returns its own presentation signature
+beside the text; that signature joins the Composer signature, so a pending
+answer, a queued request or a width change repaints the chrome while an
+unchanged form does not.
 
 Word and region kills are clipped to both editable input boundaries while
 preserving their direction. Backward word motion over punctuation such as
@@ -653,7 +662,7 @@ protocol field changes stay in the decoder. Covered payloads:
   Waterfalls become `dsh-protocol-waterfall` (name, event-id, agent-id, request).
   Only a request routed to a live chat is decoded: approvals use their existing
   view; `dsh-protocol-question-request` normalizes the question array and wait.
-  Individual questions retain their existing Plan/reader decoding boundaries.
+  Individual questions retain their existing Plan/form decoding boundaries.
   See [130](../postmortem/130-host-event-decoding-boundaries.md).
 - `session/follow` logical items → `dsh-protocol-follow-item` (type, payload).
   Opening snapshots become `dsh-protocol-follow-snapshot`: cursor, event
@@ -802,59 +811,64 @@ Durable event payloads still reach their event-specific consumers as raw data.
 Control and follow projection consumers read decoded values; Composer receives
 a goal struct or nil directly.
 
-The question reader in `dsh-emacs.el` answers each ordinary `ask` question in one
-minibuffer read. The question text and a hint are the prompt, the numbered
-options are the completion candidates, and each
-candidate's description is delivered as a completion annotation through
-`completion-extra-properties`, so descriptions appear in whatever list UI the
-user has — no tooltip, geometry inspection, or frontend state is involved.
-Multiple choice uses `completing-read-multiple` from `crm.el`, the stock
-comma-separated input path; numbers, labels and unambiguous label prefixes
-all resolve back to the original labels, an ambiguous prefix is left as the
-user's own text, and the reader never guesses which option was meant.  A
-selection is returned in the question's option order, not in the order it
-was typed, so the answer matches the options as presented. Single choice uses the same reader and takes one value. Empty input
-skips the question, the `dsh-emacs-question-skip-key` shortcut throws the
-skip sentinel out of the reader's scope, and C-g propagates to abandon the
-whole waterfall. Because every question is one read, no reader is reopened
-per key: there is no flicker, no reordering and no dependence on how a
-completion frontend highlights its candidates.
-`dsh-emacs-question-help-display` selects whether the question's own detail
-shows in the echo area (`echo-area`, the default) or not at all. Echo-area
-output uses `message` with logging disabled and never inspects completion
-geometry; the minibuffer remembers its last text, so cleanup clears only a
-matching current message and preserves unrelated command output.
-Protocol structs remain the only question wire decoder, and waterfall/RPC
-ownership is unchanged.
-See [decision record 042](../postmortem/042-question-prompts.md).
+Question and approval **forms** are answered in the chat's Composer; the form
+row and its state are owned by `dsh-emacs-interaction.el`. Each chat buffer
+keeps its own request list (oldest first), a mirror of the host's
+`userQuestions` projection and a bounded set of retired event ids so a
+replayed waterfall cannot reopen a form. `dsh-emacs-composer.el` receives the
+rows from `dsh-emacs-interaction--chrome` (see
+[Composer](#composer-dsh-emacs-composerel)). Nothing is read synchronously, so
+the `$events` filter keeps draining and requests in different sessions stay
+independent. A frame with no live chat, no event id or an unreadable payload
+is answered with outcome `next` instead of being kept in Emacs.
 
-Questions and approvals keep separate FIFO queues but share one interaction
-owner, `dsh-emacs--interaction-active`. It holds `(kind . event-id)` while a
-waterfall is read, or `(late-answer)` during the late picker and reader.
-`dsh-emacs--interaction-drain` finishes the current kind's queue before
-switching to the other kind; late-answer cleanup starts with questions.
-This preserves the existing service order, rather than imposing arrival
-order across both queues. Each handler owns its reader and result submission;
-dynamic bindings release the slot and its cancellation marker on exit.
-Remote cancellation must match both kind and event id before closing a
-minibuffer. Plan documents bypass this slot. See
-[decision record 124](../postmortem/124-shared-interaction-owner.md).
+The oldest question request owns the draft; later ones render as one-line
+queued rows and stay fully answerable. `dsh-emacs-interaction--interpret` maps
+draft text to an answer: empty = skip, option numbers/labels resolved by
+`dsh-emacs-interaction--resolve-options`, comma-separated tokens for a
+multi-select, and any unmatched token as custom text;
+`dsh-emacs-interaction--make-answer` builds the protocol answer document. A
+batch answers question by question (`--advance`) and submits once through
+`dsh-emacs--events-result-async` (`--send`), which reports acceptance or the
+host's refusal. `--abandon` sends the cancelled outcome for a live waterfall
+("User abandoned the questions"); `--decide` submits an approval as
+`dsh-protocol-approval-outcome`. Approvals are decided by their own cells or
+`C-c C-u a` / `C-c C-k`, independent of the question draft.
 
-dsh 0.2.0's **timed** form adds two rules on top of that reader, without
-changing it. While a timed question owns the answer slot, its handler claims the
-host's foreground wait with `userQuestions/attachWait` (a stream on the chat
-socket). A submitted answer holds the claim until the asynchronous RPC
-response, even after the prompt slot has moved to another frame; other exits
-release it immediately. The host reschedules its original
-deadline on release, so releasing before acknowledgement could discard an
-answer after a long read. A question whose window closed — `continued` in
-the `userQuestions` projection — is answered later by
-`M-x dsh-emacs-answer-question`, which runs the same reader and submits through
-`userQuestions/answer`. The picker and reader reserve the same global prompt
-slot as foreground questions and approvals, draining queued work on exit.
+Form text is read-only and carries a text-region keymap (`RET`, `return`,
+`mouse-1`, `mouse-2` → `dsh-emacs-interaction-activate`), so the chrome keymap
+cannot shadow typing in the draft. Single-select option cells answer at once
+through `dsh-emacs-interaction--stage-option`; multi-select cells toggle their
+number into the draft and wait for `C-c C-c`.
+`C-c C-c` (`dsh-emacs-send-or-stop`) consults
+`dsh-emacs-interaction--submit-pending` before sending, and a prefix argument
+bypasses the form. `C-c C-k` (`dsh-emacs-interaction-decline`) declines the
+oldest request; the `C-c C-u` map holds allow, decline, skip and focus. Projections
+merge through `dsh-emacs-interaction--questions-projected` (seq ordering,
+settled cards, `continued` calls become late forms), withdrawal retires the
+matching form, a new `$events` generation retires forms whose client id is
+gone, and a killed chat hands live waterfalls back with `next`. Plan documents
+bypass these forms: `dsh-emacs-events.el` gives a waterfall to
+`dsh-emacs-plan--request` first. See
+[decision record 142](../postmortem/142-inline-question-forms.md), which
+supersedes the minibuffer reader of
+[042](../postmortem/042-question-prompts.md) and the single interaction owner
+of [124](../postmortem/124-shared-interaction-owner.md).
+
+dsh 0.2.0's **timed** form adds the foreground wait claim without changing
+answer semantics. While a timed question form is pending, the module claims
+the host's foreground wait with `userQuestions/attachWait` (a stream on the
+chat socket) and holds it until the asynchronous answer response, so the host
+reschedules its deadline only after the answer lands; retirement, chat closure
+and reconnect release it. A question whose window closed — `continued` in the
+`userQuestions` projection, or a form lost with a retired `$events`
+generation — is answered late: `M-x dsh-emacs-answer-question` (`C-c C-p`)
+materializes `continued` calls as late forms and moves point to the input
+line, and a late form submits through `userQuestions/answer`.
 Only a true answer response reports acceptance. The questions come from the
-projection, which `dsh-emacs-events.el` keeps buffer-local per chat (the `session/control`
-increment, the control baseline, and the follow snapshot all feed it).
+projection, which `dsh-emacs-interaction.el` mirrors buffer-local per chat
+(events route the `session/control` increment, the control baseline, and the
+follow snapshot through `dsh-emacs-interaction--questions-projected`).
 The decoded sequence orders these updates, including absent capabilities;
 a new host generation resets the watermark. The late answer is steered as a
 `user-question-reply` user message, which the transcript
@@ -867,15 +881,16 @@ See [decision record 073](../postmortem/073-timed-question-answers.md).
 
 Approval waterfalls decode through `dsh-protocol-approval-request`: the raw
 audit reason stays intact beside a normalized locale-to-text alist.
-`dsh-emacs--approval-display-reason` selects the full language tag, base language,
+`dsh-emacs-interaction--approval-reason` selects the full language tag, base language,
 English, then raw reason, using `dsh-emacs-approval-language` or the Emacs message
-locale. Selection occurs before queueing, so the notification and ordinary
-yes/no prompt share one value. The command detail and outcome RPC are unchanged.
+locale. Selection occurs when the request is recorded, so the form, its
+notification and the saved audit record share one value. The command detail and
+outcome RPC are unchanged.
 See [decision record 074](../postmortem/074-localized-approval-reasons.md).
 
 Plan review is a document interaction in `dsh-emacs-plan.el`. The protocol
 question struct retains the intent kind, approval label and optional call id;
-one supported plan-review question bypasses the minibuffer queue. Pending
+one supported plan-review question bypasses the Composer form. Pending
 requests live in their owning chat buffer, retain the originating client id,
 and use asynchronous `$events/result` callbacks. A re-issued waterfall for the
 same call id moves the one pending request onto the newest event id instead of
@@ -1612,7 +1627,8 @@ In the running Emacs, evaluate:
 ```
 
 The suite creates and archives its own sessions. It uses existing authentication
-and the real minibuffer frontend, automatically entering option 2. An answer
+and drives the real composer form — staging an option in the draft and
+submitting it through `C-c C-c` — rather than a minibuffer reader. An answer
 is deliberately held past the host deadline and its actual HTTP request is
 delayed another second; assertions require a live claim until acknowledgement
 and the exact returned answer in the card. A second question expires while
@@ -1625,7 +1641,7 @@ The interactive runner preserves existing chats, the core connection, window
 layout and clipboard; it never exits Emacs. It returns `(NAME PASSED DETAIL)`
 records, and reports failures instead of counting an unavailable timed preset
 or model as a skip. Deterministic unit tests cover deliberately reordered
-snapshots and concurrent prompt exits; the E2E suite exercises live delivery.
+snapshots and concurrent requests; the E2E suite exercises live delivery.
 
 ## Subagent conversations
 

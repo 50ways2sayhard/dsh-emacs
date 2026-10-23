@@ -75,9 +75,10 @@ stream, or a closed chat expires the review; the document remains readable.
 Closing the chat hands its pending request back to the host.
 
 Only a single-choice question with explicit supported `plan-review` intent
-uses this interface. Ordinary questions and unsupported review shapes keep the
-existing question reader; an unsupported review shape says so in the echo area
-instead of falling back silently. `/plan off` still changes the mode directly.
+uses this interface. Ordinary questions and unsupported review shapes render as
+[Composer question forms](customization.md#questions-and-approvals); an
+unsupported review shape says so in the echo area instead of falling back
+silently. `/plan off` still changes the mode directly.
 
 ## Three ways to run a command
 

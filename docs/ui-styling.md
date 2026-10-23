@@ -221,9 +221,9 @@ for no added meaning (see
   the document with explicit approval and change-request actions; see
   [Plan review](slash-commands.md#plan-review).
 - **`ask_user_question` rows expand into the decision record** (dsh web
-  `AskQuestionCard` plus the options its composer showed): one block per
+  `AskQuestionCard` plus the options its composer form showed): one block per
   question — its `header` chip in the accent face and its prompt, then the
-  options under the minibuffer reader's own numbering, the chosen ones checked
+  options under the form's own numbering, the chosen ones checked
   (`✓ `) with the label in the accent face, each description hanging at the
   label column in `dsh-emacs-meta-face`, and a closing `→ <free text>` answer or
   `Not answered` once that question settled.  The collapsed row states the

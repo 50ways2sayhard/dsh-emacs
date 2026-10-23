@@ -149,51 +149,43 @@ A token without a saved base URL belongs only to the default local server."
             "Ask question · 1/1 answered"
             (buffer-substring-no-properties (car block) (cdr block)))))))
 
+(defun dsh-e2e--answer-current-form (question-id choice)
+  "Submit CHOICE for QUESTION-ID's Composer form in `dsh-e2e--chat'."
+  (with-current-buffer dsh-e2e--chat
+    (unless (dsh-e2e--wait-until
+             (lambda ()
+               (cl-find-if
+                (lambda (request)
+                  (and (eq (plist-get request :kind) 'question)
+                       (cl-find question-id (plist-get request :questions)
+                                :key #'dsh-protocol-question-id
+                                :test #'equal)))
+                dsh-emacs-interaction--requests))
+             30)
+      (error "Composer form for %s did not appear" question-id))
+    (dsh-emacs--clear-input)
+    (goto-char dsh-emacs--input-marker)
+    (insert choice)
+    (dsh-emacs-interaction--submit-pending)))
+
 (defun dsh-e2e--timed-question (late)
   "Exercise a real timed question, answering after expiry when LATE is non-nil.
 Only human input and outbound delivery timing are automated.  Tool calls,
-waterfalls, wait claims, HTTP replies and projections all come from the host."
+waterfalls, wait claims, HTTP replies and projections all come from the host.
+Answers go through the Composer form (`dsh-emacs-interaction--submit-pending'),
+not the minibuffer."
   (let* ((question-id (if late "e2e-timed-late" "e2e-timed-held"))
          (open-stream (symbol-function 'dsh-emacs-events-open-stream))
-         (requested (symbol-function 'dsh-emacs--question-requested))
+         (close-stream (symbol-function 'dsh-emacs-events-close-stream))
+         (requested (symbol-function 'dsh-emacs-interaction--question-requested))
+         (claim-fn (symbol-function 'dsh-emacs-interaction--claim))
          (rpc (symbol-function 'dsh-emacs--rpc-async))
-         (release (symbol-function 'dsh-emacs--question-release-wait))
-         (setup nil)
          timers call-id event-id timed remaining wait-claim wait-ended claim-held
-         response feedback released-after-response prompt-depth continued-seq
+         response feedback released-after-response continued-seq form-seen
          question-error)
-    (setq setup
-          (lambda ()
-            (when (and dsh-emacs--question-current
-                       (equal question-id
-                              (dsh-protocol-question-id
-                               dsh-emacs--question-current)))
-              (setq prompt-depth (minibuffer-depth))
-              (push
-               (run-with-timer
-                15 nil
-                (lambda ()
-                  (when (and (active-minibuffer-window)
-                             dsh-emacs--question-current
-                             (equal question-id
-                                    (dsh-protocol-question-id
-                                     dsh-emacs--question-current)))
-                    (abort-recursive-edit))))
-               timers)
-              (push
-               (run-with-timer
-                (if late 0.1 3.0) nil
-                (lambda ()
-                  (when (and (active-minibuffer-window)
-                             dsh-emacs--question-current
-                             (equal question-id
-                                    (dsh-protocol-question-id
-                                     dsh-emacs--question-current)))
-                    (execute-kbd-macro (kbd "2 RET")))))
-               timers))))
     (unwind-protect
         (cl-letf
-            (((symbol-function 'dsh-emacs--question-requested)
+            (((symbol-function 'dsh-emacs-interaction--question-requested)
               (lambda (chat event session questions &optional wait)
                 (if (not (equal session dsh-e2e--session-id))
                     (funcall requested chat event session questions wait)
@@ -208,11 +200,45 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
                                     #'dsh-protocol-question-p
                                     #'dsh-protocol-question--from-alist
                                     (elt questions 0)))))
-                      (funcall requested chat event session questions wait)
-                    ;; Never leave an unrecognized model prompt waiting for
-                    ;; human input in an otherwise unattended acceptance run.
+                      (progn
+                        (funcall requested chat event session questions wait)
+                        (setq form-seen t)
+                        ;; Answer from a timer so the process filter never
+                        ;; blocks on the form.  For LATE, wait until the form
+                        ;; has become late (host closed the timed window).
+                        (push
+                         (run-with-timer
+                          (if late 0.2 3.0) nil
+                          (lambda ()
+                            (when (buffer-live-p dsh-e2e--chat)
+                              (with-current-buffer dsh-e2e--chat
+                                (when (or (not late)
+                                          (cl-find-if
+                                           (lambda (request)
+                                             (and (eq (plist-get request :kind)
+                                                      'question)
+                                                  (eq (plist-get request :state)
+                                                      'late)
+                                                  (equal call-id
+                                                         (plist-get request
+                                                                    :call-id))))
+                                           dsh-emacs-interaction--requests))
+                                  (dsh-e2e--answer-current-form question-id "2"))))))
+                         timers))
+                    ;; Never leave an unrecognized model prompt waiting in an
+                    ;; otherwise unattended acceptance run.
                     (setq question-error t)
-                    (dsh-emacs--question-decline event)))))
+                    (dsh-emacs--events-result-async
+                     dsh-emacs-events--client-id event
+                     (dsh-protocol-events-cancelled-outcome
+                      "User abandoned the questions")
+                     (lambda (_ok _value) nil))))))
+             ((symbol-function 'dsh-emacs-interaction--claim)
+              (lambda (request chat session-id wait)
+                ;; LATE must let the host expire the window; suppress the
+                ;; attachWait claim so the form becomes late instead of held.
+                (unless late
+                  (funcall claim-fn request chat session-id wait))))
              ((symbol-function 'dsh-emacs-events-open-stream)
               (lambda (process endpoint args name handler)
                 (let* ((ours (and (equal endpoint "userQuestions/attachWait")
@@ -230,11 +256,13 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
                            handler))))
                   (when ours (setq wait-claim (cons process stream)))
                   stream)))
-             ((symbol-function 'dsh-emacs--question-release-wait)
-              (lambda (claim)
-                (when (and claim (equal claim wait-claim))
+             ((symbol-function 'dsh-emacs-events-close-stream)
+              (lambda (process stream)
+                (when (and wait-claim
+                           (eq process (car wait-claim))
+                           (equal stream (cdr wait-claim)))
                   (setq released-after-response (and response t)))
-                (funcall release claim)))
+                (funcall close-stream process stream)))
              ((symbol-function 'dsh-emacs--rpc-async)
               (lambda (method args callback)
                 (if (or (and event-id (equal method "$events/result")
@@ -252,7 +280,7 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
                       (if (or late (not (equal method "$events/result")))
                           (funcall deliver)
                         ;; Delay the actual HTTP send past the deadline.  A
-                        ;; client that releases on reader exit loses its answer.
+                        ;; client that releases on form submit loses its answer.
                         (push
                          (run-with-timer
                           1 nil
@@ -268,43 +296,49 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
                             (funcall deliver)))
                          timers)))
                   (funcall rpc method args callback)))))
-          (add-hook 'minibuffer-setup-hook setup)
-          ;; Occupying the real prompt slot lets the second waterfall expire
-          ;; naturally on the host, including its cancel frame and pending result.
-          (let ((dsh-emacs--interaction-active
-                 (if late '(late-answer) dsh-emacs--interaction-active)))
-            (dsh-e2e--rpc
-             "session/prompt"
-             `((request
-                . ((requestId . ,(dsh-emacs--rpc-id))
-                   (sessionId . ,dsh-e2e--session-id)
-                   (mode . "queue")
-                   (content
-                    . [((type . "text")
-                        (text
-                         . ,(format
-                             (concat
-                              "Client acceptance test. Call ask_user_question "
-                              "exactly once with timeout=2 and exactly one "
-                              "question: id=%s, question=E2E timed choice, "
-                              "options=[{label:Alpha},{label:Beta}]. "
-                              "Do not use other tools. After the tool returns, "
-                              "reply only TEST_DONE. If a late answer arrives, "
-                              "reply only LATE_DONE without asking again.")
-                             question-id)))])))))
-            (unless (dsh-e2e--wait-until
-                     (lambda () (or question-error
-                                    (if late
-                                        (with-current-buffer dsh-e2e--chat
-                                          (and call-id
-                                               (cl-find
-                                                call-id
-                                                (dsh-emacs--question-continued)
-                                                :key #'dsh-protocol-pending-question-call-id
-                                                :test #'equal)))
-                                      (or response wait-ended))))
-                     90)
-              (error "Timed question did not finish; use a timed preset and working model")))
+          (dsh-e2e--rpc
+           "session/prompt"
+           `((request
+              . ((requestId . ,(dsh-emacs--rpc-id))
+                 (sessionId . ,dsh-e2e--session-id)
+                 (mode . "queue")
+                 (content
+                  . [((type . "text")
+                      (text
+                       . ,(format
+                           (concat
+                            "Client acceptance test. Call ask_user_question "
+                            "exactly once with timeout=2 and exactly one "
+                            "question: id=%s, question=E2E timed choice, "
+                            "options=[{label:Alpha},{label:Beta}]. "
+                            "Do not use other tools. After the tool returns, "
+                            "reply only TEST_DONE. If a late answer arrives, "
+                            "reply only LATE_DONE without asking again.")
+                           question-id)))])))))
+          (unless (dsh-e2e--wait-until
+                   (lambda ()
+                     (or question-error
+                         (if late
+                             (with-current-buffer dsh-e2e--chat
+                               (and call-id
+                                    (or (cl-find-if
+                                         (lambda (request)
+                                           (and (eq (plist-get request :kind)
+                                                    'question)
+                                                (eq (plist-get request :state)
+                                                    'late)
+                                                (equal call-id
+                                                       (plist-get request
+                                                                  :call-id))))
+                                         dsh-emacs-interaction--requests)
+                                        (cl-find
+                                         call-id
+                                         (dsh-emacs-interaction--continued-calls)
+                                         :key #'dsh-protocol-pending-question-call-id
+                                         :test #'equal))))
+                           (or response wait-ended))))
+                   90)
+            (error "Timed question did not finish; use a timed preset and working model"))
           (when question-error
             (error "Model did not ask the specified single question: %s" question-id))
           (dsh-e2e--check (concat question-id "-timed-waterfall")
@@ -314,7 +348,8 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
           (with-current-buffer dsh-e2e--chat
             (when late
               (setq continued-seq
-                    (dsh-protocol-user-questions-seq dsh-emacs--session-questions))
+                    (dsh-protocol-user-questions-seq
+                     dsh-emacs-interaction--session-questions))
               (dsh-e2e--check
                "timed-expiry-pending-card"
                (dsh-e2e--wait-until
@@ -326,21 +361,28 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
                "timed-expiry-withdraws-waterfall"
                (dsh-e2e--wait-until
                 (lambda ()
-                  (not (cl-find event-id dsh-emacs--question-queue
-                                :key #'cadr :test #'equal)))
+                  (let ((request (dsh-emacs-interaction--find event-id)))
+                    (or (null request)
+                        (eq (plist-get request :state) 'late)
+                        (null (plist-get request :event-id)))))
                 10))
-              (dsh-emacs-answer-question)))
+              ;; Materialize a late form if withdraw left only the projection.
+              (unless (dsh-emacs-interaction--request-for-call call-id)
+                (dsh-emacs-answer-question))
+              ;; Ensure the late answer is submitted even if the first timer
+              ;; raced ahead of the late transition.
+              (unless response
+                (dsh-e2e--answer-current-form question-id "2"))))
           (dsh-e2e--check
            (concat question-id "-http-accepted")
            (and (dsh-e2e--wait-until (lambda () response) 10)
                 (car response) (or (not late) (eq (cadr response) t))))
-          (dsh-e2e--check (concat question-id "-real-reader")
-                          (equal prompt-depth 1))
+          (dsh-e2e--check (concat question-id "-composer-form")
+                          form-seen)
           (unless late
             (dsh-e2e--check "timed-claim-held-beyond-deadline"
                             (and (numberp remaining) (< 0 remaining)
                                  (<= remaining 2000) claim-held))
-            ;; The reply callback can run after the global prompt slot clears.
             (dsh-e2e--check "timed-answer-before-claim-release"
                             released-after-response))
           (dsh-e2e--check
@@ -352,25 +394,35 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
             (with-current-buffer dsh-e2e--chat
               (dsh-e2e--check
                "late-answer-settled-projection"
-               (and (> (dsh-protocol-user-questions-seq dsh-emacs--session-questions)
+               (and (> (dsh-protocol-user-questions-seq
+                        dsh-emacs-interaction--session-questions)
                        continued-seq)
-                    (null (dsh-emacs--question-continued))
+                    (null (dsh-emacs-interaction--continued-calls))
                     (cl-find call-id
                              (dsh-protocol-user-questions-settled
-                              dsh-emacs--session-questions)
+                              dsh-emacs-interaction--session-questions)
                              :key #'dsh-protocol-settled-question-call-id
                              :test #'equal)))
               (setq response nil feedback nil)
-              (dsh-emacs--question-answer-late
-               dsh-e2e--session-id call-id
-               `(((id . ,question-id) (selected . ["Beta"])))))
+              (dsh-emacs--rpc-async
+               "userQuestions/answer"
+               (dsh-protocol-question-late-answer-request
+                dsh-e2e--session-id call-id
+                (list (dsh-protocol-question-answer-request
+                       question-id ["Beta"])))
+               (lambda (ok value)
+                 (setq response (list ok value)
+                       feedback
+                       (cond
+                        ((not ok) (format "%s" value))
+                        ((eq value t) nil)
+                        (t "Question is no longer waiting for an answer"))))))
             (dsh-e2e--check
              "late-answer-duplicate-reported-as-rejected"
              (and (dsh-e2e--wait-until (lambda () response) 10)
                   (car response) (eq (cadr response) :json-false)
                   (equal feedback "Question is no longer waiting for an answer"))))
           (cons call-id question-id))
-      (remove-hook 'minibuffer-setup-hook setup)
       (dolist (timer timers) (cancel-timer timer)))))
 
 (defun dsh-e2e--question-history (call-id question-id)
@@ -403,9 +455,9 @@ waterfalls, wait claims, HTTP replies and projections all come from the host."
     (dsh-e2e--check
      "late-answer-projection-before-history-card"
      (and (null (dsh-emacs-render--tool-state call-id))
-          dsh-emacs--session-questions
+          dsh-emacs-interaction--session-questions
           (cl-find call-id
-                   (dsh-protocol-user-questions-settled dsh-emacs--session-questions)
+                   (dsh-protocol-user-questions-settled dsh-emacs-interaction--session-questions)
                    :key #'dsh-protocol-settled-question-call-id :test #'equal)))
     (let ((dsh-emacs-history-window 30))
       (dsh-emacs-load-older-history))
@@ -721,12 +773,11 @@ With QUESTIONS (interactively, a prefix argument), include timed questions.
 They need a graphical Emacs and a preset with ask_user_question mode: timed.
 DSH_E2E_PRESET selects the preset; existing chats and connections are preserved."
   (interactive "P")
-  (when (or (active-minibuffer-window) dsh-emacs--interaction-active
-            dsh-emacs--question-queue
-            dsh-emacs--approval-queue)
+  (when (or (active-minibuffer-window)
+            (dsh-emacs-interaction--pending-p))
     (user-error "An interaction is active or queued"))
   (when (and questions noninteractive)
-    (user-error "Timed-question E2E needs a graphical Emacs for its real reader"))
+    (user-error "Timed-question E2E needs a live Emacs with timers"))
   (let* ((dsh-emacs-base-url (or (getenv "DSH_E2E_URL") dsh-emacs-base-url))
          (dsh-emacs-server-auth-token dsh-emacs-server-auth-token)
          (dsh-emacs-enable-notifications nil)

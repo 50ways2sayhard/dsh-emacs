@@ -71,7 +71,10 @@ theme's `shadow` face (grey by default); running session dots are orange.
 
 | Key | Action in a chat buffer |
 |---|---|
-| `C-c C-c` | Send; while busy, queue input or interrupt if input and attachments are empty |
+| `C-c C-c` | Send; answer the pending question form when one waits; while busy, queue input or interrupt if input and attachments are empty |
+| `C-c C-k` | Decline the oldest pending question or approval |
+| `C-c C-u a` / `C-c C-u s` | Allow an approval once / skip the current question |
+| `C-c C-p` | Return to a timed question that is waiting for a late answer |
 | `C-u C-c C-c` | Steer the running turn (default configuration) |
 | `C-c C-b` | Interrupt the running turn |
 | `C-c C-q` / `C-c C-j` | Manage pending messages / background jobs |
@@ -120,6 +123,11 @@ The unused Lisp helpers `dsh-emacs-modeline-set-cwd`,
 from personal Lisp code; cwd and branch follow the chat's `default-directory`
 and cached Git detection. See [Mode-line](docs/modeline.md).
 
+Questions and approvals lost their minibuffer options in 0.7.0:
+`dsh-emacs-question-skip-key`, `dsh-emacs-question-help-display` and
+`M-x dsh-emacs-question-preview` are gone, and the answer field is the input
+line itself. See [Question and approval prompts](docs/customization.md#questions-and-approvals).
+
 ### References, commands, and attachments
 
 - **`@` references** select server-side files, directories, or sessions.
@@ -151,7 +159,8 @@ below the title.
 
 ### Goals, subagents, and questions
 
-The composer shows the next pending message, then the active goal. `C-c C-g`
+The composer shows the next pending message, then the active goal, with any
+question or approval forms directly above the input line. `C-c C-g`
 opens [goal actions](docs/customization.md#goal-actions); `C-c C-q` manages the
 queue.
 The default busy-send behavior is configurable with
@@ -161,10 +170,16 @@ The default busy-send behavior is configurable with
 originating position. Continuable children accept follow-up input, while
 one-shot children are read-only. See [Subagents](docs/subagents.md).
 
-Agent questions use your normal minibuffer completion. Pick an option or type
-an answer; multiple-choice answers accept comma-separated options such as
-`2,3`. Empty input skips a question. `C-c C-p` answers an expired timed question.
-See [Question prompts](docs/customization.md#ask-question-prompts).
+Agent questions and approvals render as forms in the composer above the input
+line; nothing reads the minibuffer, so a request in one session never
+interrupts typing in another. Type into the draft and press `C-c C-c`: a blank
+draft skips the question, an option number or name picks it (comma-separated
+numbers answer multi-select questions), and anything else is a free-text
+answer. Single-select option rows answer on `RET` / `mouse-1`; multi-select rows stage their numbers in the draft for `C-c C-c`.
+`C-c C-k` declines the request, `C-c C-u a` allows an approval once, `C-c C-u
+s` skips the current question, and `C-c C-p` returns to a timed question that
+expired. See
+[Question and approval prompts](docs/customization.md#questions-and-approvals).
 
 ### Appearance
 

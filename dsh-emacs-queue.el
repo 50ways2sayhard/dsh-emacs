@@ -581,8 +581,7 @@ maps back to exactly one item however the minibuffer picked it."
   "((LABEL . ITEM) ...): the queue entries of the open queue menu.
 A DYNAMIC binding set by `dsh-emacs-list-queue' around the
 `completing-read'; the single-key menu commands resolve the entry they
-act on through this table — the same pattern as
-`dsh-emacs--question-pick-labels'.")
+act on through this table.")
 
 (defun dsh-emacs-queue--menu-item ()
   "The ITEM the next menu key acts on: the vertico-highlighted
@@ -704,10 +703,9 @@ and `x' keys)."
 
 (defun dsh-emacs-queue--chooser-keymap ()
   "Minibuffer keymap for the queue menu: `e'/`s'/`d'/`RET' act on the
-picked entry, `x' deletes the whole queue.  Built exactly like the
-question chooser's (`dsh-emacs--question-chooser-keymap'): a copy of
-the minibuffer's current local map (vertico's when active, so its
-navigation keys survive) plus our single keys.  Mounted last in the
+picked entry, `x' deletes the whole queue.  Built as a copy of the
+minibuffer's current local map (vertico's when active, so its navigation
+keys survive) plus our single keys.  Mounted last in the
 minibuffer-setup-hook chain (`minibuffer-with-setup-hook' prepends its
 hook, so vertico's `use-local-map vertico-map' has already run), which
 is what makes the keys win."

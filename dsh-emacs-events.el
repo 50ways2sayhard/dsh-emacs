@@ -17,8 +17,9 @@
 ;; follow items to the chat renderer, control/workspace frames to the
 ;; shared caches, and `$events' frames to session-list updates plus the
 ;; question / approval waterfalls (answered via `$events/result', see
-;; `dsh-emacs--question-requested' / `dsh-emacs--approval-requested' in
-;; dsh-emacs.el).
+;; `dsh-emacs-interaction--question-requested' /
+;; `dsh-emacs-interaction--approval-requested' in
+;; dsh-emacs-interaction.el).
 
 ;;; Code:
 
@@ -129,9 +130,6 @@ generation and a new clientId.")
 (defvar dsh-emacs--buffer-session)
 (defvar dsh-emacs--buffer-subagent)
 (defvar dsh-emacs--subagent-departure)
-;; Owned by dsh-emacs.el (`defvar-local'); the `userQuestions' projection
-;; consumer and the late-answer command share it with the result renderer.
-(defvar dsh-emacs--session-questions)
 (defvar dsh-emacs-history-window)
 (defvar dsh-emacs-history-rounds)
 (declare-function dsh-emacs-history--start-load "dsh-emacs-history"
@@ -141,15 +139,21 @@ generation and a new clientId.")
 (declare-function dsh-emacs--chat-buffer-sync "dsh-emacs" (session-id))
 (declare-function dsh-emacs--chat-buffer-model-sync "dsh-emacs"
                   (session-id buf &optional selection))
-(declare-function dsh-emacs--question-requested "dsh-emacs" (chat event-id session-id questions &optional wait))
-(declare-function dsh-emacs--session-questions-apply "dsh-emacs" (questions))
-(declare-function dsh-emacs--question-cancelled "dsh-emacs" (event-id))
+(declare-function dsh-emacs-interaction--question-requested
+                  "dsh-emacs-interaction"
+                  (chat event-id session-id questions &optional wait))
+(declare-function dsh-emacs-interaction--approval-requested
+                  "dsh-emacs-interaction" (chat event-id session-id approval))
+(declare-function dsh-emacs-interaction--questions-projected
+                  "dsh-emacs-interaction" (questions))
+(declare-function dsh-emacs-interaction--withdrawn
+                  "dsh-emacs-interaction" (event-id))
+(declare-function dsh-emacs-interaction--generation-retired
+                  "dsh-emacs-interaction" ())
+(declare-function dsh-emacs-plan--request
+                  "dsh-emacs-plan" (chat event-id session-id questions))
 (declare-function dsh-emacs-plan--cancel "dsh-emacs-plan" (&optional event-id))
-(declare-function dsh-emacs--approval-requested "dsh-emacs" (chat event-id session-id tool-name reason call-id))
-(declare-function dsh-emacs--approval-display-reason "dsh-emacs" (request))
-(declare-function dsh-emacs--approval-cancelled "dsh-emacs" (event-id))
 (declare-function dsh-emacs--events-result-async "dsh-emacs" (client-id event-id outcome callback))
-(declare-function dsh-emacs--waterfall-generation-retired "dsh-emacs" ())
 (declare-function dsh-emacs-session--render "dsh-emacs-session" ())
 (declare-function dsh-emacs--normalize-archived "dsh-emacs" (archived))
 (declare-function dsh-emacs-modeline-set-context-snapshot "dsh-emacs-modeline" (pressure window))
@@ -791,7 +795,7 @@ in the current chat.  Inbox is owned by the control stream."
     (when goal-update-p
       (dsh-emacs-events--apply-goal-projection session-id goal))
     (when questions
-      (dsh-emacs--session-questions-apply questions))))
+      (dsh-emacs-interaction--questions-projected questions))))
 
 (defun dsh-emacs-events--consume-frames (process)
   "Consume complete WebSocket frames buffered for PROCESS in wire order.
@@ -1424,7 +1428,7 @@ retires a pending waterfall by `eventId'."
        (when value
          (when (and dsh-emacs-events--client-id
                     (not (equal value dsh-emacs-events--client-id)))
-           (dsh-emacs--waterfall-generation-retired))
+           (dsh-emacs-interaction--generation-retired))
          (setq dsh-emacs-events--client-id value)))
       ("emit"
        (pcase-let (((cl-struct dsh-protocol-session-notice
@@ -1469,24 +1473,24 @@ retires a pending waterfall by `eventId'."
                 (lambda (_ok _value) nil)))
            (pcase event-name
              ("approval/request"
-              (let ((approval (dsh-protocol-approval-request--from-alist request)))
-                (dsh-emacs--approval-requested
-                 chat event-id agent-id
-                 (dsh-protocol-approval-request-tool-name approval)
-                 (dsh-emacs--approval-display-reason approval)
-                 (dsh-protocol-approval-request-call-id approval))))
+              (dsh-emacs-interaction--approval-requested
+               chat event-id agent-id
+               (dsh-protocol-approval-request--from-alist request)))
              ("user-questions/request"
+              ;; Plan review keeps its document buffer; every other ask becomes
+              ;; a Composer form (see dsh-emacs-interaction.el).
               (pcase-let (((cl-struct dsh-protocol-question-request questions wait)
                            (dsh-protocol-question-request--from-alist request)))
-                (dsh-emacs--question-requested
-                 chat event-id agent-id questions wait)))
+                (unless (dsh-emacs-plan--request
+                         chat event-id agent-id questions)
+                  (dsh-emacs-interaction--question-requested
+                   chat event-id agent-id questions wait))))
              (_ nil)))))
       ("cancel"
-       ;; Waterfall retirement: drop any still-queued question/approval frame
-       ;; for EVENT-ID (replay of the same waterfall never re-asks it).
+       ;; Waterfall retirement: drop any pending form for EVENT-ID and retire
+       ;; its plan review (a replayed waterfall never re-asks it).
        (when value
-         (dsh-emacs--question-cancelled value)
-         (dsh-emacs--approval-cancelled value)))
+         (dsh-emacs-interaction--withdrawn value)))
       ;; Accepted no-op kinds (no UI consumes them yet): the `api-session/error'
       ;; emit and any other host frame type we do not render.  Background jobs
       ;; have no frame here at all since dsh 0.1.7 — they are the `job'
@@ -1561,7 +1565,7 @@ only reach their session's live chat; other cells update the shared caches."
          (let ((chat (dsh-emacs-events--chat-buffer session-id)))
            (when (buffer-live-p chat)
              (with-current-buffer chat
-               (dsh-emacs--session-questions-apply value)))))
+               (dsh-emacs-interaction--questions-projected value)))))
         ("title"
          (when (and value (not (string-empty-p value)))
            (dsh-emacs-events--apply-title nil session-id value)
@@ -1600,6 +1604,7 @@ mode-line state."
               dsh-emacs--host-ready nil)
         (dsh-emacs-subagent-host-reset)
         (dsh-emacs-plan--cancel)
+        (dsh-emacs-interaction--generation-retired)
         (unless (timerp dsh-emacs--host-reconnect-timer)
           (setq dsh-emacs--host-reconnect-timer
                 (run-at-time 1 nil
@@ -1693,7 +1698,7 @@ re-opening (never two live workspace streams on one socket)."
                (when (buffer-live-p chat)
                  (with-current-buffer chat
                    (dsh-emacs-modeline-set-plan nil)
-                   (dsh-emacs--session-questions-apply nil))))
+                   (dsh-emacs-interaction--questions-projected nil))))
              dsh-emacs--chat-buffers)
     (dolist (endpoint '("session/control" "workspace/follow" "$events"))
       (let* ((stream-id (dsh-emacs-events--stream-id))
@@ -1746,6 +1751,7 @@ was sent."
           dsh-emacs--host-ready nil)
     (when process (dsh-emacs-subagent-host-reset))
     (dsh-emacs-plan--cancel)
+    (dsh-emacs-interaction--generation-retired)
     (when (process-live-p process)
       (delete-process process))))
 

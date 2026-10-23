@@ -44,6 +44,7 @@
 (require 'dsh-emacs-protocol)
 (require 'dsh-emacs-server)
 (require 'dsh-emacs-faces)
+(require 'dsh-emacs-interaction)
 
 ;; render.el calls back through this seam.  Declare it without requiring
 ;; render here to avoid a cycle.  Input-marker geometry remains owned by
@@ -682,9 +683,12 @@ Repeated renders preserve the region when content and width are unchanged."
            (attachments (dsh-emacs-pending-attachments))
            (notice (and (bound-and-true-p dsh-emacs--buffer-subagent)
                         (dsh-emacs-subagent-input-reason dsh-emacs--buffer-subagent)))
-           (sig (cons notice (dsh-emacs-composer--sig goal next attachments))))
+           (forms (dsh-emacs-interaction--chrome))
+           (form-text (cdr forms))
+           (sig (list notice (dsh-emacs-composer--sig goal next attachments)
+                      (car forms))))
       (unless (and (equal sig dsh-emacs--composer-sig)
-                   (or (not (or goal next attachments notice))
+                   (or (not (or goal next attachments notice form-text))
                        (dsh-emacs-composer--region)))
         (let ((text (concat
                      (when notice
@@ -702,7 +706,9 @@ Repeated renders preserve the region when content and width are unchanged."
                         (concat (dsh-emacs-composer--render-attachments-row
                                  attachments)
                                 "\n")
-                        'dsh-emacs-composer-attachments-row t))))
+                        'dsh-emacs-composer-attachments-row t))
+                     (when form-text
+                       (propertize form-text 'dsh-emacs-composer-forms-row t))))
               (inhibit-read-only t)
               (buffer-undo-list t))
           (save-excursion

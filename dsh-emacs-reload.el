@@ -15,9 +15,9 @@
 (require 'subr-x)
 
 (declare-function dsh-emacs-composer-refresh "dsh-emacs-composer" ())
+(declare-function dsh-emacs-interaction--pending-p "dsh-emacs-interaction" ())
 (declare-function dsh-emacs-modeline-update "dsh-emacs-modeline" ())
 (declare-function dsh-emacs-session--render "dsh-emacs-session" ())
-(defvar dsh-emacs--interaction-active)
 (defvar dsh-emacs--creation-pending)
 (defvar dsh-emacs--history-loading)
 (defvar dsh-emacs-session--row-cache)
@@ -112,8 +112,8 @@ and reload again, or restart Emacs.  No server restart or prompt is sent."
   (when dsh-emacs-reload--files
     (user-error "A dsh-emacs reload is already in progress"))
   (when (or (active-minibuffer-window)
-            (bound-and-true-p dsh-emacs--interaction-active))
-    (user-error "Finish the active minibuffer interaction before reloading"))
+            (dsh-emacs-interaction--pending-p))
+    (user-error "Finish the pending question or approval form before reloading"))
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (and (derived-mode-p 'dsh-emacs-mode 'dsh-emacs-draft-mode)

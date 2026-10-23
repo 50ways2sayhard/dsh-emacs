@@ -210,7 +210,7 @@
                      (setq callback cb))))
           (with-current-buffer chat
             (insert "draft feedback")
-            (dsh-emacs--question-requested
+            (dsh-emacs-plan--request
              chat "plan-event" "plan-session" (list (dsh-test--plan-question)))
             (let* ((review (car dsh-emacs-plan--pending))
                    (document (plist-get review :buffer)))
@@ -221,7 +221,7 @@
                           (and buffer-read-only
                                (string-match-p "Index sessions" (buffer-string))
                                (string-match-p "Approve and execute" (buffer-string))))))
-              (dsh-emacs--question-requested
+              (dsh-emacs-plan--request
                chat "plan-event" "plan-session" (list (dsh-test--plan-question)))
               (ert-info ((format "%s" "plan-review-replay-does-not-duplicate"))
                 (should (= (length dsh-emacs-plan--pending) 1))
@@ -258,7 +258,7 @@
                   (should (string-match-p "Approve and execute" (buffer-string))))
                 (dsh-emacs-plan-approve)
                 ;; The host retires its waterfall before the HTTP callback.
-                (dsh-emacs--question-cancelled "plan-event")
+                (dsh-emacs-interaction--withdrawn "plan-event")
                 (funcall callback t '((ok . t)))
                 (ert-info ((format "%s" "plan-accepted-response-retires-review"))
                   (should (null (buffer-local-value 'dsh-emacs-plan--pending chat)))
@@ -268,7 +268,7 @@
               (ert-info ((format "%s" "plan-read-and-approve-preserve-chat-draft"))
                 (should (equal (buffer-string) "draft feedback"))))
             (setq sent nil)
-            (dsh-emacs--question-requested
+            (dsh-emacs-plan--request
              chat "plan-changes" "plan-session"
              (list (dsh-test--plan-question "plan-two")))
             (let* ((review (car dsh-emacs-plan--pending))
@@ -289,13 +289,13 @@
                 (should (eq returned chat))
                 (should (null dsh-emacs-plan--pending))
                 (should (equal (buffer-string) "draft feedback"))))
-            (dsh-emacs--question-requested
+            (dsh-emacs-plan--request
              chat "plan-expired" "plan-session"
              (list (dsh-test--plan-question "plan-three")))
             (let* ((review (car dsh-emacs-plan--pending))
                    (document (plist-get review :buffer)))
               (with-current-buffer document (dsh-emacs-plan-approve))
-              (dsh-emacs--waterfall-generation-retired)
+              (dsh-emacs-interaction--generation-retired)
               (funcall callback t nil)
               (ert-info ((format "%s" "plan-disconnect-rejects-late-callback"))
                 (should (null dsh-emacs-plan--pending))
@@ -322,13 +322,13 @@
                   ((symbol-function 'dsh-emacs--rpc-async)
                    (lambda (method args callback)
                      (push (cons method args) sent) (funcall callback t nil))))
-          (dsh-emacs--question-requested
+          (dsh-emacs-plan--request
            first "review-first" "first" (list (dsh-test--plan-question)))
-          (dsh-emacs--question-requested
+          (dsh-emacs-plan--request
            second "review-second" "second" (list (dsh-test--plan-question)))
           (ert-info ((format "%s" "plan-documents-isolate-equal-call-ids-by-chat"))
             (should (= (length (delete-dups (copy-sequence documents))) 2)))
-          (dsh-emacs--question-cancelled "review-first")
+          (dsh-emacs-interaction--withdrawn "review-first")
           (ert-info ((format "%s" "plan-host-cancel-retires-only-target-without-answer"))
             (should (null sent))
             (should (null (buffer-local-value 'dsh-emacs-plan--pending first)))
@@ -364,10 +364,10 @@
                    (lambda (method args _callback)
                      (push (cons method args) sent))))
           (with-current-buffer chat
-            (dsh-emacs--question-requested
+            (dsh-emacs-plan--request
              chat "review-old" "reissue"
              (list (dsh-test--plan-question "call-reissued")))
-            (dsh-emacs--question-requested
+            (dsh-emacs-plan--request
              chat "review-new" "reissue"
              (list (dsh-test--plan-question "call-reissued")))
             (let ((review (car dsh-emacs-plan--pending)))
@@ -397,9 +397,9 @@
                    (lambda (buffer &rest _) (cl-pushnew buffer documents) nil))
                   ((symbol-function 'dsh-emacs--rpc-async) #'ignore))
           (with-current-buffer chat
-            (dsh-emacs--question-requested
+            (dsh-emacs-plan--request
              chat "empty-one" "empty" (list (dsh-test--plan-question "")))
-            (dsh-emacs--question-requested
+            (dsh-emacs-plan--request
              chat "empty-two" "empty" (list (dsh-test--plan-question "")))
             (ert-info ((format "%s" "plan-empty-call-id-keeps-requests-separate"))
               (should (= (length dsh-emacs-plan--pending) 2))
@@ -427,7 +427,7 @@
                    (lambda (method args _callback)
                      (push (cons method args) sent))))
           (with-current-buffer chat
-            (dsh-emacs--question-requested
+            (dsh-emacs-plan--request
              chat "busy-event" "busy" (list (dsh-test--plan-question "call-busy")))
             (with-current-buffer (plist-get (car dsh-emacs-plan--pending) :buffer)
               (dsh-emacs-plan-approve))

@@ -96,7 +96,7 @@
 (defvar dsh-emacs--input-marker)
 (defvar dsh-emacs--composer-top-marker)
 ;; Latest decoded question projection, owned by dsh-emacs.el.
-(defvar dsh-emacs--session-questions)
+(defvar dsh-emacs-interaction--session-questions)
 
 ;;; ---------------------------------------------------------------------------
 ;;; Customization
@@ -3178,11 +3178,11 @@ tracking belongs to `dsh-emacs-render-tool-result'."
              ;; pending forever even after the late answer is admitted.
              (settled-question
               (and (equal variant "question")
-                   dsh-emacs--session-questions
+                   dsh-emacs-interaction--session-questions
                    (dsh-protocol-ask-pending--from-alist full-text)
                    (cl-find call-id
                             (dsh-protocol-user-questions-settled
-                             dsh-emacs--session-questions)
+                             dsh-emacs-interaction--session-questions)
                             :key #'dsh-protocol-settled-question-call-id
                             :test #'equal)))
              (full-text
@@ -3277,12 +3277,12 @@ tracking belongs to `dsh-emacs-render-tool-result'."
                                (dsh-emacs-render--tool-status-text
                                 state exit-code signal error-reason)))
              ;; A timed question whose window expired explains itself in
-             ;; the body, where the questionnaire still is, and names the
-             ;; command that answers it later.
+             ;; the body, where the questionnaire still is, and says the
+             ;; form can still be answered from the input line.
              (pending-text (and ask-pending
                                 (concat "This question set is pending — "
-                                        "answer it later with M-x "
-                                        "dsh-emacs-answer-question.")))
+                                        "answer it with a form in the "
+                                        "Composer, or C-c C-p in the chat.")))
              ;; A settled bash/pwsh call expands into a terminal card
              ;; (`$' prompt rows + output + status footer), a file read into
              ;; the line-numbered read card, a write/edit into its diff

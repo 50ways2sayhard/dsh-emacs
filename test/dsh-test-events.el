@@ -183,9 +183,9 @@
         (ert-info ((format "decoded=%s" decoded))
           (should (equal observed '("follow-contract" t 3 3)))
           (should-not dsh-emacs--history-has-more)
-          (should (dsh-protocol-user-questions-p dsh-emacs--session-questions))
+          (should (dsh-protocol-user-questions-p dsh-emacs-interaction--session-questions))
           (should (= 3 (dsh-protocol-user-questions-seq
-                        dsh-emacs--session-questions))))))))
+                        dsh-emacs-interaction--session-questions))))))))
 
 (ert-deftest dsh-emacs-test-events-follow-projections-distinguish-goal-and-values-shapes ()
   :tags '(dsh-unit)
@@ -211,7 +211,7 @@
                (projections `((asOfSeq . 9) (values . ,values))))
           (puthash "follow-shapes" (current-buffer) dsh-emacs--chat-buffers)
           (dsh-emacs-composer-set-goal goal)
-          (dsh-emacs--session-questions-apply questions)
+          (dsh-emacs-interaction--questions-projected questions)
           (ert-info ((format "values=%S" values))
             (if invalid
                 (should-error
@@ -223,9 +223,9 @@
               (should (eq goal dsh-emacs--composer-goal)))
             (if invalid
                 (progn
-                  (should (eq questions dsh-emacs--session-questions))
+                  (should (eq questions dsh-emacs-interaction--session-questions))
                   (should-not (gethash "follow-shapes" dsh-emacs--subagent-catalogs)))
-              (should (= 9 (dsh-protocol-user-questions-seq dsh-emacs--session-questions)))
+              (should (= 9 (dsh-protocol-user-questions-seq dsh-emacs-interaction--session-questions)))
               (should (= 9 (dsh-protocol-subagent-cell-seq
                             (dsh-emacs-subagent--cell "follow-shapes" 'subagentCatalog)))))))))))
 
@@ -257,7 +257,7 @@
                          dsh-emacs--events-apply-context-projection
                          dsh-emacs--events-apply-permission-projection
                          dsh-emacs-events--apply-goal-projection
-                         dsh-emacs--session-questions-apply))
+                         dsh-emacs-interaction--questions-projected))
              calls advices)
         (puthash "follow-order" (current-buffer) dsh-emacs--chat-buffers)
         (dsh-emacs-queue-apply (current-buffer) 'queue-owner items)
@@ -281,7 +281,7 @@
               (should (= 100 dsh-emacs--modeline-context-window-server))
               (should (equal "custom" dsh-emacs--modeline-permission))
               (should (equal "Follow goal" (dsh-protocol-goal-objective dsh-emacs--composer-goal)))
-              (should (= 9 (dsh-protocol-user-questions-seq dsh-emacs--session-questions)))
+              (should (= 9 (dsh-protocol-user-questions-seq dsh-emacs-interaction--session-questions)))
               (should (= 9 (dsh-protocol-subagent-cell-seq
                             (dsh-emacs-subagent--cell "follow-order" 'subagentCatalog))))
               (should (eq items dsh-emacs--queue-items))
@@ -674,96 +674,140 @@
 ;; generation's pending frames (result now a no-op) are retired as a whole.
 (ert-deftest dsh-emacs-test-events-events-ready-captures-client-id ()
   :tags '(dsh-unit)
-  (with-temp-buffer
-    (let ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
-          (dsh-emacs-events--client-id nil)
-          (dsh-emacs--question-queue nil)
-          (dsh-emacs--approval-queue nil))
-      (dsh-emacs-events--host-item
-       'process (dsh-protocol-core-item--from-alist
-                 '((type . "ready") (clientId . "gen-1"))))
-      (should (equal "gen-1" dsh-emacs-events--client-id))
-      (setq dsh-emacs--question-queue
-            (list (list (current-buffer) "e-1" "sess-g" '((id . "q1")))))
-      (dsh-emacs-events--host-item
-       'process (dsh-protocol-core-item--from-alist
-                 '((type . "ready") (clientId . "gen-1"))))
-      (ert-info ("Same generation retains pending questions")
-        (should (= 1 (length dsh-emacs--question-queue))))
-      (setq dsh-emacs--approval-queue
-            (list (list (current-buffer) "e-2" "sess-g" "bash" "reason" nil)))
-      (dsh-emacs-events--host-item
-       'process (dsh-protocol-core-item--from-alist
-                 '((type . "ready") (clientId . "gen-2"))))
-      (ert-info ("New generation retires both kinds of pending work")
-        (should (equal "gen-2" dsh-emacs-events--client-id))
-        (should-not dsh-emacs--question-queue)
-        (should-not dsh-emacs--approval-queue)))))
-
-;; --- Test 78j2: a new generation is only reported when it dropped work ---
-;; A reconnect mints a new generation as a matter of course; announcing
-;; "retiring 0 queued question(s) and 0 approval(s)" on every one of them is
-;; echo-area noise, while a generation that actually dropped queued
-;; waterfalls still has to say so.
+  (let ((chat (get-buffer-create " *t-ready-chat*")))
+    (unwind-protect
+        (with-current-buffer chat
+          (dsh-emacs-mode)
+          (setq-local dsh-emacs--buffer-session "sess-g")
+          (dsh-emacs--setup-input-area)
+          (let ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+                (dsh-emacs-events--client-id nil)
+                (dsh-emacs-enable-notifications nil))
+            (puthash "sess-g" chat dsh-emacs--chat-buffers)
+            (cl-letf (((symbol-function 'dsh-emacs-notify--post)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'dsh-emacs-composer--row-width)
+                       (lambda () 80)))
+              (dsh-emacs-events--host-item
+               'process (dsh-protocol-core-item--from-alist
+                         '((type . "ready") (clientId . "gen-1"))))
+              (should (equal "gen-1" dsh-emacs-events--client-id))
+              (dsh-emacs-interaction--question-requested
+               chat "e-1" "sess-g"
+               '(((id . "q1") (question . "Q?")
+                  (options . (((label . "Yes"))))))
+               nil)
+              (dsh-emacs-events--host-item
+               'process (dsh-protocol-core-item--from-alist
+                         '((type . "ready") (clientId . "gen-1"))))
+              (ert-info ("Same generation retains pending questions")
+                (should (= 1 (length dsh-emacs-interaction--requests))))
+              (dsh-emacs-interaction--approval-requested
+               chat "e-2" "sess-g"
+               (dsh-protocol-approval-request--from-alist
+                '((toolName . "bash") (reason . "reason") (callId . "c-e2"))))
+              (should (= 2 (length dsh-emacs-interaction--requests)))
+              (dsh-emacs-events--host-item
+               'process (dsh-protocol-core-item--from-alist
+                         '((type . "ready") (clientId . "gen-2"))))
+              (ert-info ("New generation retires both kinds of pending work")
+                (should (equal "gen-2" dsh-emacs-events--client-id))
+                (should-not dsh-emacs-interaction--requests)))))
+      (when (buffer-live-p chat) (kill-buffer chat)))))
 (ert-deftest dsh-emacs-test-events-events-generation-quiet-with-nothing-pending ()
   :tags '(dsh-unit)
-  (with-temp-buffer
-    (let ((dsh-emacs-events--client-id "gen-old")
-          (dsh-emacs--chat-buffers (make-hash-table :test 'equal))
-          (dsh-emacs--question-queue nil)
-          (dsh-emacs--approval-queue nil)
-          (messages nil))
-      (cl-letf (((symbol-function 'message)
-                 (lambda (fmt &rest args)
-                   (push (apply #'format fmt args) messages))))
-        (dsh-emacs-events--host-item
-         'process '((type . "ready") (clientId . "gen-quiet")))
-        (ert-info ((format "%s" "events-generation-quiet-with-nothing-pending"))
-          (should (null messages))
-          (should (equal "gen-quiet" dsh-emacs-events--client-id)))
-        (setq dsh-emacs--question-queue
-              (list (list (current-buffer) "e-3" "s" '((id . "q"))))
-              dsh-emacs--approval-queue
-              (list (list (current-buffer) "e-4" "s" "bash" "r" nil)))
-        (dsh-emacs-events--host-item
-         'process '((type . "ready") (clientId . "gen-loud")))
-        (ert-info ((format "%s" "events-generation-reports-retired-work"))
-          (should (= 1 (length messages)))
-          (should (string-match-p "retiring 1 queued question" (car messages)))
-          (should (string-match-p "1 approval" (car messages)))
-          (should (null dsh-emacs--question-queue))
-          (should (null dsh-emacs--approval-queue)))))))
-
-;; --- Test 78k: $events cancel -> retire matching pending waterfalls by eventId ---
-;; A host cancellation (session end / withdraw) sends cancel(eventId); only frames of
-;; the same eventId retire, other pending frames are kept.
+  (let ((chat (get-buffer-create " *t-gen-quiet*")))
+    (unwind-protect
+        (with-current-buffer chat
+          (dsh-emacs-mode)
+          (setq-local dsh-emacs--buffer-session "sess-q")
+          (dsh-emacs--setup-input-area)
+          (let ((dsh-emacs-events--client-id "gen-old")
+                (dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+                (dsh-emacs-enable-notifications nil)
+                (messages nil))
+            (puthash "sess-q" chat dsh-emacs--chat-buffers)
+            (cl-letf (((symbol-function 'message)
+                       (lambda (fmt &rest args)
+                         (push (apply #'format fmt args) messages)))
+                      ((symbol-function 'dsh-emacs-notify--post)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'dsh-emacs-composer--row-width)
+                       (lambda () 80)))
+              (dsh-emacs-events--host-item
+               'process '((type . "ready") (clientId . "gen-quiet")))
+              (ert-info ((format "%s" "events-generation-quiet-with-nothing-pending"))
+                (should (null messages))
+                (should (equal "gen-quiet" dsh-emacs-events--client-id)))
+              (dsh-emacs-interaction--question-requested
+               chat "e-3" "sess-q"
+               '(((id . "q") (question . "Q?")
+                  (options . (((label . "Yes"))))))
+               nil)
+              (dsh-emacs-interaction--approval-requested
+               chat "e-4" "sess-q"
+               (dsh-protocol-approval-request--from-alist
+                '((toolName . "bash") (reason . "r") (callId . "c-e4"))))
+              (dsh-emacs-events--host-item
+               'process '((type . "ready") (clientId . "gen-loud")))
+              (ert-info ((format "%s" "events-generation-reports-retired-work"))
+                (should (= 1 (length messages)))
+                (should (string-match-p "pending request" (car messages)))
+                (should (null dsh-emacs-interaction--requests))))))
+      (when (buffer-live-p chat) (kill-buffer chat)))))
 (ert-deftest dsh-emacs-test-events-events-cancel-retires-matching-question ()
   :tags '(dsh-unit)
   (let ((chat (get-buffer-create " *t-cancel-chat*")))
     (unwind-protect
-        (let ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
-              (dsh-emacs--question-queue
-               (list (list chat "q-cancel" "sess-q" '((id . "qa")))
-                     (list chat "q-keep" "sess-q" '((id . "qb")))))
-              (dsh-emacs--approval-queue
-               (list (list chat "a-cancel" "sess-q" "fs" "r" nil)
-                     (list chat "a-keep" "sess-q" "bash" "r" nil))))
-          (dsh-emacs-events--host-item
-           'process (dsh-protocol-core-item--from-alist
-                     '((type . "cancel") (eventId . "q-cancel"))))
-          (ert-info ((format "%s" "events-cancel-retires-matching-question"))
-            (should (= 1 (length dsh-emacs--question-queue)))
-            (should (equal "q-keep" (nth 1 (car dsh-emacs--question-queue))))
-            (should (= 2 (length dsh-emacs--approval-queue))))
-          (dsh-emacs-events--host-item
-           'process (dsh-protocol-core-item--from-alist
-                     '((type . "cancel") (eventId . "a-cancel"))))
-          (ert-info ((format "%s" "events-cancel-retires-matching-approval"))
-            (should (= 1 (length dsh-emacs--approval-queue)))
-            (should (equal "a-keep" (nth 1 (car dsh-emacs--approval-queue))))
-            (should (= 1 (length dsh-emacs--question-queue)))))
+        (with-current-buffer chat
+          (dsh-emacs-mode)
+          (setq-local dsh-emacs--buffer-session "sess-q")
+          (dsh-emacs--setup-input-area)
+          (let ((dsh-emacs--chat-buffers (make-hash-table :test 'equal))
+                (dsh-emacs-enable-notifications nil))
+            (puthash "sess-q" chat dsh-emacs--chat-buffers)
+            (cl-letf (((symbol-function 'dsh-emacs-notify--post)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'dsh-emacs-composer--row-width)
+                       (lambda () 80))
+                      ((symbol-function 'dsh-emacs-plan--cancel)
+                       (lambda (&rest _) nil)))
+              (dsh-emacs-interaction--question-requested
+               chat "q-cancel" "sess-q"
+               '(((id . "qa") (question . "A?")
+                  (options . (((label . "Yes"))))))
+               nil)
+              (dsh-emacs-interaction--question-requested
+               chat "q-keep" "sess-q"
+               '(((id . "qb") (question . "B?")
+                  (options . (((label . "No"))))))
+               nil)
+              (dsh-emacs-interaction--approval-requested
+               chat "a-cancel" "sess-q"
+               (dsh-protocol-approval-request--from-alist
+                '((toolName . "fs") (reason . "r") (callId . "c-ac"))))
+              (dsh-emacs-interaction--approval-requested
+               chat "a-keep" "sess-q"
+               (dsh-protocol-approval-request--from-alist
+                '((toolName . "bash") (reason . "r") (callId . "c-ak"))))
+              (dsh-emacs-events--host-item
+               'process (dsh-protocol-core-item--from-alist
+                         '((type . "cancel") (eventId . "q-cancel"))))
+              (ert-info ((format "%s" "events-cancel-retires-matching-question"))
+                (should (= 3 (length dsh-emacs-interaction--requests)))
+                (should-not (dsh-emacs-interaction--find "q-cancel"))
+                (should (dsh-emacs-interaction--find "q-keep"))
+                (should (dsh-emacs-interaction--find "a-cancel"))
+                (should (dsh-emacs-interaction--find "a-keep")))
+              (dsh-emacs-events--host-item
+               'process (dsh-protocol-core-item--from-alist
+                         '((type . "cancel") (eventId . "a-cancel"))))
+              (ert-info ((format "%s" "events-cancel-retires-matching-approval"))
+                (should (= 2 (length dsh-emacs-interaction--requests)))
+                (should (dsh-emacs-interaction--find "q-keep"))
+                (should (dsh-emacs-interaction--find "a-keep"))
+                (should-not (dsh-emacs-interaction--find "a-cancel"))))))
       (when (buffer-live-p chat) (kill-buffer chat)))))
-
 (ert-deftest dsh-emacs-test-events-waterfalls-route-before-request-decoding ()
   :tags '(dsh-unit)
   (dolist (decoded '(nil t))
@@ -772,9 +816,9 @@
             (dsh-emacs-events--client-id "client")
             calls responses)
         (puthash "local" (current-buffer) dsh-emacs--chat-buffers)
-        (cl-letf (((symbol-function 'dsh-emacs--question-requested)
+        (cl-letf (((symbol-function 'dsh-emacs-interaction--question-requested)
                    (lambda (&rest args) (push args calls)))
-                  ((symbol-function 'dsh-emacs--approval-requested)
+                  ((symbol-function 'dsh-emacs-interaction--approval-requested)
                    (lambda (&rest args) (push args calls)))
                   ((symbol-function 'dsh-emacs--events-result-async)
                    (lambda (client event outcome callback)
